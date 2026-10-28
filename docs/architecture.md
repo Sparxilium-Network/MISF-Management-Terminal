@@ -1,5 +1,9 @@
 # MSIF Management Terminal：全 Rust 原生桌面
 
+> [!WARNING]
+> **本專案仍處於開發階段，請勿用於正式環境。**
+> 相關安全保護機制尚未完善；密碼、SSH 私鑰及其他敏感連線資料目前皆以明文儲存。
+
 單一桌面 App，以 eframe／egui 繪製原生視窗，直接呼叫同一個執行檔內的 Rust 核心。沒有 JavaFX、管理伺服器、TOKEN、遠端資料庫或 HTTP 服務。此版移除 PIN、Vault、加密檔案與 keyslot。
 
 ```mermaid

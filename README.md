@@ -1,5 +1,9 @@
 # MSIF Management Terminal
 
+> [!WARNING]
+> **本專案仍處於開發階段，請勿用於正式環境。**
+> 相關安全保護機制尚未完善；密碼、SSH 私鑰及其他敏感連線資料目前皆以明文儲存。
+
 全 Rust 原生桌面客戶端，以 eframe／egui 繪製畫面，內建 Rust SSH 核心。畫面與核心編譯成同一個執行檔，不需要 Java、瀏覽器或管理伺服器。
 
 目前沒有 PIN 或本機資料加密。帳密、匯入的私鑰與最近一次 APT 結果，以明文 JSON 保存在使用者目錄 `.msif-management/hosts.json`；UI 會顯示完整路徑。用 `MSIF_DATA_DIR` 可指定資料資料夾。
