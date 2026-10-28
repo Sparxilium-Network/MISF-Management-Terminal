@@ -31,6 +31,20 @@
 
 Linux／macOS 可使用 `cargo run --locked -p misf`，須在對應平台建置；Linux 建置需要 OpenGL、X11／Wayland、fontconfig 與檔案對話框相關開發套件。此版本已在 Windows 建置與驗證。
 
+## 自動建置與 Pre-release
+
+[GitHub Actions](https://github.com/Sparxilium-Network/MISF-Management-Terminal/actions/workflows/build-prerelease.yml) 在 `main` 更新、推送 `v*` 標籤或手動執行時，自動測試並建置 **Linux x86_64** 與 **Windows x86_64**。兩個平台的格式、Clippy、測試與 release 建置全部通過後，才上傳套件並公開 **Pre-release**，固定不標記為 Latest。PR 只驗證與產生 Actions artifacts，不發布。
+
+- Windows：`MISF-Management-Terminal-windows-x86_64.zip`，解壓後執行 `misf.exe`。
+- Linux：`MISF-Management-Terminal-linux-x86_64.tar.gz`，解壓後執行 `./misf`。這是原生動態連結套件，需要圖形桌面及相容的 glibc、OpenGL、X11／Wayland、fontconfig 等系統函式庫；不是 AppImage，也不保證支援較舊發行版。
+- 每個套件內附 README、架構／加密評估文件及第三方授權；另附 SHA-256 校驗檔。
+
+`main`／手動執行（選 `main`）使用 `dev-<run_number>.<run_attempt>-<短 commit>` 作為版本標籤；推送 `v*` 標籤時沿用該標籤。即使標籤為 `v1.0.0`，本流程仍只發布 Pre-release。已公開的同名版本不會被重跑覆寫；上傳未完成的草稿可重跑補齊。GitHub 的 Pre-release 仍顯示在 Releases 頁面，只是標記為預發行版，不是正式發行。
+
+建置環境使用 GitHub 的 `ubuntu-latest`／`windows-latest` 和每次安裝的最新 **Rust stable**（不是 nightly）。Actions 使用目前最新穩定版的固定 commit；Dependabot 每日檢查 Actions 與 Cargo 依賴並提出更新 PR，通過驗證及合併後才進入發布。套件使用已提交的 `Cargo.lock` 與 `--locked`，不在發布時偷偷改變依賴；LUKSbox 仍固定在已驗證的版本。Linux 的 glibc 相容性下限會隨 `ubuntu-latest` 映像更新。
+
+本機也可用 PowerShell 7 在對應平台執行 `./package.ps1 -Archive`，產生相同壓縮檔及校驗檔。GitHub Actions 僅發布套件，不會提交原始碼；本機操作仍遵循 AGENTS.md 的禁止 push 規則。此工作流程需先由維護者推送至 GitHub 才會啟用，首次遠端執行結果請於 Actions 查看。
+
 ## 功能
 
 - 保存多台 Linux／BSD 主機，支援新增、編輯、刪除與搜尋。

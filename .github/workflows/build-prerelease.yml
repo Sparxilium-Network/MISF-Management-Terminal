@@ -1,0 +1,160 @@
+name: Build and pre-release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Test and package (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux-x86_64
+          - os: windows-latest
+            platform: windows-x86_64
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            build-essential cmake pkg-config \
+            libfontconfig1-dev libfreetype6-dev \
+            libx11-dev libx11-xcb-dev libxcb-render0-dev libxcb-shape0-dev \
+            libxcb-xfixes0-dev libxi-dev libxrandr-dev libxinerama-dev \
+            libxcursor-dev libgl1-mesa-dev libegl1-mesa-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libdbus-1-dev
+
+      - name: Install latest stable Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+          if ($LASTEXITCODE -ne 0) { throw 'Rust toolchain installation failed' }
+          rustup override set stable
+          if ($LASTEXITCODE -ne 0) { throw 'Rust toolchain selection failed' }
+          rustc --version
+          cargo --version
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Lint all features
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+
+      - name: Test workspace
+        run: cargo test --locked --workspace
+
+      - name: Build release binaries
+        run: cargo build --locked --release --workspace
+
+      - name: Package application and checksums
+        run: ./package.ps1 -SkipBuild -Archive
+
+      - name: Upload distribution
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: misf-${{ matrix.platform }}
+          path: |
+            dist/*.zip
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+  publish:
+    name: Publish pre-release
+    needs: build
+    if: >-
+      github.event_name != 'pull_request' &&
+      (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      COMMIT_SHA: ${{ github.sha }}
+      REF_TYPE: ${{ github.ref_type }}
+      REF_NAME: ${{ github.ref_name }}
+      RUN_NUMBER: ${{ github.run_number }}
+      RUN_ATTEMPT: ${{ github.run_attempt }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Download both platform packages
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: misf-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Verify packages and publish as pre-release
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release-assets
+          test -f MISF-Management-Terminal-linux-x86_64.tar.gz
+          test -f MISF-Management-Terminal-windows-x86_64.zip
+          sha256sum --check MISF-Management-Terminal-linux-x86_64.tar.gz.sha256
+          sha256sum --check MISF-Management-Terminal-windows-x86_64.zip.sha256
+
+          if [[ "$REF_TYPE" == "tag" ]]; then
+            tag="$REF_NAME"
+          else
+            tag="dev-${RUN_NUMBER}.${RUN_ATTEMPT}-${COMMIT_SHA:0:7}"
+          fi
+          {
+            printf '%s\n\n' '> **開發階段，請勿用於正式環境。此版本為 Pre-release。**'
+            printf '%s\n\n' '未啟用 LUKSbox 時，密碼與 SSH 私鑰以明文儲存；啟用後仍保留原明文副本。'
+            printf '%s\n\n' 'Windows x86_64：解壓 ZIP 後執行 misf.exe。Linux x86_64：解壓 tar.gz 後執行 ./misf；需要圖形桌面與系統函式庫，詳見內附 README。'
+            printf 'Commit: `%s`\n\n' "$COMMIT_SHA"
+            printf '[Build log](%s)\n' "$RUN_URL"
+          } > release-notes.md
+
+          # A rerun may resume an incomplete draft; never overwrite a published release.
+          if gh release view "$tag" --json isDraft --jq '.isDraft' > release-state.txt 2>/dev/null; then
+            if [[ "$(cat release-state.txt)" != "true" ]]; then
+              echo "Release $tag is already published; leaving its assets unchanged."
+              exit 0
+            fi
+          else
+            gh release create "$tag" --target "$COMMIT_SHA" \
+              --title "MISF $tag (Pre-release)" --notes-file release-notes.md \
+              --draft --prerelease --latest=false
+          fi
+          gh release upload "$tag" \
+            MISF-Management-Terminal-linux-x86_64.tar.gz \
+            MISF-Management-Terminal-linux-x86_64.tar.gz.sha256 \
+            MISF-Management-Terminal-windows-x86_64.zip \
+            MISF-Management-Terminal-windows-x86_64.zip.sha256 --clobber
+          gh release edit "$tag" --draft=false --prerelease --latest=false
+          printf 'Published **Pre-release**: [%s](https://github.com/%s/releases/tag/%s)\n' \
+            "$tag" "$GH_REPO" "$tag" >> "$GITHUB_STEP_SUMMARY"
