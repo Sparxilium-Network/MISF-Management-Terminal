@@ -1,4 +1,5 @@
 use crate::model::Host;
+use crate::vault::VaultFile;
 use anyhow::{Context, Result, ensure};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
@@ -6,6 +7,7 @@ use std::{
     fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
+    sync::{Arc, Mutex},
 };
 
 #[derive(Default, Deserialize, Serialize)]
@@ -16,6 +18,7 @@ pub struct Database {
 
 pub struct Store {
     pub path: PathBuf,
+    pub(crate) vault: Option<Arc<Mutex<VaultFile>>>,
 }
 
 impl Store {
@@ -30,7 +33,11 @@ impl Store {
     }
 
     pub fn new(path: PathBuf) -> Self {
-        Self { path }
+        Self { path, vault: None }
+    }
+
+    pub fn is_encrypted(&self) -> bool {
+        self.vault.is_some()
     }
 
     fn load(&self) -> Result<Database> {
@@ -63,7 +70,22 @@ impl Store {
         self.with_db(op, true)
     }
 
-    fn with_db<T>(&self, op: impl FnOnce(&mut Database) -> Result<T>, write: bool) -> Result<T> {
+    pub(crate) fn with_db<T>(
+        &self,
+        op: impl FnOnce(&mut Database) -> Result<T>,
+        write: bool,
+    ) -> Result<T> {
+        if let Some(vault) = &self.vault {
+            let mut vault = vault
+                .lock()
+                .map_err(|_| anyhow::anyhow!("加密工作階段發生錯誤，請重新啟動"))?;
+            let mut db = vault.read()?;
+            let result = op(&mut db)?;
+            if write {
+                vault.write(&db)?;
+            }
+            return Ok(result);
+        }
         let dir = self.path.parent().context("資料路徑無效")?;
         fs::create_dir_all(dir).context("無法建立資料目錄")?;
         let lock = OpenOptions::new()
@@ -73,6 +95,10 @@ impl Store {
             .write(true)
             .open(self.path.with_extension("lock"))?;
         lock.lock_exclusive().context("無法鎖定資料檔案")?;
+        ensure!(
+            !crate::vault::encrypted_profile_exists(&self.path),
+            "此主機庫已啟用加密；請重新啟動並解鎖，禁止回退明文儲存"
+        );
         let mut db = self.load()?;
         let result = op(&mut db)?;
         if write {
@@ -100,7 +126,7 @@ fn profile_path(home: &Path) -> Result<PathBuf> {
     let path = home.join(".misf-management").join("hosts.json");
     // Preserve connection profiles created before the project-name correction.
     let legacy = home.join(".msif-management").join("hosts.json");
-    if !path.exists() && legacy.is_file() {
+    if !path.exists() && !crate::vault::encrypted_profile_exists(&path) && legacy.is_file() {
         let directory = path.parent().unwrap();
         fs::create_dir_all(directory).context("無法建立 MISF 資料目錄")?;
         let mut temp = tempfile::NamedTempFile::new_in(directory)?;

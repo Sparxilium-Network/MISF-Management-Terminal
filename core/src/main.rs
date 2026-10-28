@@ -15,12 +15,19 @@ async fn main() {
         io::stdin()
             .take(8 * 1024 * 1024)
             .read_to_string(&mut input)?;
-        let request = serde_json::from_str(&input)?;
-        let store = misf_core::store::Store::new(misf_core::store::Store::default_path()?);
-        misf_core::dispatch(request, &store, &|message| {
-            emit(json!({"kind": "progress", "message": message}))
-        })
-        .await
+        let request: serde_json::Value = serde_json::from_str(&input)?;
+        let mut session =
+            misf_core::vault::StorageSession::new(misf_core::store::Store::default_path()?);
+        let progress = |message: &str| emit(json!({"kind": "progress", "message": message}));
+        if let serde_json::Value::Array(requests) = request {
+            let mut results = vec![];
+            for request in requests {
+                results.push(session.handle(request, &progress).await?);
+            }
+            Ok(serde_json::Value::Array(results))
+        } else {
+            session.handle(request, &progress).await
+        }
     }
     .await;
     match result {

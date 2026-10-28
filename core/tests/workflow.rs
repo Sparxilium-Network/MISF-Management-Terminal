@@ -394,3 +394,78 @@ fn malformed_store_is_preserved_and_unparseable_apt_output_is_not_success() {
     assert!(parse_packages("unexpected localized output").is_err());
     assert!(parse_packages("package/repo missing-fields").is_err());
 }
+
+#[tokio::test]
+async fn ssh_apt_results_roundtrip_inside_luksbox_and_remain_cli_compatible() {
+    use luksbox_core::{Argon2idParams, CipherSuite};
+    use luksbox_format::{Container, UnlockMaterial};
+    use luksbox_vfs::Vfs;
+    use misf_core::{store::Database, vault::StorageSession};
+    let fixture = fixture(false, false).await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("hosts.lbx");
+    let password = b"integration-test-passphrase";
+    {
+        let _size =
+            luksbox_format::metadata::set_create_metadata_region_size_override(Some(64 * 1024));
+        let params = Argon2idParams {
+            m_cost_kib: 8,
+            t_cost: 1,
+            p_cost: 1,
+        };
+        let mut vfs = Vfs::open(
+            Container::create_with_passphrase(
+                &path,
+                None,
+                CipherSuite::Aes256GcmSiv,
+                params,
+                password,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let file = vfs.create(vfs.root_id(), "hosts.json").unwrap();
+        let bytes = serde_json::to_vec(&Database {
+            version: 1,
+            hosts: vec![fixture.host.clone()],
+        })
+        .unwrap();
+        vfs.write(file, 0, &bytes).unwrap();
+        vfs.finish().unwrap();
+    }
+    let mut session = StorageSession::new(dir.path().join("hosts.json"));
+    session
+        .handle(
+            json!({"action":"vault_unlock","passphrase":std::str::from_utf8(password).unwrap()}),
+            &|_| {},
+        )
+        .await
+        .unwrap();
+    let result = session
+        .handle(json!({"action":"check","id":fixture.host.id}), &|_| {})
+        .await
+        .unwrap();
+    assert_eq!(result["status"], "success");
+    assert_eq!(result["packages"].as_array().unwrap().len(), 2);
+    session
+        .handle(json!({"action":"vault_lock"}), &|_| {})
+        .await
+        .unwrap();
+    assert!(!dir.path().join("hosts.json").exists());
+    let mut vfs =
+        Vfs::open(Container::open(&path, None, UnlockMaterial::Passphrase(password)).unwrap())
+            .unwrap();
+    let file = vfs.lookup_path("/hosts.json").unwrap();
+    let mut bytes = vec![0; vfs.stat(file).unwrap().size as usize];
+    vfs.read(file, 0, &mut bytes).unwrap();
+    let database: Database = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        database.hosts[0]
+            .last_check
+            .as_ref()
+            .unwrap()
+            .packages
+            .len(),
+        2
+    );
+}

@@ -1,6 +1,7 @@
 pub mod model;
 pub mod ssh;
 pub mod store;
+pub mod vault;
 
 use anyhow::{Context, Result, ensure};
 use model::Host;
@@ -11,7 +12,9 @@ pub async fn dispatch(request: Value, store: &Store, progress: &dyn Fn(&str)) ->
     let action = request["action"].as_str().context("缺少 action")?;
     let id = request["id"].as_str().unwrap_or_default();
     match action {
-        "list" => Ok(json!({"hosts": store.read()?.hosts, "path": store.path, "encrypted": false})),
+        "list" => Ok(
+            json!({"hosts": store.read()?.hosts, "path": store.path, "encrypted": store.is_encrypted()}),
+        ),
         "save" => {
             let mut host: Host =
                 serde_json::from_value(request["host"].clone()).context("主機資料格式錯誤")?;

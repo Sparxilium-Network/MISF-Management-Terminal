@@ -4,17 +4,17 @@
 
 > [!WARNING]
 > **本專案仍處於開發階段，請勿用於正式環境。**
-> 相關安全保護機制尚未完善；密碼、SSH 私鑰及其他敏感連線資料目前皆以明文儲存。
+> 相關安全保護機制尚未完善。未啟用 LUKSbox 時，密碼、SSH 私鑰及其他敏感資料以明文儲存；啟用後仍會保留原明文副本，請自行確認與處理。LUKSbox 整合為實驗性功能，不能視為正式安全保證。
 
 全 Rust 原生桌面客戶端，以 eframe／egui 繪製畫面，內建 Rust SSH 核心。畫面與核心編譯成同一個執行檔，不需要 Java、瀏覽器或管理伺服器。
 
-目前沒有 PIN 或本機資料加密。帳密、匯入的私鑰與最近一次 APT 結果，以明文 JSON 保存在使用者目錄 `.misf-management/hosts.json`；UI 會顯示完整路徑。用 `MISF_DATA_DIR` 可指定資料資料夾。
+預設將主機與憑證存於使用者目錄 `.misf-management/hosts.json`。可選擇啟用 **LUKSbox 加密主機庫**，之後日常資料改存同目錄的 `hosts.lbx`，每次啟動先解鎖。用 `MISF_DATA_DIR` 可指定資料資料夾。
 
 首次啟動會自動複製舊版 `.msif-management/hosts.json` 至新資料目錄，保留原檔，且不覆寫已存在的新資料。
 
 ## 啟動與打包
 
-開發需要 Rust 1.95 以上與該作業系統的原生建置工具（Windows 使用 MSVC）。
+開發需要 Rust 1.95 以上、Git 與該作業系統的原生建置工具（Windows 使用 MSVC）。
 
 ```powershell
 .\run.ps1
@@ -43,6 +43,22 @@ Linux／macOS 可使用 `cargo run --locked -p misf`，須在對應平台建置�
 
 BSD 支援 SSH 連線資料與連線測試，目前不提供 BSD 套件檢查。
 
+## 可選的 LUKSbox 加密儲存
+
+1. 按資料區底部的「啟用 LUKSbox 加密…」，設定至少 12 字元的解鎖密碼。
+2. 程式建立容器、將資料直接從記憶體寫入，再關閉並重新解鎖驗證。原 `hosts.json` 保留；介面持續提示它仍是明文副本。
+3. 啟用後，新讀寫只使用 `hosts.lbx`；`hosts.lbx.enabled` 記錄已選擇加密模式。鎖定、錯誤密碼或容器遺失時不會退回讀取明文 JSON。按「鎖定」後，必須再次解鎖才能操作主機。
+4. 透過「管理解鎖金鑰」新增備援密碼。最多 8 組密碼可分別解鎖同一容器，不會因增加密碼而重新加密所有主機資料。
+5. 按「匯出加密備份…」建立新的 `.lbx` 備份檔。請保留可取回的備援密碼，並實際驗證備份可解鎖；遺失所有密碼將無法復原。
+
+使用 LUKSbox v0.6.1（固定 commit `69448f708f1328d672deb595e359579d630cb0b0`）的 core／format／VFS 函式庫，不掛載磁碟、不需要 WinFsp、FIDO2 或 TPM 驅動。加密為 AES-256-GCM-SIV；密碼採 Argon2id（256 MiB、3 次、4 lanes）。這不是 LUKS2 磁碟格式。
+
+此版僅支援新增密碼 keyslot，尚未提供撤銷、改密碼、主金鑰輪替、FIDO2／TPM／passkey 或自動閒置鎖定。備份或舊副本不會隨目前容器的變更自動失效。加密只保護未解鎖的檔案，無法保護已遭入侵的電腦。
+
+原 `hosts.json`、舊 `.msif-management` 目錄、外部備份與磁碟殘留不會自動清除；請在驗證容器和備份後自行處理。啟用後請勿再用不支援 LUKSbox 的舊版操作同一資料目錄，以免重新更新明文副本。看到 `.lbx.header-bak`／`.lbx.meta-bak` 時，這些是上游的加密復原鏡像，請與容器妥善保存。主機資料序列化內容上限 64 MiB。
+
+可用 [LUKSbox 原生工具](https://github.com/PentHertz/LUKSbox) 直接開啟備份；其容器內保存 `/hosts.json`。若要讓 MISF 使用備份，請先關閉程式，以備份建立獨立資料目錄並命名為 `hosts.lbx`，再透過 `MISF_DATA_DIR` 指向該目錄；避免覆寫目前主資料。詳細評估見 [LUKSbox 整合評估](docs/luksbox-evaluation.md)。
+
 ## 使用
 
 新增主機後，選擇密碼或匯入私鑰。一般帳號可填 sudo 密碼；留空時沿用 SSH 密碼，Key 登入則需另填或設定免密 sudo。先核對主機指紋，再按「檢查 APT 更新」。APT 索引更新上限 5 分鐘，逾時會報錯；關閉程式會關閉本機連線，不能保證中止遠端已開始的 apt-get。
@@ -57,10 +73,13 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 
 Rust 整合測試在 loopback 啟動測試 SSH 伺服器，驗證密碼／私鑰、指紋、PTY、sudo 與 APT 檢查，不接觸真實遠端主機。
 
+LUKSbox 測試使用暫存資料，涵蓋明文保留、鎖定後拒絕操作、錯誤密碼、多 keyslot、重新啟動、加密備份、縮短資料、密文損壞及並行開啟阻擋。
+
 ## 結構
 
 - `app/`：eframe／egui 原生 UI；背景執行緒執行網路及磁碟作業。
 - `core/`：主機資料、SSH 及 APT 核心；亦提供 stdin/stdout JSON CLI。
+- CLI 的加密工作階段只存在同一程序內；可透過 stdin 傳入 JSON 請求陣列，依序執行解鎖、操作與鎖定。不要把解鎖密碼放進命令列參數。
 - `docs/architecture.md`：目前實作架構。
 
 開發用畫面擷取可使用 `cargo build -p misf --features capture`，以 `MISF_SCREENSHOT_TO` 指定 PNG 路徑；`MISF_OPEN_EDITOR=1` 可擷取新增主機對話框。正式 release 預設不啟用此功能。
