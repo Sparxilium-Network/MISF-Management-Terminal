@@ -1,5 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod i18n;
+mod preferences;
+mod theme;
 mod ui;
 mod worker;
 

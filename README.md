@@ -47,6 +47,10 @@ Linux／macOS 可使用 `cargo run --locked -p misf`，須在對應平台建置�
 
 ## 功能
 
+畫面頂端可選 **繁體中文（台灣）／English**，以及 **跟隨系統／淺色／深色**；切換立即生效，不需要重啟。偏好另存於資料目錄的 `ui-settings.json`，下次啟動自動沿用，主機庫鎖定時也能調整。此檔僅含語言與外觀設定，不保存憑證。
+
+介面文字放在 [`app/locales/zh-tw.json`](app/locales/zh-tw.json) 與 [`app/locales/en-us.json`](app/locales/en-us.json)，以固定 key 與 `{name}` 等命名參數維護。語系檔編譯進執行檔，發行套件不需另外安裝語言檔；修改 JSON 後需重新編譯。新增語言時，在 `app/src/i18n.rs` 登記並提供相同 key 與參數。測試會檢查 key 與參數是否一致；缺少翻譯時回退繁體中文。遠端命令原始輸出不翻譯，核心／系統的詳細錯誤亦保留原文。
+
 - 保存多台 Linux／BSD 主機，支援新增、編輯、刪除與搜尋。
 - SSH 帳密登入，或匯入 OpenSSH／PEM 私鑰；加密私鑰可填密語。
 - 首次連線先核對並保存 SHA-256 主機指紋，確認前不提交帳密；指紋變更立即阻擋認證。

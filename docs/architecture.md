@@ -23,6 +23,8 @@ Linux APT 檢查先偵測 Linux 與 APT，root 直接執行 apt-get update，一
 
 ## 本機儲存與背景工作
 
+介面語系由 `app/locales/zh-tw.json`／`en-us.json` 提供，內嵌進執行檔，透過穩定 key 與命名參數即時切換。`app/src/theme.rs` 統一管理淺色／深色配色及系統主題選項，涵蓋卡片、輸入框、對話框與警告。偏好以獨立 `ui-settings.json` 保存，不進入主機資料／加密容器，因此鎖定主機庫也可讀取語言及外觀；使用暫存檔原子替換，寫入失敗會顯示錯誤。
+
 預設儲存於使用者目錄 `.misf-management/hosts.json`，以 MISF_DATA_DIR 可更改位置。明文模式使用檔案鎖與暫存檔原子替換；損壞或不支援版本的既存檔案不會被自動覆寫。
 
 使用者可將主機庫轉成同目錄 `hosts.lbx`，內含加密的 `/hosts.json`。使用 LUKSbox v0.6.1 固定版本的 core／format／VFS，以 AES-256-GCM-SIV 與 Argon2id 保存內容及中繼資料，無須掛載磁碟。轉換驗證後原明文檔仍保留，UI 明確提示。加密模式鎖定時不提供主機操作，也禁止回退明文；支援手動鎖定、最多 8 組密碼與加密備份。儲存狀態和解鎖金鑰保存在背景 worker 的 StorageSession，非每次請求重建。

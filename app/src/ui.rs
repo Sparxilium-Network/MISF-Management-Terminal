@@ -1,16 +1,17 @@
-use crate::worker::{Event, Worker};
+use crate::{
+    i18n::{Language, Translator},
+    preferences::Preferences,
+    theme::{self, Appearance, Palette},
+    worker::{Event, Worker},
+};
 use chrono::{DateTime, Local};
-use eframe::egui::{self, Color32, FontId, RichText, Stroke, Vec2};
+use eframe::egui::{self, Color32, RichText, Stroke};
 use misf_core::model::{CheckResult, Host};
 use serde_json::{Value, json};
 use zeroize::Zeroize;
 
 const NAVY: Color32 = Color32::from_rgb(19, 36, 59);
-const BG: Color32 = Color32::from_rgb(244, 247, 251);
-const INK: Color32 = Color32::from_rgb(34, 53, 77);
-const MUTED: Color32 = Color32::from_rgb(109, 127, 150);
 const BLUE: Color32 = Color32::from_rgb(33, 117, 195);
-const BORDER: Color32 = Color32::from_rgb(220, 229, 239);
 
 struct Editor {
     host: Host,
@@ -47,6 +48,7 @@ impl Drop for VaultDialog {
 }
 
 pub struct ManagementApp {
+    preferences: Preferences,
     worker: Worker,
     hosts: Vec<Host>,
     selected: String,
@@ -75,24 +77,13 @@ pub struct ManagementApp {
 
 impl ManagementApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        let mut style = (*cc.egui_ctx.style_of(egui::Theme::Light)).clone();
-        style.visuals = egui::Visuals::light();
-        style.visuals.override_text_color = Some(INK);
-        style.visuals.panel_fill = BG;
-        style.visuals.selection.bg_fill = Color32::from_rgb(218, 235, 251);
-        style.spacing.item_spacing = Vec2::new(10.0, 10.0);
-        style.spacing.button_padding = Vec2::new(14.0, 9.0);
-        style.spacing.interact_size.y = 34.0;
-        style
-            .text_styles
-            .insert(egui::TextStyle::Body, FontId::proportional(14.0));
-        style
-            .text_styles
-            .insert(egui::TextStyle::Button, FontId::proportional(14.0));
-        cc.egui_ctx.set_theme(egui::ThemePreference::Light);
-        cc.egui_ctx.set_style_of(egui::Theme::Light, style);
+        let loaded = Preferences::load();
+        let preferences = loaded.clone().unwrap_or_default();
+        theme::install(&cc.egui_ctx);
+        preferences.appearance.apply(&cc.egui_ctx);
         let worker = Worker::new(cc.egui_ctx.clone());
         let mut app = Self {
+            preferences,
             worker,
             hosts: vec![],
             selected: String::new(),
@@ -101,7 +92,9 @@ impl ManagementApp {
             path: String::new(),
             busy: false,
             status: String::new(),
-            error: None,
+            error: loaded.err().map(|error| {
+                Translator(preferences.language).format("settings.load_error", &[("error", error)])
+            }),
             editor: None,
             delete_id: None,
             trust: None,
@@ -130,28 +123,77 @@ impl ManagementApp {
         app
     }
 
+    fn preferences_bar(&mut self, ui: &mut egui::Ui) {
+        let before = self.preferences;
+        let t = Translator(before.language);
+        ui.horizontal_wrapped(|ui| {
+            ui.strong("MISF");
+            ui.separator();
+            egui::ComboBox::from_id_salt("language")
+                .selected_text(self.preferences.language.name())
+                .width(165.0)
+                .show_ui(ui, |ui| {
+                    for language in Language::ALL {
+                        ui.selectable_value(
+                            &mut self.preferences.language,
+                            language,
+                            language.name(),
+                        );
+                    }
+                });
+            ui.label(t.get("settings.language"));
+            ui.separator();
+            egui::ComboBox::from_id_salt("appearance")
+                .selected_text(self.preferences.appearance.label(t))
+                .width(100.0)
+                .show_ui(ui, |ui| {
+                    for appearance in Appearance::ALL {
+                        ui.selectable_value(
+                            &mut self.preferences.appearance,
+                            appearance,
+                            appearance.label(t),
+                        );
+                    }
+                });
+            ui.label(t.get("settings.appearance"));
+        });
+        if self.preferences != before {
+            self.preferences.appearance.apply(ui.ctx());
+            let t = Translator(self.preferences.language);
+            match self.preferences.save() {
+                Ok(()) => self.status = t.get("settings.saved").into(),
+                Err(error) => {
+                    self.error = Some(t.format("settings.save_error", &[("error", error)]))
+                }
+            }
+            ui.ctx().request_repaint();
+        }
+    }
+
     fn current(&self) -> Option<&Host> {
         self.hosts.iter().find(|host| host.id == self.selected)
     }
     fn send(&mut self, request: Value) {
+        let t = Translator(self.preferences.language);
         self.busy = true;
-        self.status = "處理中…".into();
+        self.status = t.get("status.working").into();
         if self.worker.requests.send(request).is_err() {
             self.busy = false;
-            self.error = Some("本機工作執行緒已結束，請重啟程式".into());
+            self.error = Some(t.get("status.worker_ended").into());
         }
     }
 
     fn process_events(&mut self) {
+        let t = Translator(self.preferences.language);
         while let Ok(event) = self.worker.events.try_recv() {
             match event {
-                Event::Progress(message) => self.status = message,
+                Event::Progress(message) => self.status = t.progress(&message),
                 Event::Done { action, result } => {
                     self.busy = false;
                     match result {
                         Ok(data) => self.received(&action, data),
                         Err(error) => {
-                            self.status = "操作失敗".into();
+                            self.status = t.get("status.failed").into();
                             self.error = Some(error);
                             if action == "vault_create" {
                                 self.vault_dialog = None;
@@ -165,13 +207,14 @@ impl ManagementApp {
     }
 
     fn received(&mut self, action: &str, data: Value) {
+        let t = Translator(self.preferences.language);
         match action {
             "storage_status" => {
                 self.apply_storage(&data);
                 if self.locked {
                     self.clear_host_cache();
                     self.open_vault_dialog(VaultMode::Unlock);
-                    self.status = "主機庫已鎖定".into();
+                    self.status = t.get("vault.locked").into();
                 } else {
                     self.send(json!({"action":"list"}));
                 }
@@ -185,24 +228,25 @@ impl ManagementApp {
                 self.apply_storage(&data);
                 self.clear_host_cache();
                 self.vault_dialog = None;
-                self.status = "主機庫已鎖定，解鎖金鑰已釋放".into();
+                self.status = t.get("status.locked").into();
             }
             "vault_add_key" => {
                 self.apply_storage(&data["storage"]);
                 self.open_vault_dialog(VaultMode::Manage);
-                self.status = format!("已新增解鎖金鑰槽 #{}", data["slot"]);
+                self.status = t.format("status.slot_added", &[("slot", data["slot"].to_string())]);
             }
             "vault_backup" => {
-                self.status = format!(
-                    "已匯出加密備份：{}",
-                    data["path"].as_str().unwrap_or_default()
+                self.status = t.format(
+                    "status.backup_exported",
+                    &[("path", data["path"].as_str().unwrap_or_default().into())],
                 )
             }
             "list" => {
                 match serde_json::from_value::<Vec<Host>>(data["hosts"].clone()) {
                     Ok(hosts) => self.hosts = hosts,
                     Err(error) => {
-                        self.error = Some(format!("無法讀取主機資料：{error}"));
+                        self.error =
+                            Some(t.format("status.hosts_error", &[("error", error.to_string())]));
                         return;
                     }
                 }
@@ -211,7 +255,10 @@ impl ManagementApp {
                 if !self.hosts.iter().any(|h| h.id == self.selected) {
                     self.selected = self.hosts.first().map(|h| h.id.clone()).unwrap_or_default();
                 }
-                self.status = format!("已載入 {} 台主機", self.hosts.len());
+                self.status = t.format(
+                    "status.hosts_loaded",
+                    &[("count", self.hosts.len().to_string())],
+                );
             }
             "save" => {
                 self.selected = data["id"].as_str().unwrap_or_default().into();
@@ -227,7 +274,7 @@ impl ManagementApp {
                 if let Some(host) = self.current() {
                     let actual = data["fingerprint"].as_str().unwrap_or_default().to_owned();
                     if host.fingerprint == actual {
-                        self.status = "SSH 主機指紋一致".into();
+                        self.status = t.get("status.fingerprint_matches").into();
                         if let Some(action) = self.after_trust.take() {
                             self.send(json!({"action":action,"id":self.selected}));
                         }
@@ -239,7 +286,7 @@ impl ManagementApp {
                             actual,
                             next: self.after_trust.take(),
                         });
-                        self.status = "請核對 SSH 主機指紋".into();
+                        self.status = t.get("status.check_fingerprint").into();
                     }
                 }
             }
@@ -248,24 +295,24 @@ impl ManagementApp {
                     if let Some(host) = self.hosts.iter_mut().find(|h| h.id == trust.host_id) {
                         host.fingerprint = trust.actual;
                     }
-                    self.status = "已儲存 SSH 主機指紋".into();
+                    self.status = t.get("status.fingerprint_saved").into();
                     if let Some(action) = trust.next {
                         self.send(json!({"action":action,"id":self.selected}));
                     }
                 }
             }
             "test" => {
-                self.status = format!(
-                    "SSH 連線成功 · 遠端系統：{}",
-                    data["os"].as_str().unwrap_or_default()
+                self.status = t.format(
+                    "status.connected",
+                    &[("os", data["os"].as_str().unwrap_or_default().into())],
                 )
             }
             "check" => match serde_json::from_value::<CheckResult>(data) {
                 Ok(result) => {
                     self.status = if result.status == "success" {
-                        "APT 檢查完成，未安裝任何套件"
+                        t.get("status.apt_done")
                     } else {
-                        "APT 檢查失敗，請查看錯誤與執行輸出"
+                        t.get("status.apt_failed")
                     }
                     .into();
                     if let Some(host) = self.hosts.iter_mut().find(|h| h.id == self.selected) {
@@ -309,6 +356,8 @@ impl ManagementApp {
     }
 
     fn sidebar(&mut self, ui: &mut egui::Ui) {
+        let palette = Palette::for_context(ui.ctx());
+        let t = Translator(self.preferences.language);
         ui.visuals_mut().override_text_color = Some(Color32::from_rgb(220, 231, 245));
         ui.add_space(9.0);
         ui.label(
@@ -324,19 +373,23 @@ impl ManagementApp {
         );
         ui.add_space(23.0);
         ui.scope(|ui| {
-            ui.visuals_mut().override_text_color = Some(INK);
+            ui.visuals_mut().override_text_color = Some(palette.ink);
             ui.add(
                 egui::TextEdit::singleline(&mut self.search)
-                    .text_color(INK)
-                    .hint_text(RichText::new("搜尋主機、位址或備註").color(MUTED))
+                    .text_color(palette.ink)
+                    .background_color(palette.surface)
+                    .hint_text(RichText::new(t.get("host.search")).color(palette.muted))
                     .desired_width(f32::INFINITY),
             );
         });
         ui.add_space(10.0);
         ui.label(
-            RichText::new(format!("主機清單  /  {}", self.hosts.len()))
-                .size(12.0)
-                .color(Color32::from_rgb(147, 174, 208)),
+            RichText::new(t.format(
+                "host.list_count",
+                &[("count", self.hosts.len().to_string())],
+            ))
+            .size(12.0)
+            .color(Color32::from_rgb(147, 174, 208)),
         );
         ui.add_space(6.0);
         let query = self.search.to_lowercase();
@@ -358,9 +411,9 @@ impl ManagementApp {
                     ui.add_space(30.0);
                     ui.label(
                         RichText::new(if self.hosts.is_empty() {
-                            "尚未新增主機"
+                            t.get("host.empty")
                         } else {
-                            "沒有符合的主機"
+                            t.get("host.no_match")
                         })
                         .color(Color32::from_rgb(143, 166, 197)),
                     );
@@ -386,7 +439,7 @@ impl ManagementApp {
                                 ui.label(RichText::new("●").size(10.0).color(if success {
                                     Color32::from_rgb(78, 201, 162)
                                 } else {
-                                    MUTED
+                                    palette.muted
                                 }));
                                 ui.label(
                                     RichText::new(&host.name)
@@ -417,14 +470,14 @@ impl ManagementApp {
             });
         ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
             ui.label(
-                RichText::new("本機模式 · 全 Rust · 內建 SSH")
+                RichText::new(t.get("app.local_mode"))
                     .size(11.0)
                     .color(Color32::from_rgb(143, 166, 197)),
             );
             if ui
                 .add_enabled(
                     !self.locked,
-                    primary("＋ 新增主機").min_size([ui.available_width(), 38.0].into()),
+                    primary(t.get("host.add_button")).min_size([ui.available_width(), 38.0].into()),
                 )
                 .clicked()
             {
@@ -433,24 +486,26 @@ impl ManagementApp {
         });
     }
 
-    fn workspace(&mut self, ui: &mut egui::Ui) {
+    fn workspace(&mut self, ui: &mut egui::Ui, viewport_height: f32) {
+        let palette = Palette::for_context(ui.ctx());
+        let t = Translator(self.preferences.language);
         if self.locked {
             ui.label(
-                RichText::new("LUKSBOX VAULT")
+                RichText::new(t.get("app.vault_heading"))
                     .size(10.0)
                     .strong()
-                    .color(MUTED),
+                    .color(palette.muted),
             );
             ui.add_space(12.0);
-            ui.heading(RichText::new("主機庫已鎖定").size(29.0));
-            ui.label("輸入任一已註冊的解鎖密碼後，才能讀取主機資料與憑證。");
+            ui.heading(RichText::new(t.get("vault.locked")).size(29.0));
+            ui.label(t.get("vault.unlock_description"));
             ui.add_space(24.0);
-            card().show(ui, |ui| {
+            card(ui).show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
                 ui.add_space(15.0);
-                ui.label("LUKSbox · AES-256-GCM-SIV · 多金鑰解鎖");
+                ui.label(t.get("vault.algorithm"));
                 ui.add_space(12.0);
-                if ui.add(primary("解鎖主機庫")).clicked() {
+                if ui.add(primary(t.get("vault.unlock_host"))).clicked() {
                     self.open_vault_dialog(VaultMode::Unlock);
                 }
                 ui.add_space(15.0);
@@ -460,10 +515,10 @@ impl ManagementApp {
         }
         let host = self.current().cloned();
         ui.label(
-            RichText::new("HOST OVERVIEW")
+            RichText::new(t.get("app.host_overview"))
                 .size(10.0)
                 .strong()
-                .color(MUTED),
+                .color(palette.muted),
         );
         ui.add_space(4.0);
         ui.horizontal(|ui| {
@@ -471,7 +526,7 @@ impl ManagementApp {
                 RichText::new(
                     host.as_ref()
                         .map(|h| h.name.as_str())
-                        .unwrap_or("新增第一台主機"),
+                        .unwrap_or(t.get("host.first_title")),
                 )
                 .size(29.0)
                 .strong(),
@@ -481,7 +536,7 @@ impl ManagementApp {
                     .add_enabled(
                         host.is_some(),
                         egui::Button::new(
-                            RichText::new("刪除").color(Color32::from_rgb(174, 65, 65)),
+                            RichText::new(t.get("common.delete")).color(palette.error),
                         ),
                     )
                     .clicked()
@@ -489,7 +544,7 @@ impl ManagementApp {
                     self.delete_id = Some(self.selected.clone());
                 }
                 if ui
-                    .add_enabled(host.is_some(), egui::Button::new("編輯主機"))
+                    .add_enabled(host.is_some(), egui::Button::new(t.get("host.edit")))
                     .clicked()
                 {
                     self.open_editor(host.clone());
@@ -497,16 +552,16 @@ impl ManagementApp {
             });
         });
         let Some(host) = host else {
-            ui.label(RichText::new("新增 Linux／BSD 主機，使用 SSH Key 或帳密連線。").color(MUTED));
+            ui.label(RichText::new(t.get("host.intro")).color(palette.muted));
             ui.add_space(50.0);
-            card().show(ui, |ui| {
+            card(ui).show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
                 ui.add_space(24.0);
-                ui.label(RichText::new("開始管理你的主機").size(23.0).strong());
+                ui.label(RichText::new(t.get("host.start")).size(23.0).strong());
                 ui.add_space(9.0);
-                ui.label("新增連線資料、確認主機指紋，再一鍵列出 APT 待更新套件。");
+                ui.label(t.get("host.start_description"));
                 ui.add_space(18.0);
-                if ui.add(primary("＋ 新增第一台主機")).clicked() {
+                if ui.add(primary(t.get("host.add_first"))).clicked() {
                     self.open_editor(None);
                 }
                 ui.add_space(24.0);
@@ -524,39 +579,42 @@ impl ManagementApp {
                 if host.auth_type == "key" {
                     "SSH Key"
                 } else {
-                    "密碼登入"
+                    t.get("auth.password_login")
                 }
             ))
-            .color(MUTED),
+            .color(palette.muted),
         );
         ui.add_space(12.0);
         ui.horizontal(|ui| {
-            if ui.button("測試連線").clicked() {
+            if ui.button(t.get("host.test")).clicked() {
                 self.start_connection_action("test");
             }
-            if ui.button("主機指紋").clicked() {
+            if ui.button(t.get("host.fingerprint")).clicked() {
                 self.after_trust = None;
                 self.send(json!({"action":"probe","id":self.selected}));
             }
             if ui
-                .add_enabled(host.os != "BSD", primary("檢查 APT 更新"))
+                .add_enabled(host.os != "BSD", primary(t.get("apt.check")))
                 .clicked()
             {
                 self.start_connection_action("check");
             }
-            if ui.button("重新載入").clicked() {
+            if ui.button(t.get("common.reload")).clicked() {
                 self.send(json!({"action":"list"}));
             }
         });
         ui.add_space(4.0);
         ui.label(
             RichText::new(if host.fingerprint.is_empty() {
-                "首次連線前需確認 SSH 主機指紋".into()
+                t.get("host.first_trust").into()
             } else {
-                format!("SSH 指紋  {}", host.fingerprint)
+                t.format(
+                    "host.fingerprint_value",
+                    &[("fingerprint", host.fingerprint.clone())],
+                )
             })
             .size(11.0)
-            .color(MUTED),
+            .color(palette.muted),
         );
         ui.add_space(12.0);
         let result = host.last_check.as_ref();
@@ -564,7 +622,7 @@ impl ManagementApp {
         ui.columns(3, |columns| {
             stat(
                 &mut columns[0],
-                "待更新套件",
+                t.get("apt.pending"),
                 &if successful {
                     result.unwrap().packages.len().to_string()
                 } else {
@@ -573,36 +631,36 @@ impl ManagementApp {
             );
             stat(
                 &mut columns[1],
-                "檢查狀態",
+                t.get("apt.status"),
                 result
                     .map(|r| match r.status.as_str() {
-                        "success" => "檢查完成",
-                        "unsupported" => "不支援 APT",
-                        _ => "檢查失敗",
+                        "success" => t.get("apt.complete"),
+                        "unsupported" => t.get("apt.unsupported"),
+                        _ => t.get("apt.failed"),
                     })
                     .unwrap_or(if host.os == "BSD" {
-                        "不支援 APT"
+                        t.get("apt.unsupported")
                     } else {
-                        "尚未檢查"
+                        t.get("apt.not_checked")
                     }),
             );
             stat(
                 &mut columns[2],
-                "上次檢查",
+                t.get("apt.last_check"),
                 &result
                     .map(|r| format_time(&r.checked_at))
                     .unwrap_or("—".into()),
             );
         });
         ui.add_space(16.0);
-        card().show(ui, |ui| {
+        card(ui).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.horizontal(|ui| {
-                ui.selectable_value(&mut self.tab, 0, "套件清單");
-                ui.selectable_value(&mut self.tab, 1, "執行輸出");
+                ui.selectable_value(&mut self.tab, 0, t.get("apt.packages"));
+                ui.selectable_value(&mut self.tab, 1, t.get("apt.output"));
             });
             ui.separator();
-            let available = (ui.available_height() - 145.0).max(120.0);
+            let available = (viewport_height - 500.0).max(100.0);
             if self.tab == 1 {
                 egui::ScrollArea::both()
                     .max_height(available)
@@ -610,37 +668,37 @@ impl ManagementApp {
                     .show(ui, |ui| {
                         let text = result
                             .map(|r| format!("{}\n{}", r.output, r.error))
-                            .unwrap_or("尚未執行檢查".into());
+                            .unwrap_or(t.get("apt.not_run").into());
                         ui.label(RichText::new(text).monospace().size(12.0));
                     });
             } else {
                 let message = match result {
                     Some(r) if r.status == "success" => {
                         if r.packages.is_empty() {
-                            "套件索引已更新，目前沒有待更新套件。"
+                            t.get("apt.up_to_date")
                         } else {
-                            "以下套件可更新。此程式只列出，不會安裝或升級。"
+                            t.get("apt.available_description")
                         }
                     }
                     Some(r) => &r.error,
-                    None if host.os == "BSD" => "BSD 目前支援 SSH 連線測試；不支援 APT 套件檢查。",
-                    None => "按「檢查 APT 更新」更新索引並取得套件清單。",
+                    None if host.os == "BSD" => t.get("apt.bsd_description"),
+                    None => t.get("apt.check_hint"),
                 };
                 ui.label(RichText::new(message).color(
                     if result.is_some_and(|r| r.status == "failed") {
-                        Color32::from_rgb(170, 65, 65)
+                        palette.error
                     } else {
-                        MUTED
+                        palette.muted
                     },
                 ));
                 ui.add(
                     egui::TextEdit::singleline(&mut self.package_search)
-                        .hint_text("篩選套件名稱")
+                        .hint_text(t.get("apt.filter"))
                         .desired_width(270.0),
                 );
                 ui.add_space(5.0);
                 egui::ScrollArea::both()
-                    .max_height((available - 75.0).max(100.0))
+                    .max_height((available - 75.0).max(70.0))
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         egui::Grid::new("packages")
@@ -648,9 +706,13 @@ impl ManagementApp {
                             .min_col_width(130.0)
                             .spacing([20.0, 14.0])
                             .show(ui, |ui| {
-                                for caption in ["套件", "目前版本", "可更新版本", "架構"]
-                                {
-                                    ui.label(RichText::new(caption).strong().color(MUTED));
+                                for caption in [
+                                    t.get("apt.package"),
+                                    t.get("apt.current"),
+                                    t.get("apt.candidate"),
+                                    t.get("apt.architecture"),
+                                ] {
+                                    ui.label(RichText::new(caption).strong().color(palette.muted));
                                 }
                                 ui.end_row();
                                 if let Some(result) = result {
@@ -669,7 +731,7 @@ impl ManagementApp {
                             });
                         if result.is_none_or(|r| r.packages.is_empty()) {
                             ui.add_space(28.0);
-                            ui.label(RichText::new("尚無套件資料").color(MUTED));
+                            ui.label(RichText::new(t.get("apt.no_data")).color(palette.muted));
                         }
                     });
             }
@@ -678,44 +740,43 @@ impl ManagementApp {
     }
 
     fn storage_notice(&mut self, ui: &mut egui::Ui) {
+        let palette = Palette::for_context(ui.ctx());
+        let t = Translator(self.preferences.language);
         ui.add_space(15.0);
         ui.label(
             RichText::new(if self.encrypted {
-                "LUKSbox 加密儲存 · AES-256-GCM-SIV · 實驗性功能"
+                t.get("storage.encrypted")
             } else {
-                "目前未啟用加密 · SSH 帳密與私鑰以明文儲存在此電腦"
+                t.get("storage.plaintext")
             })
             .size(11.0)
-            .color(Color32::from_rgb(151, 115, 56)),
+            .color(palette.warning),
         );
-        ui.label(RichText::new(&self.path).size(10.0).color(MUTED));
+        ui.label(RichText::new(&self.path).size(10.0).color(palette.muted));
         if !self.storage_warning.is_empty() {
-            ui.colored_label(Color32::from_rgb(174, 65, 65), &self.storage_warning);
+            ui.colored_label(palette.error, &self.storage_warning);
         }
         if self.encrypted && self.plaintext_exists {
-            ui.colored_label(
-                Color32::from_rgb(174, 105, 40),
-                "原 hosts.json 明文副本仍存在，請確認後自行處理。",
-            );
+            ui.colored_label(palette.warning, t.get("storage.original_remains"));
         }
         ui.horizontal_wrapped(|ui| {
             if self.encrypted {
                 if self.locked {
-                    if ui.button("解鎖主機庫").clicked() {
+                    if ui.button(t.get("vault.unlock_host")).clicked() {
                         self.open_vault_dialog(VaultMode::Unlock);
                     }
                 } else {
-                    if ui.button("鎖定").clicked() {
+                    if ui.button(t.get("vault.lock")).clicked() {
                         self.send(json!({"action":"vault_lock"}));
                     }
-                    if ui.button("管理解鎖金鑰").clicked() {
+                    if ui.button(t.get("vault.manage")).clicked() {
                         self.open_vault_dialog(VaultMode::Manage);
                     }
-                    if ui.button("匯出加密備份…").clicked() {
+                    if ui.button(t.get("vault.export")).clicked() {
                         self.choose_backup();
                     }
                 }
-            } else if ui.button("啟用 LUKSbox 加密…").clicked() {
+            } else if ui.button(t.get("vault.enable_button")).clicked() {
                 self.open_vault_dialog(VaultMode::Create);
             }
         });
@@ -762,8 +823,9 @@ impl ManagementApp {
     }
 
     fn choose_backup(&mut self) {
+        let t = Translator(self.preferences.language);
         if let Some(path) = rfd::FileDialog::new()
-            .set_title("匯出加密備份（使用新的檔名）")
+            .set_title(t.get("vault.export_title"))
             .set_file_name("misf-backup.lbx")
             .add_filter("LUKSbox", &["lbx"])
             .save_file()
@@ -773,6 +835,8 @@ impl ManagementApp {
     }
 
     fn vault_dialog(&mut self, ctx: &egui::Context) {
+        let palette = Palette::for_context(ctx);
+        let t = Translator(self.preferences.language);
         let Some(mut dialog) = self.vault_dialog.take() else {
             return;
         };
@@ -782,27 +846,77 @@ impl ManagementApp {
         let mut backup = false;
         egui::Modal::new(egui::Id::unique("vault_dialog")).show(ctx, |ui| {
             ui.set_width(570.0);
-            ui.heading(match dialog.mode { VaultMode::Create => "啟用 LUKSbox 加密", VaultMode::Unlock => "解鎖主機庫", VaultMode::Manage => "管理解鎖金鑰", VaultMode::AddKey => "新增解鎖密碼" });
+            ui.heading(match dialog.mode {
+                VaultMode::Create => t.get("vault.enable"),
+                VaultMode::Unlock => t.get("vault.unlock_host"),
+                VaultMode::Manage => t.get("vault.manage"),
+                VaultMode::AddKey => t.get("vault.add_password"),
+            });
             ui.add_space(12.0);
             ui.add_enabled_ui(!self.busy, |ui| {
                 if dialog.mode == VaultMode::Manage {
-                    ui.label(format!("已使用 {} / 8 個金鑰槽。任一密碼都能獨立解鎖相同主機庫。", self.slots.len()));
-                    for slot in &self.slots { ui.label(format!("金鑰槽 #{slot} · 密碼")); }
-                    ui.label("請保留至少一組可取回的備援密碼。此版先提供新增金鑰，不提供撤銷或硬體金鑰註冊。");
-                    ui.horizontal(|ui| { add = ui.add_enabled(self.slots.len() < 8, primary("新增解鎖密碼")).clicked(); backup = ui.button("匯出加密備份…").clicked(); cancel = ui.button("關閉").clicked(); });
+                    ui.label(t.format(
+                        "vault.slot_count",
+                        &[("count", self.slots.len().to_string())],
+                    ));
+                    for slot in &self.slots {
+                        ui.label(t.format("vault.slot", &[("slot", slot.to_string())]));
+                    }
+                    ui.label(t.get("vault.keep_backup"));
+                    ui.horizontal(|ui| {
+                        add = ui
+                            .add_enabled(self.slots.len() < 8, primary(t.get("vault.add_password")))
+                            .clicked();
+                        backup = ui.button(t.get("vault.export")).clicked();
+                        cancel = ui.button(t.get("common.close")).clicked();
+                    });
                 } else {
                     if dialog.mode == VaultMode::Create {
-                        ui.label("把目前主機資料轉成 LUKSbox .lbx。加密內容與中繼資料，使用密碼解鎖；不需要磁碟掛載驅動。");
-                        ui.colored_label(Color32::from_rgb(174, 105, 40), "實驗性功能：LUKSbox 尚未完成付費第三方安全稽核。遺失所有解鎖密碼將無法復原。");
-                        ui.label("轉換後保留原 hosts.json 作為明文副本；新日常讀寫使用 .lbx。請在驗證備份後自行處理明文副本與舊版 .msif-management 資料。");
+                        ui.label(t.get("vault.create_description"));
+                        ui.colored_label(palette.warning, t.get("vault.experimental"));
+                        ui.label(t.get("vault.retain_plaintext"));
                     }
-                    field(ui, "解鎖密碼", &mut dialog.password, if dialog.mode == VaultMode::Unlock { "輸入任一已註冊密碼" } else { "至少 12 個字元，建議使用長密碼句" }, true);
-                    if dialog.mode != VaultMode::Unlock { field(ui, "再次輸入密碼", &mut dialog.confirmation, "確認解鎖密碼", true); }
-                    if !dialog.error.is_empty() { ui.colored_label(Color32::from_rgb(174, 65, 65), &dialog.error); }
-                    ui.horizontal(|ui| { submit = ui.add(primary(match dialog.mode { VaultMode::Create => "加密並驗證", VaultMode::Unlock => "解鎖", _ => "新增金鑰" })).clicked(); cancel = ui.button("取消").clicked(); });
+                    field(
+                        ui,
+                        t.get("vault.password"),
+                        &mut dialog.password,
+                        if dialog.mode == VaultMode::Unlock {
+                            t.get("vault.password_hint")
+                        } else {
+                            t.get("vault.new_password_hint")
+                        },
+                        true,
+                    );
+                    if dialog.mode != VaultMode::Unlock {
+                        field(
+                            ui,
+                            t.get("vault.confirm_password"),
+                            &mut dialog.confirmation,
+                            t.get("vault.confirm_hint"),
+                            true,
+                        );
+                    }
+                    if !dialog.error.is_empty() {
+                        ui.colored_label(palette.error, &dialog.error);
+                    }
+                    ui.horizontal(|ui| {
+                        submit = ui
+                            .add(primary(match dialog.mode {
+                                VaultMode::Create => t.get("vault.encrypt_verify"),
+                                VaultMode::Unlock => t.get("vault.unlock"),
+                                _ => t.get("vault.add_key"),
+                            }))
+                            .clicked();
+                        cancel = ui.button(t.get("common.cancel")).clicked();
+                    });
                 }
             });
-            if self.busy { ui.horizontal(|ui| { ui.spinner(); ui.label("正在處理加密資料，請稍候…"); }); }
+            if self.busy {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(t.get("vault.working"));
+                });
+            }
         });
         if add {
             dialog.mode = VaultMode::AddKey;
@@ -812,11 +926,11 @@ impl ManagementApp {
         }
         if submit {
             if dialog.mode != VaultMode::Unlock && dialog.password != dialog.confirmation {
-                dialog.error = "兩次輸入的密碼不一致".into();
+                dialog.error = t.get("vault.password_mismatch").into();
             } else if dialog.mode != VaultMode::Unlock && dialog.password.chars().count() < 12 {
-                dialog.error = "解鎖密碼至少需要 12 個字元".into();
+                dialog.error = t.get("vault.password_short").into();
             } else if dialog.password.is_empty() {
-                dialog.error = "請輸入解鎖密碼".into();
+                dialog.error = t.get("vault.password_required").into();
             } else {
                 dialog.error.clear();
                 let action = match dialog.mode {
@@ -836,15 +950,17 @@ impl ManagementApp {
     }
 
     fn dialogs(&mut self, ctx: &egui::Context) {
+        let palette = Palette::for_context(ctx);
+        let t = Translator(self.preferences.language);
         if let Some(mut editor) = self.editor.take() {
             let mut cancel = false;
             let mut save = false;
             egui::Modal::new(egui::Id::unique("host_editor")).show(ctx, |ui| {
                 ui.set_width(560.0);
                 ui.heading(if editor.host.id.is_empty() {
-                    "新增主機"
+                    t.get("host.add")
                 } else {
-                    "編輯主機"
+                    t.get("host.edit")
                 });
                 ui.add_space(10.0);
                 ui.add_enabled_ui(!self.busy, |ui| {
@@ -853,30 +969,36 @@ impl ManagementApp {
                         .show(ui, |ui| {
                             field(
                                 ui,
-                                "主機名稱",
+                                t.get("host.name"),
                                 &mut editor.host.name,
-                                "例如：Production Web",
+                                t.get("host.name_hint"),
                                 false,
                             );
                             ui.columns(2, |columns| {
                                 field(
                                     &mut columns[0],
-                                    "主機位址",
+                                    t.get("host.address"),
                                     &mut editor.host.address,
-                                    "IP 或主機名稱",
+                                    t.get("host.address_hint"),
                                     false,
                                 );
-                                field(&mut columns[1], "SSH 埠", &mut editor.port, "22", false);
+                                field(
+                                    &mut columns[1],
+                                    t.get("host.port"),
+                                    &mut editor.port,
+                                    "22",
+                                    false,
+                                );
                             });
                             field(
                                 ui,
-                                "SSH 使用者名稱",
+                                t.get("auth.username"),
                                 &mut editor.host.username,
-                                "使用者名稱",
+                                t.get("auth.username_hint"),
                                 false,
                             );
                             ui.horizontal(|ui| {
-                                egui::ComboBox::from_label("目標系統")
+                                egui::ComboBox::from_label(t.get("host.os"))
                                     .selected_text(&editor.host.os)
                                     .show_ui(ui, |ui| {
                                         ui.selectable_value(
@@ -890,53 +1012,53 @@ impl ManagementApp {
                                             "BSD",
                                         );
                                     });
-                                egui::ComboBox::from_label("登入方式")
+                                egui::ComboBox::from_label(t.get("auth.method"))
                                     .selected_text(if editor.host.auth_type == "key" {
-                                        "SSH 私鑰"
+                                        t.get("auth.private_key")
                                     } else {
-                                        "密碼"
+                                        t.get("auth.password")
                                     })
                                     .show_ui(ui, |ui| {
                                         ui.selectable_value(
                                             &mut editor.host.auth_type,
                                             "password".into(),
-                                            "密碼",
+                                            t.get("auth.password"),
                                         );
                                         ui.selectable_value(
                                             &mut editor.host.auth_type,
                                             "key".into(),
-                                            "SSH 私鑰",
+                                            t.get("auth.private_key"),
                                         );
                                     });
                             });
-                            ui.checkbox(&mut editor.show_secrets, "顯示憑證內容");
+                            ui.checkbox(&mut editor.show_secrets, t.get("auth.show_secrets"));
                             if editor.host.auth_type == "password" {
                                 field(
                                     ui,
-                                    "SSH 密碼",
+                                    t.get("auth.ssh_password"),
                                     &mut editor.host.password,
-                                    "SSH 登入密碼",
+                                    t.get("auth.ssh_password_hint"),
                                     !editor.show_secrets,
                                 );
                             } else {
-                                ui.label("SSH 私鑰（OpenSSH／PEM）");
+                                ui.label(t.get("auth.key_format"));
                                 ui.add(
                                     egui::TextEdit::multiline(&mut editor.host.private_key)
                                         .password(!editor.show_secrets)
                                         .desired_rows(3)
                                         .desired_width(f32::INFINITY)
-                                        .hint_text("匯入或貼上私鑰"),
+                                        .hint_text(t.get("auth.key_hint")),
                                 );
-                                if ui.button("從檔案匯入 SSH Key…").clicked()
+                                if ui.button(t.get("auth.import_key")).clicked()
                                     && let Some(path) = rfd::FileDialog::new()
-                                        .set_title("匯入 SSH 私鑰")
+                                        .set_title(t.get("auth.import_title"))
                                         .pick_file()
                                 {
                                     let result = std::fs::metadata(&path).and_then(|m| {
                                         if m.len() <= 1024 * 1024 {
                                             std::fs::read_to_string(&path)
                                         } else {
-                                            Err(std::io::Error::other("私鑰檔案超過 1 MiB"))
+                                            Err(std::io::Error::other(t.get("auth.key_too_large")))
                                         }
                                     });
                                     match result {
@@ -945,54 +1067,60 @@ impl ManagementApp {
                                             editor.error.clear();
                                         }
                                         Err(error) => {
-                                            editor.error = format!("無法讀取私鑰：{error}")
+                                            editor.error = t.format(
+                                                "auth.key_read_error",
+                                                &[("error", error.to_string())],
+                                            )
                                         }
                                     }
                                 }
                                 field(
                                     ui,
-                                    "私鑰密語",
+                                    t.get("auth.key_passphrase"),
                                     &mut editor.host.key_passphrase,
-                                    "沒有則留空",
+                                    t.get("auth.key_passphrase_hint"),
                                     !editor.show_secrets,
                                 );
                             }
                             ui.separator();
                             field(
                                 ui,
-                                "sudo 密碼（可選）",
+                                t.get("auth.sudo_password"),
                                 &mut editor.host.sudo_password,
-                                "留空時沿用 SSH 密碼；Key 登入則需免密 sudo",
+                                t.get("auth.sudo_hint"),
                                 !editor.show_secrets,
                             );
-                            ui.checkbox(
-                                &mut editor.host.use_pty,
-                                "APT 操作要求 PTY（相當於 ssh -t）",
+                            ui.checkbox(&mut editor.host.use_pty, t.get("auth.pty"));
+                            field(
+                                ui,
+                                t.get("host.notes"),
+                                &mut editor.host.notes,
+                                t.get("common.optional"),
+                                false,
                             );
-                            field(ui, "備註", &mut editor.host.notes, "選填", false);
                             ui.label(
                                 RichText::new(if self.encrypted {
-                                    "憑證將儲存在已解鎖的 LUKSbox 加密容器。"
+                                    t.get("storage.credentials_encrypted")
                                 } else {
-                                    "憑證將儲存在本機明文 JSON 檔案。"
+                                    t.get("storage.credentials_plaintext")
                                 })
                                 .size(12.0)
-                                .color(MUTED),
+                                .color(palette.muted),
                             );
                             if !editor.error.is_empty() {
-                                ui.colored_label(Color32::from_rgb(174, 65, 65), &editor.error);
+                                ui.colored_label(palette.error, &editor.error);
                             }
                         });
                     ui.add_space(10.0);
                     ui.horizontal(|ui| {
-                        save = ui.add(primary("儲存主機")).clicked();
-                        cancel = ui.button("取消").clicked();
+                        save = ui.add(primary(t.get("host.save"))).clicked();
+                        cancel = ui.button(t.get("common.cancel")).clicked();
                     });
                 });
                 if self.busy {
                     ui.horizontal(|ui| {
                         ui.spinner();
-                        ui.label("正在驗證並儲存…");
+                        ui.label(t.get("host.saving"));
                     });
                 }
             });
@@ -1002,7 +1130,7 @@ impl ManagementApp {
                         editor.host.port = port;
                         self.send(json!({"action":"save","host":editor.host}));
                     }
-                    _ => editor.error = "SSH 埠必須是 1–65535 的數字".into(),
+                    _ => editor.error = t.get("host.port_invalid").into(),
                 }
             }
             if !cancel {
@@ -1015,23 +1143,23 @@ impl ManagementApp {
             egui::Modal::new(egui::Id::unique("trust")).show(ctx, |ui| {
                 ui.set_width(580.0);
                 ui.heading(if trust.old.is_empty() {
-                    "確認 SSH 主機指紋"
+                    t.get("trust.confirm")
                 } else {
-                    "SSH 主機指紋已變更"
+                    t.get("trust.changed")
                 });
                 ui.label(&trust.address);
                 ui.add_space(10.0);
-                ui.label("收到的 SHA-256 指紋");
+                ui.label(t.get("trust.received"));
                 ui.monospace(&trust.actual);
                 if !trust.old.is_empty() {
-                    ui.label("原本信任的指紋");
+                    ui.label(t.get("trust.previous"));
                     ui.monospace(&trust.old);
                 }
-                ui.label("請透過可信管道核對。此步驟尚未提交 SSH 帳密。");
+                ui.label(t.get("trust.description"));
                 ui.add_enabled_ui(!self.busy, |ui| {
                     ui.horizontal(|ui| {
-                        accept = ui.add(primary("信任並儲存")).clicked();
-                        cancel = ui.button("取消").clicked();
+                        accept = ui.add(primary(t.get("trust.accept"))).clicked();
+                        cancel = ui.button(t.get("common.cancel")).clicked();
                     });
                 });
             });
@@ -1041,7 +1169,7 @@ impl ManagementApp {
             if cancel {
                 self.trust = None;
                 self.after_trust = None;
-                self.status = "未信任主機；連線已取消".into();
+                self.status = t.get("trust.cancelled").into();
             }
         }
         if let Some(id) = self.delete_id.clone() {
@@ -1050,17 +1178,17 @@ impl ManagementApp {
                 .iter()
                 .find(|h| h.id == id)
                 .map(|h| h.name.as_str())
-                .unwrap_or("主機");
+                .unwrap_or(t.get("host.generic"));
             let mut yes = false;
             let mut no = false;
             egui::Modal::new(egui::Id::unique("delete")).show(ctx, |ui| {
                 ui.set_width(400.0);
-                ui.heading("刪除主機");
-                ui.label(format!("刪除「{name}」的本機連線資料與檢查結果？"));
+                ui.heading(t.get("host.delete"));
+                ui.label(t.format("host.delete_prompt", &[("name", name.into())]));
                 ui.add_enabled_ui(!self.busy, |ui| {
                     ui.horizontal(|ui| {
-                        yes = ui.button("確定刪除").clicked();
-                        no = ui.button("取消").clicked();
+                        yes = ui.button(t.get("host.confirm_delete")).clicked();
+                        no = ui.button(t.get("common.cancel")).clicked();
                     });
                 });
             });
@@ -1076,9 +1204,9 @@ impl ManagementApp {
             let mut close = false;
             egui::Modal::new(egui::Id::unique("error")).show(ctx, |ui| {
                 ui.set_width(540.0);
-                ui.heading("無法完成操作");
+                ui.heading(t.get("error.title"));
                 ui.label(error);
-                close = ui.button("關閉").clicked();
+                close = ui.button(t.get("common.close")).clicked();
             });
             if close {
                 self.error = None;
@@ -1091,14 +1219,22 @@ impl eframe::App for ManagementApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.process_events();
         let ctx = ui.ctx().clone();
+        egui::Panel::top("preferences")
+            .frame(
+                egui::Frame::new()
+                    .fill(Palette::for_context(&ctx).surface)
+                    .inner_margin(12),
+            )
+            .show(ui, |ui| self.preferences_bar(ui));
+        let palette = Palette::for_context(&ctx);
         egui::Panel::bottom("status")
-            .frame(egui::Frame::new().fill(Color32::WHITE).inner_margin(12))
+            .frame(egui::Frame::new().fill(palette.surface).inner_margin(12))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     if self.busy {
                         ui.spinner();
                     }
-                    ui.label(RichText::new(&self.status).size(12.0).color(MUTED));
+                    ui.label(RichText::new(&self.status).size(12.0).color(palette.muted));
                 });
             });
         egui::Panel::left("hosts")
@@ -1109,9 +1245,14 @@ impl eframe::App for ManagementApp {
                 ui.add_enabled_ui(!self.busy, |ui| self.sidebar(ui));
             });
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(BG).inner_margin(28))
+            .frame(egui::Frame::new().fill(palette.background).inner_margin(28))
             .show(ui, |ui| {
-                ui.add_enabled_ui(!self.busy, |ui| self.workspace(ui));
+                let viewport_height = ui.available_height();
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.add_enabled_ui(!self.busy, |ui| self.workspace(ui, viewport_height));
+                    });
             });
         self.dialogs(&ctx);
         if self.busy {
@@ -1142,10 +1283,11 @@ impl eframe::App for ManagementApp {
     }
 }
 
-fn card() -> egui::Frame {
+fn card(ui: &egui::Ui) -> egui::Frame {
+    let palette = Palette::for_context(ui.ctx());
     egui::Frame::new()
-        .fill(Color32::WHITE)
-        .stroke(Stroke::new(1.0, BORDER))
+        .fill(palette.surface)
+        .stroke(Stroke::new(1.0, palette.border))
         .corner_radius(8)
         .inner_margin(18)
 }
@@ -1168,9 +1310,10 @@ fn primary(text: &str) -> egui::Button<'_> {
     egui::Button::new(RichText::new(text).color(Color32::WHITE).strong()).fill(BLUE)
 }
 fn stat(ui: &mut egui::Ui, title: &str, value: &str) {
-    card().show(ui, |ui| {
+    let palette = Palette::for_context(ui.ctx());
+    card(ui).show(ui, |ui| {
         ui.set_min_width(ui.available_width());
-        ui.label(RichText::new(title).size(12.0).color(MUTED));
+        ui.label(RichText::new(title).size(12.0).color(palette.muted));
         ui.add_space(6.0);
         ui.label(RichText::new(value).size(22.0).strong());
     });
