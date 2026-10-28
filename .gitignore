@@ -1,0 +1,7 @@
+/core/target/
+/target/
+/dist/
+/.test-data/
+/.m2/
+*.log
+
