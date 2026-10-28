@@ -135,6 +135,8 @@
   "app.host_overview": "HOST OVERVIEW",
   "app.vault_heading": "LUKSBOX VAULT",
   "settings.language": "Language",
+  "settings.title": "Settings",
+  "settings.plaintext_notice": "Non-sensitive preferences such as language and appearance are saved separately in unencrypted ui-settings.json. Changes apply immediately and are saved automatically.",
   "settings.appearance": "Appearance",
   "settings.saved": "Interface preferences saved",
   "settings.load_error": "Unable to load interface preferences; using defaults: {error}",

@@ -135,6 +135,8 @@
   "app.host_overview": "主機總覽",
   "app.vault_heading": "LUKSbox 主機庫",
   "settings.language": "語言",
+  "settings.title": "設定",
+  "settings.plaintext_notice": "語言與外觀等非敏感偏好另存於未加密的 ui-settings.json，與主機庫分開保存。變更會立即套用並自動儲存。",
   "settings.appearance": "外觀",
   "settings.saved": "介面偏好已儲存",
   "settings.load_error": "無法讀取介面偏好，已使用預設值：{error}",

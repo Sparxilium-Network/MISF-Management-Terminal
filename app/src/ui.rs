@@ -49,6 +49,7 @@ impl Drop for VaultDialog {
 
 pub struct ManagementApp {
     preferences: Preferences,
+    settings_open: bool,
     worker: Worker,
     hosts: Vec<Host>,
     selected: String,
@@ -84,6 +85,7 @@ impl ManagementApp {
         let worker = Worker::new(cc.egui_ctx.clone());
         let mut app = Self {
             preferences,
+            settings_open: false,
             worker,
             hosts: vec![],
             selected: String::new(),
@@ -120,43 +122,73 @@ impl ManagementApp {
         if std::env::var_os("MISF_OPEN_VAULT_SETUP").is_some() {
             app.open_vault_dialog(VaultMode::Create);
         }
+        #[cfg(feature = "capture")]
+        if std::env::var_os("MISF_OPEN_SETTINGS").is_some() {
+            app.settings_open = true;
+        }
         app
     }
 
-    fn preferences_bar(&mut self, ui: &mut egui::Ui) {
+    fn settings_window(&mut self, ctx: &egui::Context) {
+        if !self.settings_open {
+            return;
+        }
+        let t = Translator(self.preferences.language);
+        let mut open = self.settings_open;
+        let mut close = false;
+        egui::Window::new(t.get("settings.title"))
+            .id(egui::Id::unique("settings_window"))
+            .open(&mut open)
+            .default_pos([16.0, 70.0])
+            .default_width(420.0)
+            .resizable(false)
+            .collapsible(false)
+            .show(ctx, |ui| {
+                self.preferences_form(ui);
+                ui.add_space(12.0);
+                ui.separator();
+                ui.label(t.get("settings.plaintext_notice"));
+                ui.add_space(12.0);
+                close = ui.button(t.get("common.close")).clicked();
+            });
+        self.settings_open = open && !close;
+    }
+
+    fn preferences_form(&mut self, ui: &mut egui::Ui) {
         let before = self.preferences;
         let t = Translator(before.language);
-        ui.horizontal_wrapped(|ui| {
-            ui.strong("MISF");
-            ui.separator();
-            egui::ComboBox::from_id_salt("language")
-                .selected_text(self.preferences.language.name())
-                .width(165.0)
-                .show_ui(ui, |ui| {
-                    for language in Language::ALL {
-                        ui.selectable_value(
-                            &mut self.preferences.language,
-                            language,
-                            language.name(),
-                        );
-                    }
-                });
-            ui.label(t.get("settings.language"));
-            ui.separator();
-            egui::ComboBox::from_id_salt("appearance")
-                .selected_text(self.preferences.appearance.label(t))
-                .width(100.0)
-                .show_ui(ui, |ui| {
-                    for appearance in Appearance::ALL {
-                        ui.selectable_value(
-                            &mut self.preferences.appearance,
-                            appearance,
-                            appearance.label(t),
-                        );
-                    }
-                });
-            ui.label(t.get("settings.appearance"));
-        });
+        egui::Grid::new("preferences_form")
+            .spacing([24.0, 16.0])
+            .show(ui, |ui| {
+                ui.label(t.get("settings.language"));
+                egui::ComboBox::from_id_salt("language")
+                    .selected_text(self.preferences.language.name())
+                    .width(165.0)
+                    .show_ui(ui, |ui| {
+                        for language in Language::ALL {
+                            ui.selectable_value(
+                                &mut self.preferences.language,
+                                language,
+                                language.name(),
+                            );
+                        }
+                    });
+                ui.end_row();
+                ui.label(t.get("settings.appearance"));
+                egui::ComboBox::from_id_salt("appearance")
+                    .selected_text(self.preferences.appearance.label(t))
+                    .width(165.0)
+                    .show_ui(ui, |ui| {
+                        for appearance in Appearance::ALL {
+                            ui.selectable_value(
+                                &mut self.preferences.appearance,
+                                appearance,
+                                appearance.label(t),
+                            );
+                        }
+                    });
+                ui.end_row();
+            });
         if self.preferences != before {
             self.preferences.appearance.apply(ui.ctx());
             let t = Translator(self.preferences.language);
@@ -1225,7 +1257,12 @@ impl eframe::App for ManagementApp {
                     .fill(Palette::for_context(&ctx).surface)
                     .inner_margin(12),
             )
-            .show(ui, |ui| self.preferences_bar(ui));
+            .show(ui, |ui| {
+                let t = Translator(self.preferences.language);
+                if ui.button(t.get("settings.title")).clicked() {
+                    self.settings_open = !self.settings_open;
+                }
+            });
         let palette = Palette::for_context(&ctx);
         egui::Panel::bottom("status")
             .frame(egui::Frame::new().fill(palette.surface).inner_margin(12))
@@ -1254,6 +1291,7 @@ impl eframe::App for ManagementApp {
                         ui.add_enabled_ui(!self.busy, |ui| self.workspace(ui, viewport_height));
                     });
             });
+        self.settings_window(&ctx);
         self.dialogs(&ctx);
         if self.busy {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
