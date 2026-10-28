@@ -1,5 +1,5 @@
 [package]
-name = "msif"
+name = "misf"
 version = "0.1.0"
 edition = "2024"
 
@@ -7,11 +7,10 @@ edition = "2024"
 capture = ["dep:image"]
 
 [dependencies]
-msif-core = { path = "../core" }
+misf-core = { path = "../core" }
 eframe = { version = "0.37.0", default-features = false, features = ["glow", "default_fonts", "system_fonts", "clipboard", "x11", "wayland"] }
 rfd = "0.17.2"
 serde_json = "1"
 chrono = "0.4"
 tokio = { version = "1", features = ["rt-multi-thread"] }
 image = { version = "0.25", default-features = false, features = ["png"], optional = true }
-

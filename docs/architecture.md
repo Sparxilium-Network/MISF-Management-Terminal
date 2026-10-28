@@ -1,4 +1,4 @@
-# MSIF Management Terminal：全 Rust 原生桌面
+# MISF Management Terminal：全 Rust 原生桌面
 
 > [!WARNING]
 > **本專案仍處於開發階段，請勿用於正式環境。**
@@ -23,7 +23,9 @@ Linux APT 檢查先偵測 Linux 與 APT，root 直接執行 apt-get update，一
 
 ## 本機儲存與背景工作
 
-預設儲存於使用者目錄 `.msif-management/hosts.json`，以 MSIF_DATA_DIR 可更改位置。SSH 密碼、sudo 密碼、私鑰、密語與檢查結果都以明文保存；UI 顯示提示及路徑。寫入使用檔案鎖與暫存檔原子替換；損壞或不支援版本的既存檔案不會被自動覆寫。
+預設儲存於使用者目錄 `.misf-management/hosts.json`，以 MISF_DATA_DIR 可更改位置。SSH 密碼、sudo 密碼、私鑰、密語與檢查結果都以明文保存；UI 顯示提示及路徑。寫入使用檔案鎖與暫存檔原子替換；損壞或不支援版本的既存檔案不會被自動覆寫。
+
+名稱修正後，首次啟動會複製舊版 `.msif-management/hosts.json` 至新目錄，保留原檔並避免覆寫新目錄既有資料。明確設定 MISF_DATA_DIR 時使用指定路徑，不自動遷移其他目錄。
 
 UI 經工作佇列交給背景執行緒與 Tokio runtime 執行 SSH／磁碟操作，進度與結果回傳畫面，避免介面卡住。執行期間停用衝突操作。關閉程式會終止本機程序及連線，不能保證中止遠端已開始的 APT 程序。
 

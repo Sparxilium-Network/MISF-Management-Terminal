@@ -1,5 +1,5 @@
 [package]
-name = "msif-core"
+name = "misf-core"
 version = "0.1.0"
 edition = "2024"
 
@@ -16,4 +16,3 @@ uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 rand = "0.10"
-

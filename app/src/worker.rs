@@ -1,5 +1,5 @@
 use eframe::egui;
-use msif_core::store::Store;
+use misf_core::store::Store;
 use serde_json::Value;
 use std::sync::mpsc::{self, Receiver, Sender};
 
@@ -28,7 +28,7 @@ impl Worker {
                 let action = request["action"].as_str().unwrap_or_default().to_string();
                 let result = match (&runtime, Store::default_path()) {
                     (Ok(runtime), Ok(path)) => runtime
-                        .block_on(msif_core::dispatch(
+                        .block_on(misf_core::dispatch(
                             request,
                             &Store::new(path),
                             &|message| {

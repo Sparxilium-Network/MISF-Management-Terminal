@@ -1,7 +1,7 @@
 use crate::worker::{Event, Worker};
 use chrono::{DateTime, Local};
 use eframe::egui::{self, Color32, FontId, RichText, Stroke, Vec2};
-use msif_core::model::{CheckResult, Host};
+use misf_core::model::{CheckResult, Host};
 use serde_json::{Value, json};
 
 const NAVY: Color32 = Color32::from_rgb(19, 36, 59);
@@ -87,7 +87,7 @@ impl ManagementApp {
         };
         app.send(json!({"action":"list"}));
         #[cfg(feature = "capture")]
-        if std::env::var_os("MSIF_OPEN_EDITOR").is_some() {
+        if std::env::var_os("MISF_OPEN_EDITOR").is_some() {
             app.open_editor(None);
         }
         app
@@ -235,7 +235,7 @@ impl ManagementApp {
         ui.visuals_mut().override_text_color = Some(Color32::from_rgb(220, 231, 245));
         ui.add_space(9.0);
         ui.label(
-            RichText::new("MSIF")
+            RichText::new("MISF")
                 .size(34.0)
                 .strong()
                 .color(Color32::WHITE),
@@ -861,7 +861,7 @@ impl eframe::App for ManagementApp {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
         #[cfg(feature = "capture")]
-        if let Some(path) = std::env::var_os("MSIF_SCREENSHOT_TO") {
+        if let Some(path) = std::env::var_os("MISF_SCREENSHOT_TO") {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
             if !self.capture_requested
                 && !self.busy

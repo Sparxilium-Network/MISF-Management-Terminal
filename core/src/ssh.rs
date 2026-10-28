@@ -11,12 +11,12 @@ use std::{
 };
 use tokio::time::timeout;
 
-const PROMPT: &str = "__MSIF_SUDO_PROMPT__";
+const PROMPT: &str = "__MISF_SUDO_PROMPT__";
 const LIMIT: usize = 2 * 1024 * 1024;
-pub const DETECT: &str = "uname -s; if command -v apt-get >/dev/null 2>&1 && command -v apt >/dev/null 2>&1; then printf '__MSIF_APT__\\n'; fi";
+pub const DETECT: &str = "uname -s; if command -v apt-get >/dev/null 2>&1 && command -v apt >/dev/null 2>&1; then printf '__MISF_APT__\\n'; fi";
 const UPDATE: &str = "LC_ALL=C apt-get -o APT::Update::Error-Mode=any update";
 const SUDO_UPDATE: &str =
-    "LC_ALL=C sudo -S -p '__MSIF_SUDO_PROMPT__' -- apt-get -o APT::Update::Error-Mode=any update";
+    "LC_ALL=C sudo -S -p '__MISF_SUDO_PROMPT__' -- apt-get -o APT::Update::Error-Mode=any update";
 pub const LIST: &str = "LC_ALL=C apt list --upgradable";
 
 struct Verifier {
@@ -234,7 +234,7 @@ pub async fn check(host: &Host, progress: &dyn Fn(&str)) -> CheckResult {
             ensure!(
                 code == 0
                     && output.lines().next() == Some("Linux")
-                    && output.contains("__MSIF_APT__"),
+                    && output.contains("__MISF_APT__"),
                 "此主機沒有 APT，或不是 Linux；不支援此檢查"
             );
             progress("正在執行 apt-get update，只更新套件索引…");

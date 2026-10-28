@@ -1,4 +1,6 @@
-# MSIF Management Terminal
+# MISF Management Terminal
+
+[GitHub 儲存庫](https://github.com/Sparxilium-Network/MISF-Management-Terminal)
 
 > [!WARNING]
 > **本專案仍處於開發階段，請勿用於正式環境。**
@@ -6,7 +8,9 @@
 
 全 Rust 原生桌面客戶端，以 eframe／egui 繪製畫面，內建 Rust SSH 核心。畫面與核心編譯成同一個執行檔，不需要 Java、瀏覽器或管理伺服器。
 
-目前沒有 PIN 或本機資料加密。帳密、匯入的私鑰與最近一次 APT 結果，以明文 JSON 保存在使用者目錄 `.msif-management/hosts.json`；UI 會顯示完整路徑。用 `MSIF_DATA_DIR` 可指定資料資料夾。
+目前沒有 PIN 或本機資料加密。帳密、匯入的私鑰與最近一次 APT 結果，以明文 JSON 保存在使用者目錄 `.misf-management/hosts.json`；UI 會顯示完整路徑。用 `MISF_DATA_DIR` 可指定資料資料夾。
+
+首次啟動會自動複製舊版 `.msif-management/hosts.json` 至新資料目錄，保留原檔，且不覆寫已存在的新資料。
 
 ## 啟動與打包
 
@@ -23,9 +27,9 @@
 .\package.ps1
 ```
 
-打包後直接執行 `dist/MSIF/msif.exe`。不需要安裝 Rust 或 Java。
+打包後直接執行 `dist/MISF/misf.exe`。不需要安裝 Rust 或 Java。
 
-Linux／macOS 可使用 `cargo run --locked -p msif`，須在對應平台建置；Linux 建置需要 OpenGL、X11／Wayland、fontconfig 與檔案對話框相關開發套件。此版本已在 Windows 建置與驗證。
+Linux／macOS 可使用 `cargo run --locked -p misf`，須在對應平台建置；Linux 建置需要 OpenGL、X11／Wayland、fontconfig 與檔案對話框相關開發套件。此版本已在 Windows 建置與驗證。
 
 ## 功能
 
@@ -59,5 +63,4 @@ Rust 整合測試在 loopback 啟動測試 SSH 伺服器，驗證密碼／私鑰
 - `core/`：主機資料、SSH 及 APT 核心；亦提供 stdin/stdout JSON CLI。
 - `docs/architecture.md`：目前實作架構。
 
-開發用畫面擷取可使用 `cargo build -p msif --features capture`，以 `MSIF_SCREENSHOT_TO` 指定 PNG 路徑；`MSIF_OPEN_EDITOR=1` 可擷取新增主機對話框。正式 release 預設不啟用此功能。
-
+開發用畫面擷取可使用 `cargo build -p misf --features capture`，以 `MISF_SCREENSHOT_TO` 指定 PNG 路徑；`MISF_OPEN_EDITOR=1` 可擷取新增主機對話框。正式 release 預設不啟用此功能。

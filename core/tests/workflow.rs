@@ -1,4 +1,4 @@
-use msif_core::{
+use misf_core::{
     dispatch,
     model::{Host, parse_packages},
     ssh,
@@ -119,7 +119,7 @@ impl server::Handler for Mock {
         if command == "uname -s" {
             finish(session, channel, "Linux\n", 0)
         } else if command == ssh::DETECT {
-            finish(session, channel, "Linux\n__MSIF_APT__\n", 0)
+            finish(session, channel, "Linux\n__MISF_APT__\n", 0)
         } else if command == ssh::LIST {
             finish(
                 session,
@@ -130,7 +130,7 @@ impl server::Handler for Mock {
         } else if command.starts_with("LC_ALL=C sudo -S") {
             self.waiting.insert(channel);
             // Deliberately split the sudo marker across SSH packets.
-            session.data(channel, b"__MSIF_SUDO_".to_vec())?;
+            session.data(channel, b"__MISF_SUDO_".to_vec())?;
             session.data(channel, b"PROMPT__".to_vec())
         } else if command.starts_with("LC_ALL=C apt-get ") {
             finish(session, channel, "Reading package lists... Done\n", 0)
@@ -147,7 +147,7 @@ impl server::Handler for Mock {
         if self.waiting.remove(&channel) {
             assert_eq!(data, b"sudo-secret\n");
             if self.state.wrong_sudo {
-                session.data(channel, b"Sorry, try again.\n__MSIF_SUDO_PROMPT__".to_vec())
+                session.data(channel, b"Sorry, try again.\n__MISF_SUDO_PROMPT__".to_vec())
             } else if self.state.fail_update {
                 finish(session, channel, "E: repository unavailable\n", 100)
             } else {
@@ -228,7 +228,7 @@ async fn password_pty_sudo_and_packages_work_end_to_end() {
     assert_eq!(check.packages[0].candidate_version, "3.0.17");
     assert_eq!(fixture.state.pty_count.load(Ordering::SeqCst), 1);
     assert!(!check.output.contains("sudo-secret"));
-    assert!(!check.output.contains("__MSIF_SUDO_PROMPT__"));
+    assert!(!check.output.contains("__MISF_SUDO_PROMPT__"));
     let commands = fixture.state.commands.lock().unwrap();
     assert!(
         commands

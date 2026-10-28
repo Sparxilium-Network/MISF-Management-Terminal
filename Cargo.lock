@@ -1938,20 +1938,20 @@ dependencies = [
 ]
 
 [[package]]
-name = "msif"
+name = "misf"
 version = "0.1.0"
 dependencies = [
  "chrono",
  "eframe",
  "image",
- "msif-core",
+ "misf-core",
  "rfd",
  "serde_json",
  "tokio",
 ]
 
 [[package]]
-name = "msif-core"
+name = "misf-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",

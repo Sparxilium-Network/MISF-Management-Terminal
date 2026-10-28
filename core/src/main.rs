@@ -16,8 +16,8 @@ async fn main() {
             .take(8 * 1024 * 1024)
             .read_to_string(&mut input)?;
         let request = serde_json::from_str(&input)?;
-        let store = msif_core::store::Store::new(msif_core::store::Store::default_path()?);
-        msif_core::dispatch(request, &store, &|message| {
+        let store = misf_core::store::Store::new(misf_core::store::Store::default_path()?);
+        misf_core::dispatch(request, &store, &|message| {
             emit(json!({"kind": "progress", "message": message}))
         })
         .await

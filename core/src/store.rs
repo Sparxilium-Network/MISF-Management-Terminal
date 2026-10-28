@@ -20,15 +20,13 @@ pub struct Store {
 
 impl Store {
     pub fn default_path() -> Result<PathBuf> {
-        if let Some(path) = std::env::var_os("MSIF_DATA_DIR") {
+        if let Some(path) = std::env::var_os("MISF_DATA_DIR") {
             return Ok(PathBuf::from(path).join("hosts.json"));
         }
         let home = std::env::var_os("USERPROFILE")
             .or_else(|| std::env::var_os("HOME"))
-            .context("找不到使用者目錄；請設定 MSIF_DATA_DIR")?;
-        Ok(PathBuf::from(home)
-            .join(".msif-management")
-            .join("hosts.json"))
+            .context("找不到使用者目錄；請設定 MISF_DATA_DIR")?;
+        profile_path(Path::new(&home))
     }
 
     pub fn new(path: PathBuf) -> Self {
@@ -98,6 +96,27 @@ impl Store {
     }
 }
 
+fn profile_path(home: &Path) -> Result<PathBuf> {
+    let path = home.join(".misf-management").join("hosts.json");
+    // Preserve connection profiles created before the project-name correction.
+    let legacy = home.join(".msif-management").join("hosts.json");
+    if !path.exists() && legacy.is_file() {
+        let directory = path.parent().unwrap();
+        fs::create_dir_all(directory).context("無法建立 MISF 資料目錄")?;
+        let mut temp = tempfile::NamedTempFile::new_in(directory)?;
+        set_private_permissions(temp.path())?;
+        let mut source = fs::File::open(legacy).context("無法讀取舊版主機資料")?;
+        std::io::copy(&mut source, &mut temp)?;
+        temp.as_file().sync_all()?;
+        if let Err(error) = temp.persist_noclobber(&path)
+            && error.error.kind() != std::io::ErrorKind::AlreadyExists
+        {
+            return Err(error.error).context("無法遷移舊版主機資料");
+        }
+    }
+    Ok(path)
+}
+
 fn set_private_permissions(path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
@@ -107,4 +126,24 @@ fn set_private_permissions(path: &Path) -> Result<()> {
     #[cfg(not(unix))]
     let _ = path;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_profile_is_copied_once_without_overwriting_existing_data() {
+        let home = tempfile::tempdir().unwrap();
+        let legacy = home.path().join(".msif-management");
+        fs::create_dir(&legacy).unwrap();
+        let original = br#"{"version":1,"hosts":[]}"#;
+        fs::write(legacy.join("hosts.json"), original).unwrap();
+        let migrated = profile_path(home.path()).unwrap();
+        assert_eq!(fs::read(&migrated).unwrap(), original);
+        assert_eq!(fs::read(legacy.join("hosts.json")).unwrap(), original);
+        fs::write(&migrated, "existing-new-profile").unwrap();
+        profile_path(home.path()).unwrap();
+        assert_eq!(fs::read(&migrated).unwrap(), b"existing-new-profile");
+    }
 }
