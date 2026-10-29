@@ -1,0 +1,32 @@
+# MISF compatibility copy of LUKSbox 0.6.1, modified 2026-10-30.
+# See ../PATCHES.md for provenance and changes.
+[package]
+name = "luksbox-fido2"
+version = "0.6.1"
+edition = "2024"
+license = "Apache-2.0"
+rust-version = "1.95"
+description = "FIDO2 hmac-secret interface for LUKSbox (MISF compatibility patch)"
+publish = false
+
+[dependencies]
+luksbox-core = { git = "https://github.com/PentHertz/LUKSbox.git", rev = "69448f708f1328d672deb595e359579d630cb0b0" }
+sha2 = "0.11.1"
+hmac = "0.13.0"
+subtle = "2.6.1"
+getrandom = "0.4.3"
+thiserror = "2.0.21"
+zeroize = { version = "1.9.1", features = ["derive", "std"] }
+aes = { version = "0.9.3", features = ["zeroize"] }
+p256 = { version = "0.14.0", default-features = false, features = ["ecdh", "getrandom"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Networking_WindowsWebServices", "Win32_UI_WindowsAndMessaging"] }
+
+[build-dependencies]
+pkg-config = "0.3.34"
+vcpkg = "0.2.15"
+bindgen = "0.73.2"
+
+[features]
+hardware = []

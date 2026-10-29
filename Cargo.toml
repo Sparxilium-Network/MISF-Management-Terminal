@@ -1,8 +1,11 @@
 [workspace]
-members = ["core", "app"]
+members = ["core", "app", "third_party/LUKSbox/luksbox-fido2"]
 resolver = "3"
 
 [profile.release]
 lto = "thin"
 strip = true
 
+# Upgrade FIDO2's P-256 dependency without changing the pinned container format.
+[patch."https://github.com/PentHertz/LUKSbox.git"]
+luksbox-fido2 = { path = "third_party/LUKSbox/luksbox-fido2" }

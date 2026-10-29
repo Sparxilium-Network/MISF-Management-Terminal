@@ -5,7 +5,6 @@ use luksbox_core::keyslot::FIDO2_CRED_ID_MAX;
 use luksbox_fido2::{
     Credential, EnrollResult, Error, Fido2Authenticator, HmacSecret, HmacSecretRequest, RP_ID,
 };
-use rand_core::{OsRng, RngCore};
 use std::{ptr, ptr::NonNull};
 use windows::{
     Win32::{Networking::WindowsWebServices::*, UI::WindowsAndMessaging::GetForegroundWindow},
@@ -39,9 +38,7 @@ fn client_json(rp: &str, registration: bool) -> Result<Vec<u8>> {
         return Err(fail("Unexpected WebAuthn RP ID"));
     }
     let mut challenge = [0u8; 32];
-    OsRng
-        .try_fill_bytes(&mut challenge)
-        .map_err(|_| fail("Cannot generate WebAuthn challenge"))?;
+    getrandom::fill(&mut challenge).map_err(|_| fail("Cannot generate WebAuthn challenge"))?;
     serde_json::to_vec(&serde_json::json!({
         "type": if registration { "webauthn.create" } else { "webauthn.get" },
         "challenge": Base64UrlUnpadded::encode_string(&challenge),

@@ -7,7 +7,6 @@ use luksbox_core::{Argon2idParams, Header, SlotKind, header::HEADER_SIZE};
 use luksbox_fido2::HidAuthenticator as NativeAuthenticator;
 use luksbox_fido2::{Fido2Authenticator, HmacSecretRequest, RP_ID};
 use luksbox_format::{Container, UnlockMaterial};
-use rand_core::{OsRng, RngCore};
 use std::{io::Read, path::Path};
 
 pub(crate) fn authenticator(hello: bool) -> Result<NativeAuthenticator> {
@@ -37,12 +36,9 @@ pub(crate) fn enroll(
     );
     let mut user = [0u8; 32];
     let mut salt = [0u8; 32];
-    OsRng
-        .try_fill_bytes(&mut user)
+    getrandom::fill(&mut user)
         .map_err(|_| anyhow::anyhow!("Cannot generate credential user handle"))?;
-    OsRng
-        .try_fill_bytes(&mut salt)
-        .map_err(|_| anyhow::anyhow!("Cannot generate Passkey salt"))?;
+    getrandom::fill(&mut salt).map_err(|_| anyhow::anyhow!("Cannot generate Passkey salt"))?;
     let credential = auth
         .enroll(RP_ID, &user, pin)
         .context("Passkey registration failed")?

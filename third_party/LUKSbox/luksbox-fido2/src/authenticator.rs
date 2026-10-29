@@ -1,0 +1,381 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Penthertz <https://penthertz.com> (https://x.com/PentHertz)
+
+use crate::error::Error;
+
+/// Default Relying-Party ID stamped into every luksbox credential. Stable
+/// across versions so re-enrollment isn't needed on upgrade.
+pub const RP_ID: &str = "luksbox.local";
+
+/// The W3C WebAuthn Level 3 PRF to CTAP2 hmac-secret salt derivation:
+/// `SHA-256("WebAuthn PRF" ‖ 0x00 ‖ salt)`.
+///
+/// This is the exact byte sequence the authenticator must HMAC for a V4
+/// (cross-platform) luksbox keyslot, and it is the single source of
+/// truth shared by every backend:
+///
+/// - **libfido2** (Linux/macOS, `hid.rs`): applies this transform
+///   *locally* before handing the result to the device, because
+///   libfido2 forwards salts to the device verbatim.
+/// - **webauthn.dll** (Windows, `webauthn.rs`): does NOT call this; the
+///   Windows WebAuthn API applies exactly this derivation *internally*
+///   to any salt on the hmac-secret path (empirically confirmed with
+///   the `xplatform_hmac_probe` example: passing the raw salt on Windows
+///   reproduces this function's output computed on Linux). So the
+///   Windows backend forwards the RAW salt and lets the OS apply `T`.
+/// - **MockAuthenticator**: applies this transform when
+///   `prehash_salt = true` so unit tests model the real converged wire
+///   behaviour.
+///
+/// Why this precise construction: Microsoft's webauthn.dll is not a salt
+/// passthrough and does not do a plain `SHA-256(salt)`. luksbox ≤ v0.3.0
+/// assumed one of those two; both were wrong, which is what made FIDO2
+/// vaults platform-locked. The only convention that round-trips through
+/// webauthn.dll is this PRF-prefixed one, so V4 adopts it on every
+/// platform.
+///
+/// The salt is a public per-vault value (it lives in the slot header),
+/// so neither the input nor the output is secret; no zeroization needed.
+pub fn webauthn_prf_salt(salt: &[u8; 32]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(b"WebAuthn PRF");
+    h.update([0x00]);
+    h.update(salt);
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&h.finalize());
+    out
+}
+
+#[derive(Debug, Clone)]
+pub struct Credential {
+    pub id: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
+pub struct EnrollResult {
+    pub credential: Credential,
+}
+
+/// 32-byte FIDO2 hmac-secret output.
+///
+/// Round 12 fix R12-19: newtype with `Zeroize + ZeroizeOnDrop` so
+/// the bytes are wiped when the wrapper drops, instead of lingering
+/// on the stack between authenticator return and consumer use
+/// (callers often pass `&hmac.0` into `DeniableCredential::*` /
+/// `derive_kek_with_fido2`; the intermediate stack copies are now
+/// covered by Drop).
+///
+/// `Deref` to `[u8; 32]` keeps the existing call sites compiling
+/// (`&hmac` continues to work where a `&[u8;32]` was previously
+/// passed thanks to deref coercion). `From<[u8;32]>` + `into_inner`
+/// cover the construction sites in the libfido2 / webauthn / mock
+/// backends.
+#[derive(Clone, zeroize::Zeroize, zeroize::ZeroizeOnDrop)]
+pub struct HmacSecret(pub [u8; 32]);
+
+impl PartialEq for HmacSecret {
+    fn eq(&self, other: &Self) -> bool {
+        // Constant-time comparison so a hostile-input equality check
+        // (e.g. asserting "this device returned the expected hmac
+        // for a known salt") does not leak via timing. The hmac
+        // bytes are 32 bytes, fixed length; ConstantTimeEq returns
+        // Choice -> into() bool.
+        use subtle::ConstantTimeEq as _;
+        self.0.ct_eq(&other.0).into()
+    }
+}
+
+impl Eq for HmacSecret {}
+
+impl HmacSecret {
+    /// Consume the wrapper and return the raw bytes. The returned
+    /// `[u8; 32]` is `Copy` and not auto-zeroized; consumers should
+    /// wrap it back into a `Zeroizing` if they hold it for long.
+    pub fn into_inner(self) -> [u8; 32] {
+        // `self.0` is moved out and `self` Drops zeroing whatever
+        // remained, but we have already copied; document this so the
+        // caller is aware.
+        self.0
+    }
+}
+
+impl std::fmt::Debug for HmacSecret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Never print the bytes themselves.
+        f.debug_tuple("HmacSecret").field(&"<redacted>").finish()
+    }
+}
+
+impl From<[u8; 32]> for HmacSecret {
+    fn from(b: [u8; 32]) -> Self {
+        Self(b)
+    }
+}
+
+impl std::ops::Deref for HmacSecret {
+    type Target = [u8; 32];
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl AsRef<[u8]> for HmacSecret {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl AsRef<[u8; 32]> for HmacSecret {
+    fn as_ref(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+/// One candidate credential for a batched hmac-secret assertion. Each
+/// entry pairs a keyslot's stored credential id with that same slot's
+/// 32-byte hmac salt and declared salt convention. See
+/// [`Fido2Authenticator::hmac_secret_multi`].
+#[derive(Debug, Clone, Copy)]
+pub struct HmacSecretRequest<'a> {
+    /// Credential id stored in the keyslot.
+    pub cred_id: &'a [u8],
+    /// The hmac-secret salt stored in the same keyslot.
+    pub salt: &'a [u8; 32],
+    /// Salt convention for this credential (see
+    /// [`Fido2Authenticator::hmac_secret`]).
+    pub prehash_salt: bool,
+}
+
+/// All operations require user presence (touch). Operations may also require
+/// a PIN if the authenticator was provisioned with one.
+pub trait Fido2Authenticator {
+    /// Enroll a new credential with the hmac-secret extension. The returned
+    /// credential id is what gets stored in a luksbox keyslot.
+    fn enroll(
+        &mut self,
+        rp_id: &str,
+        user_handle: &[u8],
+        pin: Option<&str>,
+    ) -> Result<EnrollResult, Error>;
+
+    /// Compute hmac-secret(salt) for an existing credential.
+    ///
+    /// `prehash_salt`: selects the on-wire salt convention. When true,
+    /// the authenticator must end up computing
+    /// `HMAC-SHA256(device_secret, T(salt))` where
+    /// `T(salt) = SHA-256("WebAuthn PRF"\0 ‖ salt)` (see
+    /// [`webauthn_prf_salt`]). This is the v0.3.0 cross-platform "V4"
+    /// slot convention. When false, it must compute
+    /// `HMAC-SHA256(device_secret, salt)` (the pre-v0.3.0 V1/V2/V3
+    /// raw-salt convention, Linux/macOS only).
+    ///
+    /// Backend behaviour for `prehash_salt = true`:
+    /// - libfido2 (Linux/macOS): applies `T(salt)` locally via
+    ///   [`webauthn_prf_salt`] and forwards the result, because
+    ///   libfido2 hands the device whatever bytes we give it.
+    /// - webauthn.dll (Windows): forwards the RAW salt. The Windows
+    ///   WebAuthn API applies `T` to it internally, so the device sees
+    ///   the same `T(salt)` as the libfido2 path. (For `false` /
+    ///   V1/V2/V3 slots there is no way to suppress `T`, so those
+    ///   slots cannot be unlocked on Windows.)
+    /// - mock: applies `T(salt)` when true to mirror the converged
+    ///   wire behaviour for tests.
+    fn hmac_secret(
+        &mut self,
+        rp_id: &str,
+        cred_id: &[u8],
+        salt: &[u8; 32],
+        prehash_salt: bool,
+        pin: Option<&str>,
+    ) -> Result<HmacSecret, Error>;
+
+    /// Compute hmac-secret for whichever of `requests` the presented
+    /// authenticator holds, returning the index of the matched request
+    /// plus its 32-byte secret.
+    ///
+    /// This is how a vault with SEVERAL enrolled FIDO2 keyslots (e.g. a
+    /// primary + a backup security key, issue #28) is unlocked: the
+    /// caller lists every slot's (cred_id, salt) and the backend asserts
+    /// against them all, succeeding with whichever credential lives on
+    /// the key the user actually presents.
+    ///
+    /// Backend behaviour:
+    /// - This default implementation attempts each request in order via
+    ///   [`Self::hmac_secret`] and returns the first success. Correct
+    ///   and cheap for libfido2 (Linux/macOS): a CTAP2 device refuses an
+    ///   allow-list credential it does not hold without requiring user
+    ///   presence, so a full pass still costs one touch.
+    /// - webauthn.dll (Windows) overrides this with a single
+    ///   `GetAssertion` whose allow-list carries every credential with
+    ///   its own per-credential salt. Sequential single-credential calls
+    ///   would instead show one modal "this security key doesn't look
+    ///   familiar" dialog per non-matching slot.
+    fn hmac_secret_multi(
+        &mut self,
+        rp_id: &str,
+        requests: &[HmacSecretRequest<'_>],
+        pin: Option<&str>,
+    ) -> Result<(usize, HmacSecret), Error> {
+        let mut last_err: Option<Error> = None;
+        for (idx, req) in requests.iter().enumerate() {
+            match self.hmac_secret(rp_id, req.cred_id, req.salt, req.prehash_salt, pin) {
+                Ok(secret) => return Ok((idx, secret)),
+                // The next credential would spend another PIN retry.
+                Err(e) if e.is_pin_failure() => return Err(e),
+                Err(e) => last_err = Some(e),
+            }
+        }
+        Err(last_err.unwrap_or_else(|| {
+            Error::Other("hmac_secret_multi called with an empty request list".into())
+        }))
+    }
+}
+
+/// Unlock through whichever of `requests` the presented authenticator
+/// holds, for keyslots that combine FIDO2 with another factor (TPM,
+/// ML-KEM). Every credential goes into one assertion, so on Windows the
+/// user sees a single prompt that accepts any enrolled key (issue #28:
+/// one prompt per slot made Windows reject a backup key with "this
+/// security key doesn't look familiar"). The matched request index and
+/// its secret go to `try_open`; when that slot still does not open (a
+/// TPM from another machine, a wrong `.kyber`), its credential is
+/// dropped and the rest asserted again. An assertion error, a PIN
+/// failure included, ends the attempt.
+pub fn open_with_any_credential<A, T>(
+    auth: &mut A,
+    rp_id: &str,
+    requests: &[HmacSecretRequest<'_>],
+    pin: Option<&str>,
+    mut try_open: impl FnMut(usize, &HmacSecret) -> Result<T, String>,
+) -> Result<T, String>
+where
+    A: Fido2Authenticator + ?Sized,
+{
+    let mut remaining: Vec<usize> = (0..requests.len()).collect();
+    let mut last_err: Option<String> = None;
+    while !remaining.is_empty() {
+        let batch: Vec<HmacSecretRequest<'_>> = remaining.iter().map(|&i| requests[i]).collect();
+        match auth.hmac_secret_multi(rp_id, &batch, pin) {
+            Ok((pos, secret)) => {
+                let idx = remaining.remove(pos);
+                match try_open(idx, &secret) {
+                    Ok(v) => return Ok(v),
+                    Err(e) => last_err = Some(e),
+                }
+            }
+            Err(e) => {
+                return Err(match last_err {
+                    Some(prev) => format!("{prev}; FIDO2: {e}"),
+                    None => format!("FIDO2: {e}"),
+                });
+            }
+        }
+    }
+    Err(last_err.unwrap_or_else(|| "no FIDO2 keyslot to try".into()))
+}
+
+#[cfg(test)]
+mod open_with_any_credential_tests {
+    use super::*;
+    use crate::MockAuthenticator;
+
+    fn enrolled(auth: &mut MockAuthenticator, n: usize) -> Vec<Vec<u8>> {
+        (0..n)
+            .map(|_| auth.enroll(RP_ID, b"user", None).unwrap().credential.id)
+            .collect()
+    }
+
+    #[test]
+    fn falls_through_to_the_next_credential_when_a_slot_does_not_open() {
+        let mut auth = MockAuthenticator::new();
+        let creds = enrolled(&mut auth, 3);
+        let salt = [1u8; 32];
+        let reqs: Vec<HmacSecretRequest<'_>> = creds
+            .iter()
+            .map(|c| HmacSecretRequest {
+                cred_id: c,
+                salt: &salt,
+                prehash_salt: true,
+            })
+            .collect();
+        let mut tried = Vec::new();
+        let r = open_with_any_credential(&mut auth, RP_ID, &reqs, Some("1234"), |i, _| {
+            tried.push(i);
+            if i == 1 {
+                Ok("slot 1")
+            } else {
+                Err(format!("slot {i} did not open"))
+            }
+        });
+        assert_eq!(r, Ok("slot 1"));
+        assert_eq!(tried, vec![0, 1]);
+    }
+
+    #[test]
+    fn credentials_not_on_the_key_are_skipped_and_failures_reported() {
+        let mut auth = MockAuthenticator::new();
+        let creds = enrolled(&mut auth, 1);
+        let salt = [2u8; 32];
+        let foreign = vec![9u8; 64];
+        let reqs = [
+            HmacSecretRequest {
+                cred_id: &foreign,
+                salt: &salt,
+                prehash_salt: true,
+            },
+            HmacSecretRequest {
+                cred_id: &creds[0],
+                salt: &salt,
+                prehash_salt: true,
+            },
+        ];
+        let r: Result<(), String> =
+            open_with_any_credential(&mut auth, RP_ID, &reqs, None, |i, _| {
+                Err(format!("slot {i} wrong TPM"))
+            });
+        let e = r.unwrap_err();
+        assert!(e.starts_with("slot 1 wrong TPM; FIDO2: "), "{e}");
+    }
+
+    /// Authenticator that rejects every PIN, counting the attempts.
+    struct WrongPin(usize);
+    impl Fido2Authenticator for WrongPin {
+        fn enroll(&mut self, _: &str, _: &[u8], _: Option<&str>) -> Result<EnrollResult, Error> {
+            unreachable!()
+        }
+        fn hmac_secret(
+            &mut self,
+            _: &str,
+            _: &[u8],
+            _: &[u8; 32],
+            _: bool,
+            _: Option<&str>,
+        ) -> Result<HmacSecret, Error> {
+            self.0 += 1;
+            Err(Error::PinIncorrect)
+        }
+    }
+
+    #[test]
+    fn a_wrong_pin_is_presented_once_not_once_per_slot() {
+        let salt = [3u8; 32];
+        let ids = [vec![1u8; 64], vec![2u8; 64], vec![3u8; 64]];
+        let reqs: Vec<HmacSecretRequest<'_>> = ids
+            .iter()
+            .map(|c| HmacSecretRequest {
+                cred_id: c,
+                salt: &salt,
+                prehash_salt: true,
+            })
+            .collect();
+        let mut auth = WrongPin(0);
+        let r: Result<(), String> =
+            open_with_any_credential(&mut auth, RP_ID, &reqs, Some("0000"), |_, _| Ok(()));
+        assert!(r.unwrap_err().contains("PIN incorrect"));
+        assert_eq!(
+            auth.0, 1,
+            "the wrong PIN reached the authenticator more than once"
+        );
+    }
+}

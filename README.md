@@ -69,7 +69,7 @@ BSD 支援 SSH 連線資料與連線測試，目前不提供 BSD 套件檢查。
 4. 透過「管理解鎖金鑰」新增備援密碼或 **Passkey**。密碼與 Passkey 合計最多 8 個槽，可分別解鎖同一容器。
 5. 按「匯出加密備份…」建立新的 `.lbx` 備份檔。請保留可取回的備援密碼，並實際驗證備份可解鎖；遺失所有密碼將無法復原。
 
-使用 LUKSbox v0.6.1（固定 commit `69448f708f1328d672deb595e359579d630cb0b0`）的 core／format／VFS／FIDO2 函式庫，不掛載磁碟、不需要 WinFsp 或 TPM 整合。加密為 AES-256-GCM-SIV；密碼採 Argon2id（256 MiB、3 次、4 lanes）。這不是 LUKS2 磁碟格式。
+使用 LUKSbox v0.6.1（固定 commit `69448f708f1328d672deb595e359579d630cb0b0`）的 core／format／VFS 函式庫；FIDO2 使用有修改紀錄的本機相容性副本，將 P-256 等依賴更新至新版。不掛載磁碟、不需要 WinFsp 或 TPM 整合。加密為 AES-256-GCM-SIV；密碼採 Argon2id（256 MiB、3 次、4 lanes）。這不是 LUKS2 磁碟格式。版本與仍未修補的 RSA 公告見 [依賴更新與安全公告](docs/dependency-updates.md)。
 
 尚未提供原地改密碼、主金鑰輪替、TPM 或自動閒置鎖定。備份或舊副本不會隨目前容器的變更自動失效。加密只保護未解鎖的檔案，無法保護已遭入侵的電腦。
 

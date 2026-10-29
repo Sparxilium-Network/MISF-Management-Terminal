@@ -10,9 +10,9 @@ capture = ["dep:image"]
 misf-core = { path = "../core" }
 eframe = { version = "0.37.0", default-features = false, features = ["glow", "default_fonts", "system_fonts", "clipboard", "x11", "wayland"] }
 rfd = "0.17.2"
-serde_json = "1"
-chrono = "0.4"
-zeroize = "1"
-tempfile = "3"
-tokio = { version = "1", features = ["rt-multi-thread"] }
-image = { version = "0.25", default-features = false, features = ["png"], optional = true }
+serde_json = "1.0.154"
+chrono = "0.4.45"
+zeroize = "1.9.1"
+tempfile = "3.27.0"
+tokio = { version = "1.54.1", features = ["rt-multi-thread"] }
+image = { version = "0.25.10", default-features = false, features = ["png"], optional = true }

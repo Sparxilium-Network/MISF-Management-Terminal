@@ -4,25 +4,25 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-anyhow = "1"
-chrono = { version = "0.4", features = ["serde"] }
-fs2 = "0.4"
+anyhow = "1.0.104"
+chrono = { version = "0.4.45", features = ["serde"] }
+fs2 = "0.4.3"
 russh = { version = "0.65.0", default-features = false, features = ["ring", "rsa"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-tempfile = "3"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "io-util", "net"] }
-uuid = { version = "1", features = ["v4"] }
-zeroize = "1"
-rand_core = { version = "0.6", features = ["getrandom"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tempfile = "3.27.0"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "time", "io-util", "net"] }
+uuid = { version = "1.29.0", features = ["v4"] }
+zeroize = "1.9.1"
+getrandom = "0.4.3"
 luksbox-fido2 = { git = "https://github.com/PentHertz/LUKSbox.git", rev = "69448f708f1328d672deb595e359579d630cb0b0", features = ["hardware"] }
 luksbox-core = { git = "https://github.com/PentHertz/LUKSbox.git", rev = "69448f708f1328d672deb595e359579d630cb0b0" }
 luksbox-format = { git = "https://github.com/PentHertz/LUKSbox.git", rev = "69448f708f1328d672deb595e359579d630cb0b0" }
 luksbox-vfs = { git = "https://github.com/PentHertz/LUKSbox.git", rev = "69448f708f1328d672deb595e359579d630cb0b0" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-base64ct = { version = "1", features = ["alloc"] }
-windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Networking_WindowsWebServices", "Win32_UI_WindowsAndMessaging"] }
+base64ct = { version = "1.8.3", features = ["alloc"] }
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Networking_WindowsWebServices", "Win32_UI_WindowsAndMessaging"] }
 
 [dev-dependencies]
-rand = "0.10"
+rand = "0.10.3"

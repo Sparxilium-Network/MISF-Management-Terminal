@@ -47,4 +47,4 @@ UI 經工作佇列交給背景執行緒與 Tokio runtime 執行 SSH／磁碟操�
 
 測試 SSH 伺服器在 loopback 驗證密碼／私鑰、指紋變更阻擋、PTY、拆包 sudo 提示、APT 失敗、BSD 及儲存流程。原生 UI 以開發用擷取功能驗證排版與中文顯示。
 
-目前只保存最近一次檢查，不支援任意命令、互動終端、排程或 Ansible。Windows 已建置驗證，其他作業系統需在對應環境建置及驗證。Passkey 已通過模擬驗證器測試，仍需實體裝置驗證。尚未支援主金鑰輪替、TPM 或閒置自動鎖定；詳細取捨見 [LUKSbox 整合評估](luksbox-evaluation.md)。
+目前只保存最近一次檢查，不支援任意命令、互動終端、排程或 Ansible。Windows 已建置驗證，其他作業系統需在對應環境建置及驗證。Passkey 已通過模擬驗證器測試，仍需實體裝置驗證。尚未支援主金鑰輪替、TPM 或閒置自動鎖定；詳細取捨見 [LUKSbox 整合評估](luksbox-evaluation.md)。FIDO2 依賴的本機相容性修改、版本與仍存在的 RSA 公告見 [依賴更新](dependency-updates.md)。
