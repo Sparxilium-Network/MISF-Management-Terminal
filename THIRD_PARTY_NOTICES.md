@@ -1,6 +1,6 @@
 # Third-party notices
 
-MISF embeds the `luksbox-core`, `luksbox-format`, `luksbox-pq`, and
+MISF embeds the `luksbox-core`, `luksbox-format`, `luksbox-pq`, `luksbox-fido2`, and
 `luksbox-vfs` Rust libraries from [PentHertz/LUKSbox](https://github.com/PentHertz/LUKSbox).
 
 - Upstream version: 0.6.1
@@ -12,7 +12,8 @@ MISF embeds the `luksbox-core`, `luksbox-format`, `luksbox-pq`, and
 
 No upstream source modifications are included. MISF uses its own GUI and
 storage adapter. This distribution does not include LUKSbox's mount drivers,
-WinFsp, libfido2, TPM adapters, or the upstream GUI. The integration is not an
+WinFsp, TPM adapters, or the upstream GUI. Windows uses the system WebAuthn API;
+Linux dynamically links to the system's libfido2 (not bundled). The integration is not an
 endorsement by Penthertz. LUKSbox and Penthertz names retain their upstream
 trademark ownership.
 

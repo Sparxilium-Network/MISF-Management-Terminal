@@ -30,6 +30,10 @@ impl VaultFile {
         check_environment()?;
         let container = Container::open(path, None, UnlockMaterial::Passphrase(passphrase))
             .context("無法解鎖 LUKSbox；密碼錯誤、檔案損壞或容器正被另一個程序使用")?;
+        Self::from_container(container)
+    }
+
+    fn from_container(container: Container) -> Result<Self> {
         let vfs = Vfs::open(container).context("無法讀取 LUKSbox 目錄")?;
         let mut vault = Self {
             vfs,
@@ -123,6 +127,41 @@ impl VaultFile {
         }
         result
     }
+
+    fn revoke_key(&mut self, index: usize) -> Result<()> {
+        ensure!(!self.poisoned, "先前儲存失敗；請鎖定後重新解鎖");
+        let slots = self.slots();
+        ensure!(
+            slots.iter().any(|slot| slot.index == index),
+            "指定金鑰槽不存在"
+        );
+        ensure!(
+            slots.len() > 1,
+            "禁止撤銷最後一把解鎖金鑰；請先新增並驗證備援金鑰"
+        );
+        let result = (|| {
+            self.vfs.container_mut().revoke_slot(index)?;
+            self.vfs.container_mut().persist_header()?;
+            Ok(())
+        })();
+        if result.is_err() {
+            self.poisoned = true;
+        }
+        result
+    }
+
+    fn add_passkey(&mut self, hello: bool, pin: Option<&str>) -> Result<usize> {
+        ensure!(!self.poisoned, "先前儲存失敗；請鎖定後重新解鎖");
+        ensure!(self.slots().len() < 8, "所有金鑰槽均已使用");
+        check_environment()?;
+        let mut auth = crate::passkey::authenticator(hello)?;
+        let index = crate::passkey::enroll(self.vfs.container_mut(), &mut auth, pin)?;
+        if let Err(error) = self.vfs.container_mut().persist_header() {
+            self.poisoned = true;
+            return Err(error.into());
+        }
+        Ok(index)
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -150,6 +189,9 @@ pub struct StorageSession {
 }
 
 impl StorageSession {
+    pub(crate) fn host_for_audit(&self, id: &str) -> Result<crate::model::Host> {
+        self.store.as_ref().context("Vault locked")?.host(id)
+    }
     pub fn new(plain_path: PathBuf) -> Self {
         let encrypted = encrypted_profile_exists(&plain_path);
         let store = (!encrypted).then(|| Store::new(plain_path.clone()));
@@ -231,6 +273,42 @@ impl StorageSession {
                 progress("正在新增 LUKSbox 解鎖密碼…");
                 let index =
                     self.with_vault(|vault| vault.add_key(&password, Argon2idParams::INTERACTIVE))?;
+                Ok(json!({"slot":index,"storage":self.status()?}))
+            }
+            "vault_add_passkey" => {
+                let pin = take_pin(&mut request)?;
+                require_hardware_pin(&pin)?;
+                let hello = request["hello"].as_bool().unwrap_or(false);
+                progress("請在系統視窗或安全金鑰上完成 Passkey 註冊與兩次驗證…");
+                let index = self.with_vault(|vault| {
+                    vault.add_passkey(hello, pin.as_deref().map(String::as_str))
+                })?;
+                Ok(json!({"slot":index,"storage":self.status()?}))
+            }
+            "vault_unlock_passkey" => {
+                ensure!(self.encrypted && self.store.is_none(), "請先鎖定 LUKSbox");
+                check_environment()?;
+                let pin = take_pin(&mut request)?;
+                require_hardware_pin(&pin)?;
+                let mut auth =
+                    crate::passkey::authenticator(request["hello"].as_bool().unwrap_or(false))?;
+                progress("請在系統視窗或安全金鑰上完成 Passkey 驗證…");
+                let path = self.plain_path.with_extension("lbx");
+                let vault = VaultFile::from_container(crate::passkey::open(
+                    &path,
+                    &mut auth,
+                    pin.as_deref().map(String::as_str),
+                )?)?;
+                self.store = Some(encrypted_store(path, vault));
+                self.warning.clear();
+                Ok(serde_json::to_value(self.status()?)?)
+            }
+            "vault_revoke_key" => {
+                let index = request["slot"]
+                    .as_u64()
+                    .and_then(|n| usize::try_from(n).ok())
+                    .context("缺少有效的金鑰槽編號")?;
+                self.with_vault(|vault| vault.revoke_key(index))?;
                 Ok(json!({"slot":index,"storage":self.status()?}))
             }
             "vault_backup" => {
@@ -421,6 +499,26 @@ fn take_secret(request: &mut Value) -> Result<Zeroizing<Vec<u8>>> {
         Value::String(value) => Ok(Zeroizing::new(value.into_bytes())),
         _ => anyhow::bail!("缺少解鎖密碼"),
     }
+}
+
+fn take_pin(request: &mut Value) -> Result<Option<Zeroizing<String>>> {
+    match request["pin"].take() {
+        Value::Null => Ok(None),
+        Value::String(pin) if pin.is_empty() => Ok(None),
+        Value::String(pin) => Ok(Some(Zeroizing::new(pin))),
+        _ => anyhow::bail!("Invalid authenticator PIN"),
+    }
+}
+
+fn require_hardware_pin(pin: &Option<Zeroizing<String>>) -> Result<()> {
+    #[cfg(not(target_os = "windows"))]
+    ensure!(
+        pin.is_some(),
+        "Linux FIDO2 operations require the security key PIN"
+    );
+    #[cfg(target_os = "windows")]
+    let _ = pin; // The Windows WebAuthn dialog always requires user verification.
+    Ok(())
 }
 
 fn check_environment() -> Result<()> {
@@ -660,6 +758,105 @@ mod tests {
     fn passphrase_policy_does_not_accept_short_pin() {
         assert!(validate_passphrase(b"123456").is_err());
         assert!(validate_passphrase(FIRST).is_ok());
+    }
+
+    #[tokio::test]
+    async fn revoke_password_survives_restart_and_last_slot_cannot_be_removed() {
+        let (dir, mut session) = fixture();
+        session.enable(FIRST, params()).unwrap();
+        assert!(session.with_vault(|vault| vault.revoke_key(0)).is_err());
+        session
+            .with_vault(|vault| vault.add_key(SECOND, params()))
+            .unwrap();
+        let backup = dir.path().join("before-revoke.lbx");
+        session.backup(&backup).unwrap();
+        assert!(
+            session
+                .handle(json!({"action":"vault_revoke_key","slot":99}), &|_| {})
+                .await
+                .is_err()
+        );
+        session
+            .handle(json!({"action":"vault_revoke_key","slot":0}), &|_| {})
+            .await
+            .unwrap();
+        assert_eq!(session.status().unwrap().slots[0].index, 1);
+        assert!(session.with_vault(|vault| vault.revoke_key(1)).is_err());
+        drop(session);
+        let path = dir.path().join("hosts.lbx");
+        assert!(VaultFile::open(&path, FIRST).is_err());
+        assert_eq!(
+            VaultFile::open(&path, SECOND)
+                .unwrap()
+                .read()
+                .unwrap()
+                .hosts
+                .len(),
+            1
+        );
+        // An exported old copy remains usable; slot revocation is not key rotation.
+        assert!(VaultFile::open(&backup, FIRST).is_ok());
+    }
+
+    #[test]
+    fn real_passkey_protocol_with_mock_devices_supports_backup_unlock_and_revocation() {
+        use luksbox_fido2::MockAuthenticator;
+        let (dir, mut session) = fixture();
+        session.enable(FIRST, params()).unwrap();
+        let mut primary = MockAuthenticator::new();
+        let mut backup = MockAuthenticator::new();
+        for auth in [&mut primary, &mut backup] {
+            session
+                .with_vault(|vault| {
+                    crate::passkey::enroll(vault.vfs.container_mut(), auth, None)?;
+                    vault.vfs.container_mut().persist_header()?;
+                    Ok(())
+                })
+                .unwrap();
+        }
+        drop(session);
+        let path = dir.path().join("hosts.lbx");
+        for auth in [&mut primary, &mut backup] {
+            let mut vault =
+                VaultFile::from_container(crate::passkey::open(&path, auth, None).unwrap())
+                    .unwrap();
+            assert_eq!(vault.read().unwrap().hosts[0].id, "sample");
+        }
+        assert!(crate::passkey::open(&path, &mut MockAuthenticator::new(), None).is_err());
+        {
+            let mut vault =
+                VaultFile::from_container(crate::passkey::open(&path, &mut backup, None).unwrap())
+                    .unwrap();
+            vault.revoke_key(1).unwrap();
+        }
+        assert!(crate::passkey::open(&path, &mut primary, None).is_err());
+        assert!(crate::passkey::open(&path, &mut backup, None).is_ok());
+        assert!(VaultFile::open(&path, FIRST).is_ok());
+    }
+
+    #[test]
+    fn failed_passkey_enrollment_does_not_add_a_slot() {
+        use luksbox_fido2::MockAuthenticator;
+        let (_dir, mut session) = fixture();
+        session.enable(FIRST, params()).unwrap();
+        let mut cancelled = MockAuthenticator::new();
+        cancelled.simulate_no_touch();
+        let mut zero_secret = MockAuthenticator::new();
+        zero_secret.force_hmac_secret([0; 32]);
+        let mut oversized_id = MockAuthenticator::new();
+        oversized_id.force_cred_id_len(4096);
+        for auth in [&mut cancelled, &mut zero_secret, &mut oversized_id] {
+            assert!(
+                session
+                    .with_vault(|vault| crate::passkey::enroll(
+                        vault.vfs.container_mut(),
+                        auth,
+                        None
+                    ))
+                    .is_err()
+            );
+            assert_eq!(session.status().unwrap().slots.len(), 1);
+        }
     }
 
     #[tokio::test]

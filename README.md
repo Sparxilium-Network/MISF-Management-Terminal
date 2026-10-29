@@ -66,12 +66,51 @@ BSD 支援 SSH 連線資料與連線測試，目前不提供 BSD 套件檢查。
 1. 按資料區底部的「啟用 LUKSbox 加密…」，設定至少 12 字元的解鎖密碼。
 2. 程式建立容器、將資料直接從記憶體寫入，再關閉並重新解鎖驗證。原 `hosts.json` 保留；介面持續提示它仍是明文副本。
 3. 啟用後，新讀寫只使用 `hosts.lbx`；`hosts.lbx.enabled` 記錄已選擇加密模式。鎖定、錯誤密碼或容器遺失時不會退回讀取明文 JSON。按「鎖定」後，必須再次解鎖才能操作主機。
-4. 透過「管理解鎖金鑰」新增備援密碼。最多 8 組密碼可分別解鎖同一容器，不會因增加密碼而重新加密所有主機資料。
+4. 透過「管理解鎖金鑰」新增備援密碼或 **Passkey**。密碼與 Passkey 合計最多 8 個槽，可分別解鎖同一容器。
 5. 按「匯出加密備份…」建立新的 `.lbx` 備份檔。請保留可取回的備援密碼，並實際驗證備份可解鎖；遺失所有密碼將無法復原。
 
-使用 LUKSbox v0.6.1（固定 commit `69448f708f1328d672deb595e359579d630cb0b0`）的 core／format／VFS 函式庫，不掛載磁碟、不需要 WinFsp、FIDO2 或 TPM 驅動。加密為 AES-256-GCM-SIV；密碼採 Argon2id（256 MiB、3 次、4 lanes）。這不是 LUKS2 磁碟格式。
+使用 LUKSbox v0.6.1（固定 commit `69448f708f1328d672deb595e359579d630cb0b0`）的 core／format／VFS／FIDO2 函式庫，不掛載磁碟、不需要 WinFsp 或 TPM 整合。加密為 AES-256-GCM-SIV；密碼採 Argon2id（256 MiB、3 次、4 lanes）。這不是 LUKS2 磁碟格式。
 
-此版僅支援新增密碼 keyslot，尚未提供撤銷、改密碼、主金鑰輪替、FIDO2／TPM／passkey 或自動閒置鎖定。備份或舊副本不會隨目前容器的變更自動失效。加密只保護未解鎖的檔案，無法保護已遭入侵的電腦。
+尚未提供原地改密碼、主金鑰輪替、TPM 或自動閒置鎖定。備份或舊副本不會隨目前容器的變更自動失效。加密只保護未解鎖的檔案，無法保護已遭入侵的電腦。
+
+### Passkey 與指定金鑰撤銷
+
+先以密碼解鎖主機庫，再開啟「管理解鎖金鑰」→「新增 Passkey…」。Windows 可選 **Windows Hello** 或 **FIDO2 安全金鑰**，由原生 WebAuthn 視窗處理 PIN／指紋／臉部驗證。裝置必須支援 **PRF／hmac-secret**；依上游要求，Hello 需要 Windows 11 22H2 以上及相容設定，實際能力以註冊與驗證結果為準。註冊後會要求兩次驗證，取得相同的 PRF 結果後才保存 `Fido2HmacSecret` 槽。取消或驗證失敗不新增槽，但驗證器端可能已建立憑證。
+
+下次啟動可在解鎖提示選「使用 Passkey 解鎖…」。憑證 ID 與公開 salt 儲存在 LUKSbox 槽內；PRF 結果參與包裝／解開容器主金鑰，不保存驗證器私鑰或 PIN。沿用上游 `luksbox.local` RP ID 與跨平台 salt 慣例，保留上游工具相容性。
+
+Linux 使用系統 **libfido2** 與實體 CTAP2 安全金鑰，MISF 要求提供該金鑰的 PIN，僅供當次操作，不保存。Linux 建置另需 `clang libclang-dev libfido2-dev`；執行套件需對應的 libfido2 runtime 與 hidraw 存取權限（Ubuntu 通常為 `libfido2-1`；可能需要發行版的裝置規則）。不把 Windows Hello 的憑證宣稱為跨裝置或雲端同步 Passkey。
+
+「管理解鎖金鑰」按槽號列出密碼／Passkey，每個槽有「撤銷」。確認已另行驗證備援金鑰後才能提交，核心也禁止撤銷最後一個槽及不存在的槽。撤銷立即寫回目前容器；相同密碼若也登錄於其他槽，仍可經其他槽解鎖。此操作不刪除 Windows Hello／安全金鑰端的憑證，不關閉已解鎖工作階段，也不使舊備份失效。槽變更後應重新建立備份，並記住各槽對應的金鑰。
+
+實作來源：[LUKSbox FIDO2 說明](https://luksbox.penthertz.com/docs/keyslots/fido2)、[Microsoft WebAuthn API](https://learn.microsoft.com/en-us/windows/win32/api/webauthn/)。自動測試使用模擬驗證器驗證真實容器的新增／解鎖／撤銷流程，未代替實體 Windows Hello／USB 裝置驗證。
+
+## 未加密操作日誌
+
+GUI 與 JSON CLI 都在資料目錄的 `logs/actions-YYYY-MM-DD.jsonl` 追加操作紀錄，依 **UTC 日期**分檔，每行一個 JSON。記錄開關設定、切換語言／外觀、主機選擇／搜尋／表單操作、匯入私鑰、確認／取消、SSH 探測／連線、APT 檢查、主機保存／刪除，以及加密主機庫／金鑰／備份操作。背景操作分別記錄開始與成功／失敗／阻擋；正常結束也有紀錄。日誌不進入加密容器。
+
+允許欄位只有時間、程序 PID、固定動作代碼、結果、相關主機的**顯示名稱**與金鑰槽號；不保存 IP、埠、帳號、密碼、私鑰、指紋、Passkey 憑證 ID、PIN、檔案路徑、搜尋字串、表單值、遠端輸出或原始錯誤。若顯示名稱包含該主機已知的位址／憑證片段，會遮蔽並移除控制字元；請勿在顯示名稱輸入其他敏感資料。表單變更只記錄動作，不記錄輸入內容。日誌寫入失敗會顯示錯誤；背景操作在寫入開始紀錄失敗時不執行。若操作已完成但結果紀錄寫入失敗，會明確提示先確認狀態再重試。
+
+日誌為明文且沒有防竄改保證，目前不自動清理，需自行管理大小與保存期限。
+
+## 隔離測試目錄
+
+GUI 與 JSON CLI 都支援以下參數（也支援 `--debug.dir <目錄>` 或 `--debug.dir= <目錄>`）：
+
+```powershell
+.\misf.exe --debug.dir="C:\temp\misf-test"
+# 開發環境
+cargo run --locked -p misf -- --debug.dir="C:\temp\misf-test"
+.\run.ps1 --debug.dir="C:\temp\misf-test"
+```
+
+```sh
+./misf --debug.dir=/tmp/misf-test
+```
+
+指定後，主機 JSON／LUKSbox、`ui-settings.json` 與 `logs/` 全部使用該目錄，優先於 `MISF_DATA_DIR`；不讀取或遷移預設使用者主機庫，指定失敗直接報錯，禁止回退正式資料。請使用空目錄或測試資料。標題與介面持續顯示 DEBUG；禁止指定預設正式資料目錄。
+
+此模式只允許連線至明確的 loopback IP（`127.0.0.1`／`::1` 等），阻擋外部 SSH 和所有真實 Passkey 註冊／驗證；加密備份也只能匯出至測試目錄內。可測試一般 UI、設定、明文／密碼加密主機庫與金鑰槽撤銷；Passkey 核心流程由模擬驗證器測試，不自動操作使用者的 Hello 或安全金鑰。
 
 原 `hosts.json`、舊 `.msif-management` 目錄、外部備份與磁碟殘留不會自動清除；請在驗證容器和備份後自行處理。啟用後請勿再用不支援 LUKSbox 的舊版操作同一資料目錄，以免重新更新明文副本。看到 `.lbx.header-bak`／`.lbx.meta-bak` 時，這些是上游的加密復原鏡像，請與容器妥善保存。主機資料序列化內容上限 64 MiB。
 
@@ -100,4 +139,4 @@ LUKSbox 測試使用暫存資料，涵蓋明文保留、鎖定後拒絕操作、
 - CLI 的加密工作階段只存在同一程序內；可透過 stdin 傳入 JSON 請求陣列，依序執行解鎖、操作與鎖定。不要把解鎖密碼放進命令列參數。
 - `docs/architecture.md`：目前實作架構。
 
-開發用畫面擷取可使用 `cargo build -p misf --features capture`，以 `MISF_SCREENSHOT_TO` 指定 PNG 路徑；`MISF_OPEN_EDITOR=1` 可擷取新增主機對話框。正式 release 預設不啟用此功能。
+開發用畫面擷取可使用 `cargo build -p misf --features capture`，以 `MISF_SCREENSHOT_TO` 指定 PNG 路徑，並以 `--debug.dir` 指定測試資料。`MISF_OPEN_EDITOR=1`／`MISF_OPEN_SETTINGS=1`／`MISF_OPEN_PASSKEY=1` 可預先開啟對應畫面；旗標只有明確設為 `1` 才啟用。debug 模式的 Passkey 按鈕停用，擷取不操作硬體。正式 release 預設不啟用擷取功能。

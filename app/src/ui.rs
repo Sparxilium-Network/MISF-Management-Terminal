@@ -7,7 +7,12 @@ use crate::{
 use chrono::{DateTime, Local};
 use eframe::egui::{self, Color32, RichText, Stroke};
 use misf_core::model::{CheckResult, Host};
+use misf_core::{
+    audit::{Action, AuditLog, Outcome},
+    runtime::RuntimePaths,
+};
 use serde_json::{Value, json};
+use std::path::PathBuf;
 use zeroize::Zeroize;
 
 const NAVY: Color32 = Color32::from_rgb(19, 36, 59);
@@ -33,12 +38,16 @@ enum VaultMode {
     Unlock,
     Manage,
     AddKey,
+    Passkey,
+    Revoke(usize),
 }
 struct VaultDialog {
     mode: VaultMode,
     password: String,
     confirmation: String,
     error: String,
+    hello: bool,
+    acknowledged: bool,
 }
 impl Drop for VaultDialog {
     fn drop(&mut self) {
@@ -48,6 +57,9 @@ impl Drop for VaultDialog {
 }
 
 pub struct ManagementApp {
+    audit: AuditLog,
+    settings_path: PathBuf,
+    debug: bool,
     preferences: Preferences,
     settings_open: bool,
     worker: Worker,
@@ -67,7 +79,7 @@ pub struct ManagementApp {
     encrypted: bool,
     locked: bool,
     plaintext_exists: bool,
-    slots: Vec<usize>,
+    slots: Vec<(usize, String)>,
     storage_warning: String,
     vault_dialog: Option<VaultDialog>,
     #[cfg(feature = "capture")]
@@ -77,13 +89,17 @@ pub struct ManagementApp {
 }
 
 impl ManagementApp {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        let loaded = Preferences::load();
+    pub fn new(cc: &eframe::CreationContext<'_>, paths: RuntimePaths, audit: AuditLog) -> Self {
+        let settings_path = paths.store.with_file_name("ui-settings.json");
+        let loaded = Preferences::load(&settings_path);
         let preferences = loaded.clone().unwrap_or_default();
         theme::install(&cc.egui_ctx);
         preferences.appearance.apply(&cc.egui_ctx);
-        let worker = Worker::new(cc.egui_ctx.clone());
+        let worker = Worker::new(cc.egui_ctx.clone(), paths.clone(), audit.clone());
         let mut app = Self {
+            audit,
+            settings_path,
+            debug: paths.debug,
             preferences,
             settings_open: false,
             worker,
@@ -115,16 +131,21 @@ impl ManagementApp {
         };
         app.send(json!({"action":"storage_status"}));
         #[cfg(feature = "capture")]
-        if std::env::var_os("MISF_OPEN_EDITOR").is_some() {
+        if std::env::var("MISF_OPEN_EDITOR").as_deref() == Ok("1") {
             app.open_editor(None);
         }
         #[cfg(feature = "capture")]
-        if std::env::var_os("MISF_OPEN_VAULT_SETUP").is_some() {
+        if std::env::var("MISF_OPEN_VAULT_SETUP").as_deref() == Ok("1") {
             app.open_vault_dialog(VaultMode::Create);
         }
         #[cfg(feature = "capture")]
-        if std::env::var_os("MISF_OPEN_SETTINGS").is_some() {
+        if std::env::var("MISF_OPEN_PASSKEY").as_deref() == Ok("1") {
+            app.open_vault_dialog(VaultMode::Passkey);
+        }
+        #[cfg(feature = "capture")]
+        if std::env::var("MISF_OPEN_SETTINGS").as_deref() == Ok("1") {
             app.settings_open = true;
+            app.log(Action::SettingsOpen, Outcome::Succeeded);
         }
         app
     }
@@ -152,6 +173,9 @@ impl ManagementApp {
                 close = ui.button(t.get("common.close")).clicked();
             });
         self.settings_open = open && !close;
+        if !self.settings_open {
+            self.log(Action::SettingsClose, Outcome::Succeeded);
+        }
     }
 
     fn preferences_form(&mut self, ui: &mut egui::Ui) {
@@ -192,7 +216,19 @@ impl ManagementApp {
         if self.preferences != before {
             self.preferences.appearance.apply(ui.ctx());
             let t = Translator(self.preferences.language);
-            match self.preferences.save() {
+            let saved = self.preferences.save(&self.settings_path);
+            let outcome = if saved.is_ok() {
+                Outcome::Succeeded
+            } else {
+                Outcome::Failed
+            };
+            if self.preferences.language != before.language {
+                self.log(Action::LanguageChange, outcome);
+            }
+            if self.preferences.appearance != before.appearance {
+                self.log(Action::AppearanceChange, outcome);
+            }
+            match saved {
                 Ok(()) => self.status = t.get("settings.saved").into(),
                 Err(error) => {
                     self.error = Some(t.format("settings.save_error", &[("error", error)]))
@@ -204,6 +240,30 @@ impl ManagementApp {
 
     fn current(&self) -> Option<&Host> {
         self.hosts.iter().find(|host| host.id == self.selected)
+    }
+    fn log(&mut self, action: Action, outcome: Outcome) {
+        self.log_at_slot(action, outcome, None);
+    }
+    fn log_at_slot(&mut self, action: Action, outcome: Outcome, slot: Option<usize>) {
+        let host = if matches!(
+            action,
+            Action::HostSelect
+                | Action::EditorOpen
+                | Action::DeletePrompt
+                | Action::DeleteCancel
+                | Action::TrustCancel
+        ) {
+            self.current()
+        } else {
+            None
+        };
+        if self.audit.record(action, outcome, host, slot).is_err() {
+            self.error = Some(
+                Translator(self.preferences.language)
+                    .get("audit.failed")
+                    .into(),
+            );
+        }
     }
     fn send(&mut self, request: Value) {
         let t = Translator(self.preferences.language);
@@ -251,7 +311,7 @@ impl ManagementApp {
                     self.send(json!({"action":"list"}));
                 }
             }
-            "vault_create" | "vault_unlock" => {
+            "vault_create" | "vault_unlock" | "vault_unlock_passkey" => {
                 self.apply_storage(&data);
                 self.vault_dialog = None;
                 self.send(json!({"action":"list"}));
@@ -262,10 +322,16 @@ impl ManagementApp {
                 self.vault_dialog = None;
                 self.status = t.get("status.locked").into();
             }
-            "vault_add_key" => {
+            "vault_add_key" | "vault_add_passkey" => {
                 self.apply_storage(&data["storage"]);
                 self.open_vault_dialog(VaultMode::Manage);
                 self.status = t.format("status.slot_added", &[("slot", data["slot"].to_string())]);
+            }
+            "vault_revoke_key" => {
+                self.apply_storage(&data["storage"]);
+                self.open_vault_dialog(VaultMode::Manage);
+                self.status =
+                    t.format("status.slot_revoked", &[("slot", data["slot"].to_string())]);
             }
             "vault_backup" => {
                 self.status = t.format(
@@ -372,6 +438,7 @@ impl ManagementApp {
         if self.locked {
             return;
         }
+        self.log(Action::EditorOpen, Outcome::Succeeded);
         let host = host.unwrap_or_else(|| Host {
             port: 22,
             os: "Linux".into(),
@@ -406,13 +473,18 @@ impl ManagementApp {
         ui.add_space(23.0);
         ui.scope(|ui| {
             ui.visuals_mut().override_text_color = Some(palette.ink);
-            ui.add(
-                egui::TextEdit::singleline(&mut self.search)
-                    .text_color(palette.ink)
-                    .background_color(palette.surface)
-                    .hint_text(RichText::new(t.get("host.search")).color(palette.muted))
-                    .desired_width(f32::INFINITY),
-            );
+            if ui
+                .add(
+                    egui::TextEdit::singleline(&mut self.search)
+                        .text_color(palette.ink)
+                        .background_color(palette.surface)
+                        .hint_text(RichText::new(t.get("host.search")).color(palette.muted))
+                        .desired_width(f32::INFINITY),
+                )
+                .changed()
+            {
+                self.log(Action::HostSearch, Outcome::Succeeded);
+            }
         });
         ui.add_space(10.0);
         ui.label(
@@ -496,6 +568,7 @@ impl ManagementApp {
                         .clicked()
                     {
                         self.selected = host.id;
+                        self.log(Action::HostSelect, Outcome::Succeeded);
                     }
                     ui.add_space(5.0);
                 }
@@ -574,6 +647,7 @@ impl ManagementApp {
                     .clicked()
                 {
                     self.delete_id = Some(self.selected.clone());
+                    self.log(Action::DeletePrompt, Outcome::Succeeded);
                 }
                 if ui
                     .add_enabled(host.is_some(), egui::Button::new(t.get("host.edit")))
@@ -688,8 +762,12 @@ impl ManagementApp {
         card(ui).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.horizontal(|ui| {
+                let before = self.tab;
                 ui.selectable_value(&mut self.tab, 0, t.get("apt.packages"));
                 ui.selectable_value(&mut self.tab, 1, t.get("apt.output"));
+                if before != self.tab {
+                    self.log(Action::ResultTab, Outcome::Succeeded);
+                }
             });
             ui.separator();
             let available = (viewport_height - 500.0).max(100.0);
@@ -723,11 +801,16 @@ impl ManagementApp {
                         palette.muted
                     },
                 ));
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.package_search)
-                        .hint_text(t.get("apt.filter"))
-                        .desired_width(270.0),
-                );
+                if ui
+                    .add(
+                        egui::TextEdit::singleline(&mut self.package_search)
+                            .hint_text(t.get("apt.filter"))
+                            .desired_width(270.0),
+                    )
+                    .changed()
+                {
+                    self.log(Action::PackageSearch, Outcome::Succeeded);
+                }
                 ui.add_space(5.0);
                 egui::ScrollArea::both()
                     .max_height((available - 75.0).max(70.0))
@@ -824,7 +907,14 @@ impl ManagementApp {
             .as_array()
             .into_iter()
             .flatten()
-            .filter_map(|slot| slot["index"].as_u64().map(|index| index as usize))
+            .filter_map(|slot| {
+                slot["index"].as_u64().map(|index| {
+                    (
+                        index as usize,
+                        slot["kind"].as_str().unwrap_or_default().to_owned(),
+                    )
+                })
+            })
             .collect();
     }
 
@@ -846,15 +936,19 @@ impl ManagementApp {
     }
 
     fn open_vault_dialog(&mut self, mode: VaultMode) {
+        self.log(Action::VaultDialogOpen, Outcome::Succeeded);
         self.vault_dialog = Some(VaultDialog {
             mode,
             password: String::new(),
             confirmation: String::new(),
             error: String::new(),
+            hello: cfg!(target_os = "windows"),
+            acknowledged: false,
         });
     }
 
     fn choose_backup(&mut self) {
+        self.log(Action::BackupDialog, Outcome::Started);
         let t = Translator(self.preferences.language);
         if let Some(path) = rfd::FileDialog::new()
             .set_title(t.get("vault.export_title"))
@@ -863,6 +957,8 @@ impl ManagementApp {
             .save_file()
         {
             self.send(json!({"action":"vault_backup","path":path}));
+        } else {
+            self.log(Action::BackupDialog, Outcome::Cancelled);
         }
     }
 
@@ -876,6 +972,8 @@ impl ManagementApp {
         let mut cancel = false;
         let mut add = false;
         let mut backup = false;
+        let mut passkey = false;
+        let mut revoke = None;
         egui::Modal::new(egui::Id::unique("vault_dialog")).show(ctx, |ui| {
             ui.set_width(570.0);
             ui.heading(match dialog.mode {
@@ -883,6 +981,8 @@ impl ManagementApp {
                 VaultMode::Unlock => t.get("vault.unlock_host"),
                 VaultMode::Manage => t.get("vault.manage"),
                 VaultMode::AddKey => t.get("vault.add_password"),
+                VaultMode::Passkey => t.get("passkey.title"),
+                VaultMode::Revoke(_) => t.get("vault.revoke"),
             });
             ui.add_space(12.0);
             ui.add_enabled_ui(!self.busy, |ui| {
@@ -891,16 +991,84 @@ impl ManagementApp {
                         "vault.slot_count",
                         &[("count", self.slots.len().to_string())],
                     ));
-                    for slot in &self.slots {
-                        ui.label(t.format("vault.slot", &[("slot", slot.to_string())]));
+                    for (slot, kind) in &self.slots {
+                        ui.horizontal(|ui| {
+                            ui.label(t.format("vault.slot", &[("slot", slot.to_string())]));
+                            ui.label(if kind == "Fido2HmacSecret" {
+                                t.get("passkey.title")
+                            } else {
+                                t.get("auth.password")
+                            });
+                            if ui
+                                .add_enabled(
+                                    self.slots.len() > 1,
+                                    egui::Button::new(t.get("vault.revoke")),
+                                )
+                                .clicked()
+                            {
+                                revoke = Some(*slot);
+                            }
+                        });
                     }
+                    ui.label(t.get("vault.revoke_limit"));
                     ui.label(t.get("vault.keep_backup"));
                     ui.horizontal(|ui| {
                         add = ui
                             .add_enabled(self.slots.len() < 8, primary(t.get("vault.add_password")))
                             .clicked();
+                        passkey = ui
+                            .add_enabled(
+                                !self.debug && self.slots.len() < 8,
+                                egui::Button::new(t.get("passkey.add")),
+                            )
+                            .clicked();
                         backup = ui.button(t.get("vault.export")).clicked();
                         cancel = ui.button(t.get("common.close")).clicked();
+                    });
+                } else if let VaultMode::Revoke(slot) = dialog.mode {
+                    ui.label(t.format("vault.revoke_prompt", &[("slot", slot.to_string())]));
+                    ui.colored_label(palette.warning, t.get("vault.revoke_backup_warning"));
+                    ui.checkbox(&mut dialog.acknowledged, t.get("vault.revoke_ack"));
+                    ui.horizontal(|ui| {
+                        submit = ui
+                            .add_enabled(
+                                dialog.acknowledged,
+                                egui::Button::new(t.get("vault.revoke_confirm")),
+                            )
+                            .clicked();
+                        cancel = ui.button(t.get("common.cancel")).clicked();
+                    });
+                } else if dialog.mode == VaultMode::Passkey {
+                    ui.label(t.get("passkey.description"));
+                    #[cfg(target_os = "windows")]
+                    ui.horizontal(|ui| {
+                        let before = dialog.hello;
+                        ui.radio_value(&mut dialog.hello, true, "Windows Hello");
+                        ui.radio_value(&mut dialog.hello, false, t.get("passkey.security_key"));
+                        if before != dialog.hello {
+                            self.log(Action::PasskeyMethod, Outcome::Succeeded);
+                        }
+                    });
+                    #[cfg(not(target_os = "windows"))]
+                    field(
+                        ui,
+                        t.get("passkey.pin"),
+                        &mut dialog.password,
+                        t.get("passkey.pin_hint"),
+                        true,
+                    );
+                    ui.horizontal(|ui| {
+                        submit = ui
+                            .add_enabled(
+                                !self.debug,
+                                primary(if self.locked {
+                                    t.get("passkey.unlock")
+                                } else {
+                                    t.get("passkey.add")
+                                }),
+                            )
+                            .clicked();
+                        cancel = ui.button(t.get("common.cancel")).clicked();
                     });
                 } else {
                     if dialog.mode == VaultMode::Create {
@@ -941,6 +1109,14 @@ impl ManagementApp {
                             .clicked();
                         cancel = ui.button(t.get("common.cancel")).clicked();
                     });
+                    if dialog.mode == VaultMode::Unlock {
+                        passkey = ui
+                            .add_enabled(!self.debug, egui::Button::new(t.get("passkey.unlock")))
+                            .clicked();
+                    }
+                }
+                if self.debug {
+                    ui.colored_label(palette.warning, t.get("debug.notice"));
                 }
             });
             if self.busy {
@@ -952,12 +1128,33 @@ impl ManagementApp {
         });
         if add {
             dialog.mode = VaultMode::AddKey;
+            self.log(Action::VaultDialogOpen, Outcome::Succeeded);
+        }
+        if passkey {
+            dialog.password.zeroize();
+            dialog.confirmation.zeroize();
+            dialog.mode = VaultMode::Passkey;
+            self.log(Action::VaultDialogOpen, Outcome::Succeeded);
+        }
+        if let Some(slot) = revoke {
+            dialog.mode = VaultMode::Revoke(slot);
+            dialog.acknowledged = false;
+            self.log_at_slot(Action::VaultRevokePrompt, Outcome::Succeeded, Some(slot));
         }
         if backup {
             self.choose_backup();
         }
         if submit {
-            if dialog.mode != VaultMode::Unlock && dialog.password != dialog.confirmation {
+            if let VaultMode::Revoke(slot) = dialog.mode {
+                self.send(json!({"action":"vault_revoke_key","slot":slot}));
+            } else if dialog.mode == VaultMode::Passkey {
+                let action = if self.locked {
+                    "vault_unlock_passkey"
+                } else {
+                    "vault_add_passkey"
+                };
+                self.send(json!({"action":action,"hello":dialog.hello,"pin":std::mem::take(&mut dialog.password)}));
+            } else if dialog.mode != VaultMode::Unlock && dialog.password != dialog.confirmation {
                 dialog.error = t.get("vault.password_mismatch").into();
             } else if dialog.mode != VaultMode::Unlock && dialog.password.chars().count() < 12 {
                 dialog.error = t.get("vault.password_short").into();
@@ -975,6 +1172,16 @@ impl ManagementApp {
                 dialog.confirmation.zeroize();
                 self.send(request);
             }
+            if !dialog.error.is_empty() {
+                self.log(Action::ValidationRejected, Outcome::Failed);
+            }
+        }
+        if cancel {
+            if let VaultMode::Revoke(slot) = dialog.mode {
+                self.log_at_slot(Action::VaultRevokeCancel, Outcome::Cancelled, Some(slot));
+            } else {
+                self.log(Action::VaultDialogClose, Outcome::Succeeded);
+            }
         }
         if !cancel {
             self.vault_dialog = Some(dialog);
@@ -987,6 +1194,7 @@ impl ManagementApp {
         if let Some(mut editor) = self.editor.take() {
             let mut cancel = false;
             let mut save = false;
+            let mut editor_changed = false;
             egui::Modal::new(egui::Id::unique("host_editor")).show(ctx, |ui| {
                 ui.set_width(560.0);
                 ui.heading(if editor.host.id.is_empty() {
@@ -999,7 +1207,7 @@ impl ManagementApp {
                     egui::ScrollArea::vertical()
                         .max_height((ctx.content_rect().height() - 180.0).max(300.0))
                         .show(ui, |ui| {
-                            field(
+                            editor_changed |= field(
                                 ui,
                                 t.get("host.name"),
                                 &mut editor.host.name,
@@ -1007,14 +1215,14 @@ impl ManagementApp {
                                 false,
                             );
                             ui.columns(2, |columns| {
-                                field(
+                                editor_changed |= field(
                                     &mut columns[0],
                                     t.get("host.address"),
                                     &mut editor.host.address,
                                     t.get("host.address_hint"),
                                     false,
                                 );
-                                field(
+                                editor_changed |= field(
                                     &mut columns[1],
                                     t.get("host.port"),
                                     &mut editor.port,
@@ -1022,13 +1230,15 @@ impl ManagementApp {
                                     false,
                                 );
                             });
-                            field(
+                            editor_changed |= field(
                                 ui,
                                 t.get("auth.username"),
                                 &mut editor.host.username,
                                 t.get("auth.username_hint"),
                                 false,
                             );
+                            let choices_before =
+                                (editor.host.os.clone(), editor.host.auth_type.clone());
                             ui.horizontal(|ui| {
                                 egui::ComboBox::from_label(t.get("host.os"))
                                     .selected_text(&editor.host.os)
@@ -1063,9 +1273,16 @@ impl ManagementApp {
                                         );
                                     });
                             });
-                            ui.checkbox(&mut editor.show_secrets, t.get("auth.show_secrets"));
+                            editor_changed |= choices_before
+                                != (editor.host.os.clone(), editor.host.auth_type.clone());
+                            if ui
+                                .checkbox(&mut editor.show_secrets, t.get("auth.show_secrets"))
+                                .changed()
+                            {
+                                self.log(Action::RevealSecrets, Outcome::Succeeded);
+                            }
                             if editor.host.auth_type == "password" {
-                                field(
+                                editor_changed |= field(
                                     ui,
                                     t.get("auth.ssh_password"),
                                     &mut editor.host.password,
@@ -1074,39 +1291,55 @@ impl ManagementApp {
                                 );
                             } else {
                                 ui.label(t.get("auth.key_format"));
-                                ui.add(
-                                    egui::TextEdit::multiline(&mut editor.host.private_key)
-                                        .password(!editor.show_secrets)
-                                        .desired_rows(3)
-                                        .desired_width(f32::INFINITY)
-                                        .hint_text(t.get("auth.key_hint")),
-                                );
-                                if ui.button(t.get("auth.import_key")).clicked()
-                                    && let Some(path) = rfd::FileDialog::new()
+                                editor_changed |= ui
+                                    .add(
+                                        egui::TextEdit::multiline(&mut editor.host.private_key)
+                                            .password(!editor.show_secrets)
+                                            .desired_rows(3)
+                                            .desired_width(f32::INFINITY)
+                                            .hint_text(t.get("auth.key_hint")),
+                                    )
+                                    .changed();
+                                if ui.button(t.get("auth.import_key")).clicked() {
+                                    self.log(Action::ImportKey, Outcome::Started);
+                                    if let Some(path) = rfd::FileDialog::new()
                                         .set_title(t.get("auth.import_title"))
                                         .pick_file()
-                                {
-                                    let result = std::fs::metadata(&path).and_then(|m| {
-                                        if m.len() <= 1024 * 1024 {
-                                            std::fs::read_to_string(&path)
-                                        } else {
-                                            Err(std::io::Error::other(t.get("auth.key_too_large")))
+                                    {
+                                        let result = std::fs::metadata(&path).and_then(|m| {
+                                            if m.len() <= 1024 * 1024 {
+                                                std::fs::read_to_string(&path)
+                                            } else {
+                                                Err(std::io::Error::other(
+                                                    t.get("auth.key_too_large"),
+                                                ))
+                                            }
+                                        });
+                                        self.log(
+                                            Action::ImportKey,
+                                            if result.is_ok() {
+                                                Outcome::Succeeded
+                                            } else {
+                                                Outcome::Failed
+                                            },
+                                        );
+                                        match result {
+                                            Ok(key) => {
+                                                editor.host.private_key = key;
+                                                editor.error.clear();
+                                            }
+                                            Err(error) => {
+                                                editor.error = t.format(
+                                                    "auth.key_read_error",
+                                                    &[("error", error.to_string())],
+                                                )
+                                            }
                                         }
-                                    });
-                                    match result {
-                                        Ok(key) => {
-                                            editor.host.private_key = key;
-                                            editor.error.clear();
-                                        }
-                                        Err(error) => {
-                                            editor.error = t.format(
-                                                "auth.key_read_error",
-                                                &[("error", error.to_string())],
-                                            )
-                                        }
+                                    } else {
+                                        self.log(Action::ImportKey, Outcome::Cancelled);
                                     }
                                 }
-                                field(
+                                editor_changed |= field(
                                     ui,
                                     t.get("auth.key_passphrase"),
                                     &mut editor.host.key_passphrase,
@@ -1115,15 +1348,17 @@ impl ManagementApp {
                                 );
                             }
                             ui.separator();
-                            field(
+                            editor_changed |= field(
                                 ui,
                                 t.get("auth.sudo_password"),
                                 &mut editor.host.sudo_password,
                                 t.get("auth.sudo_hint"),
                                 !editor.show_secrets,
                             );
-                            ui.checkbox(&mut editor.host.use_pty, t.get("auth.pty"));
-                            field(
+                            editor_changed |= ui
+                                .checkbox(&mut editor.host.use_pty, t.get("auth.pty"))
+                                .changed();
+                            editor_changed |= field(
                                 ui,
                                 t.get("host.notes"),
                                 &mut editor.host.notes,
@@ -1156,17 +1391,25 @@ impl ManagementApp {
                     });
                 }
             });
+            if editor_changed {
+                self.log(Action::FormEdit, Outcome::Succeeded);
+            }
             if save {
                 match editor.port.trim().parse::<u16>() {
                     Ok(port) if port > 0 => {
                         editor.host.port = port;
                         self.send(json!({"action":"save","host":editor.host}));
                     }
-                    _ => editor.error = t.get("host.port_invalid").into(),
+                    _ => {
+                        editor.error = t.get("host.port_invalid").into();
+                        self.log(Action::ValidationRejected, Outcome::Failed);
+                    }
                 }
             }
             if !cancel {
                 self.editor = Some(editor);
+            } else {
+                self.log(Action::EditorClose, Outcome::Succeeded);
             }
         }
         if let Some(trust) = &self.trust {
@@ -1199,6 +1442,7 @@ impl ManagementApp {
                 self.send(json!({"action":"trust","id":trust.host_id,"fingerprint":trust.actual}));
             }
             if cancel {
+                self.log(Action::TrustCancel, Outcome::Succeeded);
                 self.trust = None;
                 self.after_trust = None;
                 self.status = t.get("trust.cancelled").into();
@@ -1228,6 +1472,7 @@ impl ManagementApp {
                 self.send(json!({"action":"delete","id":id}));
             }
             if no {
+                self.log(Action::DeleteCancel, Outcome::Succeeded);
                 self.delete_id = None;
             }
         }
@@ -1242,8 +1487,18 @@ impl ManagementApp {
             });
             if close {
                 self.error = None;
+                self.log(Action::ErrorDismiss, Outcome::Succeeded);
             }
         }
+    }
+}
+
+impl Drop for ManagementApp {
+    fn drop(&mut self) {
+        let _ = self
+            .audit
+            .record(Action::AppExit, Outcome::Succeeded, None, None);
+        self.clear_host_cache();
     }
 }
 
@@ -1261,6 +1516,17 @@ impl eframe::App for ManagementApp {
                 let t = Translator(self.preferences.language);
                 if ui.button(t.get("settings.title")).clicked() {
                     self.settings_open = !self.settings_open;
+                    self.log(
+                        if self.settings_open {
+                            Action::SettingsOpen
+                        } else {
+                            Action::SettingsClose
+                        },
+                        Outcome::Succeeded,
+                    );
+                }
+                if self.debug {
+                    ui.colored_label(Palette::for_context(&ctx).warning, t.get("debug.notice"));
                 }
             });
         let palette = Palette::for_context(&ctx);
@@ -1356,14 +1622,15 @@ fn stat(ui: &mut egui::Ui, title: &str, value: &str) {
         ui.label(RichText::new(value).size(22.0).strong());
     });
 }
-fn field(ui: &mut egui::Ui, label: &str, value: &mut String, hint: &str, secret: bool) {
+fn field(ui: &mut egui::Ui, label: &str, value: &mut String, hint: &str, secret: bool) -> bool {
     ui.label(RichText::new(label).size(12.0).strong());
     ui.add(
         egui::TextEdit::singleline(value)
             .password(secret)
             .desired_width(f32::INFINITY)
             .hint_text(hint),
-    );
+    )
+    .changed()
 }
 fn format_time(value: &str) -> String {
     DateTime::parse_from_rfc3339(value)

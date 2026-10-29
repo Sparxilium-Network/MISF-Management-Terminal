@@ -81,6 +81,12 @@ impl Translator {
             "正在建立 LUKSbox，並驗證資料可重新解鎖…" => "progress.vault_create",
             "正在解鎖 LUKSbox…" => "progress.vault_unlock",
             "正在新增 LUKSbox 解鎖密碼…" => "progress.vault_add_key",
+            "請在系統視窗或安全金鑰上完成 Passkey 註冊與兩次驗證…" => {
+                "progress.passkey_enroll"
+            }
+            "請在系統視窗或安全金鑰上完成 Passkey 驗證…" => {
+                "progress.passkey_unlock"
+            }
             "正在連線並驗證 SSH 主機指紋…" => "progress.ssh",
             "正在執行 apt-get update，只更新套件索引…" => "progress.apt_update",
             "正在讀取待更新套件…" => "progress.apt_list",

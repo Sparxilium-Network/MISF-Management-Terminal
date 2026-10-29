@@ -4,7 +4,7 @@
 > **本專案仍處於開發階段，請勿用於正式環境。**
 > 相關安全保護機制尚未完善。未啟用加密時，密碼等資料以明文儲存；啟用 LUKSbox 後原明文副本仍保留，需自行處理。加密整合為實驗性功能。
 
-單一桌面 App，以 eframe／egui 繪製原生視窗，直接呼叫同一個執行檔內的 Rust 核心。沒有 JavaFX、管理伺服器、TOKEN、遠端資料庫或 HTTP 服務。提供明文 JSON 或可選的 LUKSbox 加密主機庫；加密模式啟動時需輸入任一已註冊密碼解鎖。
+單一桌面 App，以 eframe／egui 繪製原生視窗，直接呼叫同一個執行檔內的 Rust 核心。沒有 JavaFX、管理伺服器、TOKEN、遠端資料庫或 HTTP 服務。提供明文 JSON 或可選的 LUKSbox 加密主機庫；加密模式啟動時需使用已註冊密碼或 Passkey 解鎖。
 
 ```mermaid
 flowchart LR
@@ -27,7 +27,13 @@ Linux APT 檢查先偵測 Linux 與 APT，root 直接執行 apt-get update，一
 
 預設儲存於使用者目錄 `.misf-management/hosts.json`，以 MISF_DATA_DIR 可更改位置。明文模式使用檔案鎖與暫存檔原子替換；損壞或不支援版本的既存檔案不會被自動覆寫。
 
-使用者可將主機庫轉成同目錄 `hosts.lbx`，內含加密的 `/hosts.json`。使用 LUKSbox v0.6.1 固定版本的 core／format／VFS，以 AES-256-GCM-SIV 與 Argon2id 保存內容及中繼資料，無須掛載磁碟。轉換驗證後原明文檔仍保留，UI 明確提示。加密模式鎖定時不提供主機操作，也禁止回退明文；支援手動鎖定、最多 8 組密碼與加密備份。儲存狀態和解鎖金鑰保存在背景 worker 的 StorageSession，非每次請求重建。
+使用者可將主機庫轉成同目錄 `hosts.lbx`，內含加密的 `/hosts.json`。使用 LUKSbox v0.6.1 固定版本的 core／format／VFS，以 AES-256-GCM-SIV 與 Argon2id 保存內容及中繼資料，無須掛載磁碟。轉換驗證後原明文檔仍保留，UI 明確提示。加密模式鎖定時不提供主機操作，也禁止回退明文；支援手動鎖定、密碼與 Passkey 合計最多 8 槽、指定槽撤銷與加密備份。儲存狀態和解鎖金鑰保存在背景 worker 的 StorageSession，非每次請求重建。
+
+`core/src/passkey.rs` 使用相同上游的 FIDO2 crate：Windows 透過 webauthn.dll 要求使用者驗證並選擇 Hello／外接安全金鑰；Linux 透過 libfido2 與當次 PIN 操作 CTAP2 裝置。只接入 `Fido2HmacSecret` 包裝槽，不使用直接派生主金鑰槽。註冊後兩次讀取 PRF 確認一致，才追加並同步 header；公開 credential ID 與 salt 隨槽保存，PIN／PRF 不落地。解鎖從公開 header 取候選槽後取得 PRF，再由 Container 驗證容器；不存在相符金鑰或驗證失敗均禁止開啟。撤銷先檢查槽存在且不是最後一個槽，再同步 header。撤銷不代表使舊容器或已解鎖工作階段失效。
+
+GUI 與 CLI 經 `core/src/session.rs` 執行共用稽核與 debug 政策，再呼叫 StorageSession。`core/src/audit.rs` 只接受固定動作／結果列舉、可選的主機名稱和槽號，不接受原始請求或錯誤字串；以 JSONL、程序內互斥與跨程序檔案鎖追加 UTC 每日日誌，並同步磁碟。日誌與偏好均獨立於加密主機庫；日誌沒有防竄改或自動清理機制。開始紀錄無法寫入時拒絕背景操作，完成結果無法記錄時明確報告狀態可能已改變。
+
+`RuntimePaths` 在啟動時解析 `--debug.dir`，以明確路徑注入偏好與 worker，不修改程序環境。debug 分支不呼叫預設主機庫遷移；優先於 MISF_DATA_DIR，失敗不回退。UI 顯示 DEBUG，背景政策只允許 loopback IP 的 SSH、禁止真實 Passkey 操作，備份限測試目錄內。此模式請搭配測試資料；Passkey 自動測試使用 MockAuthenticator，並透過相同容器 API 驗證解鎖與撤銷。
 
 名稱修正後，首次啟動會複製舊版 `.msif-management/hosts.json` 至新目錄，保留原檔並避免覆寫新目錄既有資料。新目錄有 `.lbx` 時不複製舊明文。明確設定 MISF_DATA_DIR 時使用指定路徑，不自動遷移其他目錄。
 
@@ -37,4 +43,4 @@ UI 經工作佇列交給背景執行緒與 Tokio runtime 執行 SSH／磁碟操�
 
 測試 SSH 伺服器在 loopback 驗證密碼／私鑰、指紋變更阻擋、PTY、拆包 sudo 提示、APT 失敗、BSD 及儲存流程。原生 UI 以開發用擷取功能驗證排版與中文顯示。
 
-目前只保存最近一次檢查，不支援任意命令、互動終端、排程或 Ansible。Windows 已建置驗證，其他作業系統需在對應環境建置及驗證。LUKSbox 尚未支援硬體 keyslot、撤銷、主金鑰輪替或閒置自動鎖定；詳細取捨見 [LUKSbox 整合評估](luksbox-evaluation.md)。
+目前只保存最近一次檢查，不支援任意命令、互動終端、排程或 Ansible。Windows 已建置驗證，其他作業系統需在對應環境建置及驗證。Passkey 已通過模擬驗證器測試，仍需實體裝置驗證。尚未支援主金鑰輪替、TPM 或閒置自動鎖定；詳細取捨見 [LUKSbox 整合評估](luksbox-evaluation.md)。

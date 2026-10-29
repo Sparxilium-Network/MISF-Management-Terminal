@@ -1,7 +1,6 @@
 use crate::{i18n::Language, theme::Appearance};
-use misf_core::store::Store;
 use serde_json::json;
-use std::{io::Write, path::PathBuf};
+use std::{io::Write, path::Path};
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub struct Preferences {
@@ -10,14 +9,7 @@ pub struct Preferences {
 }
 
 impl Preferences {
-    fn path() -> Result<PathBuf, String> {
-        Store::default_path()
-            .map(|path| path.with_file_name("ui-settings.json"))
-            .map_err(|error| error.to_string())
-    }
-
-    pub fn load() -> Result<Self, String> {
-        let path = Self::path()?;
+    pub fn load(path: &Path) -> Result<Self, String> {
         let bytes = match std::fs::read(path) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -41,8 +33,7 @@ impl Preferences {
         })
     }
 
-    pub fn save(self) -> Result<(), String> {
-        let path = Self::path()?;
+    pub fn save(self, path: &Path) -> Result<(), String> {
         let directory = path.parent().ok_or("Invalid UI settings directory")?;
         std::fs::create_dir_all(directory).map_err(|e| e.to_string())?;
         let mut file = tempfile::NamedTempFile::new_in(directory).map_err(|e| e.to_string())?;
