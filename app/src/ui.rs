@@ -801,7 +801,15 @@ impl ManagementApp {
                         let text = result
                             .map(|r| format!("{}\n{}", r.output, r.error))
                             .unwrap_or(t.get("apt.not_run").into());
-                        ui.label(RichText::new(text).monospace().size(12.0));
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(misf_core::transcript::readable_output(&text))
+                                    .monospace()
+                                    .size(12.0),
+                            )
+                            .wrap_mode(egui::TextWrapMode::Extend)
+                            .selectable(true),
+                        );
                     });
             } else {
                 let message = match result {

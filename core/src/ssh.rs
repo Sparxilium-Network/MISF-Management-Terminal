@@ -14,9 +14,8 @@ use tokio::time::timeout;
 const PROMPT: &str = "__MISF_SUDO_PROMPT__";
 const LIMIT: usize = 2 * 1024 * 1024;
 pub const DETECT: &str = "uname -s; if command -v apt-get >/dev/null 2>&1 && command -v apt >/dev/null 2>&1; then printf '__MISF_APT__\\n'; fi";
-const UPDATE: &str = "LC_ALL=C apt-get -o APT::Update::Error-Mode=any update";
-const SUDO_UPDATE: &str =
-    "LC_ALL=C sudo -S -p '__MISF_SUDO_PROMPT__' -- apt-get -o APT::Update::Error-Mode=any update";
+const UPDATE: &str = "LC_ALL=C apt-get -q=1 -o APT::Update::Error-Mode=any update";
+const SUDO_UPDATE: &str = "LC_ALL=C sudo -S -p '__MISF_SUDO_PROMPT__' -- apt-get -q=1 -o APT::Update::Error-Mode=any update";
 pub const LIST: &str = "LC_ALL=C apt list --upgradable";
 
 struct Verifier {
@@ -189,9 +188,9 @@ async fn execute(
                 _ => {}
             }
         }
-        let output = String::from_utf8_lossy(&output)
-            .replace(PROMPT, "")
-            .replace('\r', "");
+        let output = crate::transcript::readable_output(
+            &String::from_utf8_lossy(&output).replace(PROMPT, ""),
+        );
         Ok((exit.context("SSH 連線結束但沒有命令退出碼")?, output))
     })
     .await

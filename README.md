@@ -55,7 +55,7 @@ Linux／macOS 可使用 `cargo run --locked -p misf`，須在對應平台建置�
 - SSH 帳密登入，或匯入 OpenSSH／PEM 私鑰；加密私鑰可填密語。
 - 首次連線先核對並保存 SHA-256 主機指紋，確認前不提交帳密；指紋變更立即阻擋認證。
 - 使用 russh 自帶 SSH，不呼叫系統 ssh，也不讀取電腦的 SSH config、known_hosts、SSH agent 或系統私鑰。
-- 一鍵 APT 檢查：root 執行 apt-get update，一般使用者使用 sudo；更新索引成功後列出可更新套件、目前版本、候選版本與架構。只檢查、不安裝套件。
+- 一鍵 APT 檢查：root 執行 apt-get update，一般使用者使用 sudo；更新索引成功後列出可更新套件、目前版本、候選版本與架構。只檢查、不安裝套件。執行輸出停用動態下載進度，保留來源與錯誤，支援文字選取及雙向捲動。
 - 可開關 PTY（預設開啟，類似 ssh -t）。sudo 密碼以 SSH channel 標準輸入傳送，不放在命令列。
 - 失敗不顯示為零筆更新；保留最近一次檢查結果與遮蔽憑證後的輸出。
 

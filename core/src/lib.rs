@@ -5,6 +5,7 @@ pub mod runtime;
 pub mod session;
 pub mod ssh;
 pub mod store;
+pub mod transcript;
 pub mod vault;
 #[cfg(target_os = "windows")]
 mod windows_passkey;

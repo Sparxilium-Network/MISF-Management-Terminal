@@ -154,7 +154,7 @@ impl server::Handler for Mock {
                 finish(
                     session,
                     channel,
-                    "Hit:1 test-repo\nReading package lists... Done\n",
+                    "0% [Working]\r\x1b[2K0% [Connecting]\r\x1b[32mHit:1 test-repo\x1b[0m\r\nReading package lists... Done\r\n",
                     0,
                 )
             }
@@ -229,7 +229,18 @@ async fn password_pty_sudo_and_packages_work_end_to_end() {
     assert_eq!(fixture.state.pty_count.load(Ordering::SeqCst), 1);
     assert!(!check.output.contains("sudo-secret"));
     assert!(!check.output.contains("__MISF_SUDO_PROMPT__"));
+    assert!(!check.output.contains(['\r', '\x1b']));
+    assert!(
+        check
+            .output
+            .contains("0% [Working]\n0% [Connecting]\nHit:1 test-repo\n")
+    );
     let commands = fixture.state.commands.lock().unwrap();
+    assert!(
+        commands.iter().any(
+            |command| command.contains("-- apt-get -q=1 -o APT::Update::Error-Mode=any update")
+        )
+    );
     assert!(
         commands
             .iter()
@@ -269,6 +280,7 @@ async fn root_check_executes_apt_without_sudo() {
             .any(|command| command.starts_with("LC_ALL=C apt-get "))
     );
     assert!(!commands.iter().any(|command| command.contains("sudo")));
+    assert!(commands.iter().any(|command| command == "LC_ALL=C apt-get -q=1 -o APT::Update::Error-Mode=any update"));
 }
 
 #[tokio::test]
