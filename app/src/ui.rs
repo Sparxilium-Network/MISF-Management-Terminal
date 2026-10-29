@@ -80,6 +80,8 @@ pub struct ManagementApp {
     encrypted: bool,
     locked: bool,
     plaintext_exists: bool,
+    plaintext_path: String,
+    plaintext_delete_prompt: bool,
     slots: Vec<(usize, String)>,
     storage_warning: String,
     vault_dialog: Option<VaultDialog>,
@@ -91,12 +93,21 @@ pub struct ManagementApp {
 
 impl ManagementApp {
     pub fn new(cc: &eframe::CreationContext<'_>, paths: RuntimePaths, audit: AuditLog) -> Self {
+        let worker = Worker::new(cc.egui_ctx.clone(), paths.clone(), audit.clone());
+        Self::initialize(&cc.egui_ctx, paths, audit, worker)
+    }
+
+    fn initialize(
+        ctx: &egui::Context,
+        paths: RuntimePaths,
+        audit: AuditLog,
+        worker: Worker,
+    ) -> Self {
         let settings_path = paths.store.with_file_name("ui-settings.json");
         let loaded = Preferences::load(&settings_path);
         let preferences = loaded.clone().unwrap_or_default();
-        theme::install(&cc.egui_ctx);
-        preferences.appearance.apply(&cc.egui_ctx);
-        let worker = Worker::new(cc.egui_ctx.clone(), paths.clone(), audit.clone());
+        theme::install(ctx);
+        preferences.appearance.apply(ctx);
         let mut app = Self {
             audit,
             settings_path,
@@ -123,6 +134,8 @@ impl ManagementApp {
             encrypted: false,
             locked: false,
             plaintext_exists: false,
+            plaintext_path: String::new(),
+            plaintext_delete_prompt: false,
             slots: vec![],
             storage_warning: String::new(),
             vault_dialog: None,
@@ -310,13 +323,20 @@ impl ManagementApp {
                     self.open_vault_dialog(VaultMode::Unlock);
                     self.status = t.get("vault.locked").into();
                 } else {
+                    self.check_plaintext_copy();
                     self.send(json!({"action":"list"}));
                 }
             }
             "vault_create" | "vault_unlock" | "vault_unlock_passkey" => {
                 self.apply_storage(&data);
                 self.vault_dialog = None;
+                self.check_plaintext_copy();
                 self.send(json!({"action":"list"}));
+            }
+            "vault_delete_plaintext" => {
+                self.apply_storage(&data);
+                self.plaintext_delete_prompt = false;
+                self.status = t.get("plaintext.deleted").into();
             }
             "vault_lock" => {
                 self.apply_storage(&data);
@@ -861,6 +881,12 @@ impl ManagementApp {
         let t = Translator(self.preferences.language);
         ui.add_space(15.0);
         ui.label(
+            RichText::new(t.get("app.development_warning"))
+                .strong()
+                .color(palette.warning),
+        );
+        ui.label(t.get("app.development_detail"));
+        ui.label(
             RichText::new(if self.encrypted {
                 t.get("storage.encrypted")
             } else {
@@ -875,6 +901,15 @@ impl ManagementApp {
         }
         if self.encrypted && self.plaintext_exists {
             ui.colored_label(palette.warning, t.get("storage.original_remains"));
+            if ui
+                .add_enabled(
+                    !self.locked && !self.busy,
+                    egui::Button::new(t.get("plaintext.review")),
+                )
+                .clicked()
+            {
+                self.check_plaintext_copy();
+            }
         }
         ui.horizontal_wrapped(|ui| {
             if self.encrypted {
@@ -903,6 +938,7 @@ impl ManagementApp {
         self.encrypted = data["encrypted"].as_bool().unwrap_or(false);
         self.locked = data["locked"].as_bool().unwrap_or(false);
         self.plaintext_exists = data["plaintext_exists"].as_bool().unwrap_or(false);
+        self.plaintext_path = data["plaintext_path"].as_str().unwrap_or_default().into();
         self.path = data["path"].as_str().unwrap_or_default().into();
         self.storage_warning = data["warning"].as_str().unwrap_or_default().into();
         self.slots = data["slots"]
@@ -918,6 +954,66 @@ impl ManagementApp {
                 })
             })
             .collect();
+    }
+
+    fn check_plaintext_copy(&mut self) {
+        if self.encrypted
+            && !self.locked
+            && self.plaintext_exists
+            && !self.plaintext_path.is_empty()
+        {
+            self.plaintext_delete_prompt = true;
+            self.log(Action::PlaintextDeletePrompt, Outcome::Succeeded);
+        }
+    }
+
+    fn plaintext_delete_dialog(&mut self, ctx: &egui::Context) {
+        if !self.plaintext_delete_prompt || self.locked {
+            return;
+        }
+        let t = Translator(self.preferences.language);
+        let mut delete = false;
+        let mut keep = false;
+        egui::Modal::new(egui::Id::unique("delete_plaintext_copy")).show(ctx, |ui| {
+            ui.set_width(560.0);
+            ui.heading(t.get("plaintext.title"));
+            ui.label(t.get("plaintext.description"));
+            ui.add_space(8.0);
+            ui.label(RichText::new(t.get("plaintext.path_label")).strong());
+            ui.add(
+                egui::Label::new(RichText::new(&self.plaintext_path).monospace())
+                    .wrap()
+                    .selectable(true),
+            );
+            ui.add_space(8.0);
+            ui.label(t.get("plaintext.delete_notice"));
+            ui.add_enabled_ui(!self.busy, |ui| {
+                ui.horizontal(|ui| {
+                    keep = ui.button(t.get("plaintext.keep")).clicked();
+                    delete = ui
+                        .button(
+                            RichText::new(t.get("plaintext.confirm_delete"))
+                                .color(Palette::for_context(ctx).error),
+                        )
+                        .clicked();
+                });
+            });
+        });
+        if keep {
+            self.respond_plaintext_delete(false);
+        }
+        if delete {
+            self.respond_plaintext_delete(true);
+        }
+    }
+
+    fn respond_plaintext_delete(&mut self, delete: bool) {
+        if delete {
+            self.send(json!({"action":"vault_delete_plaintext", "path":self.plaintext_path, "confirmed":true}));
+        } else {
+            self.plaintext_delete_prompt = false;
+            self.log(Action::PlaintextDeleteCancel, Outcome::Cancelled);
+        }
     }
 
     fn clear_host_cache(&mut self) {
@@ -1489,6 +1585,7 @@ impl ManagementApp {
             }
         }
         self.vault_dialog(ctx);
+        self.plaintext_delete_dialog(ctx);
         if let Some(error) = self.error.clone() {
             let mut close = false;
             egui::Modal::new(egui::Id::unique("error")).show(ctx, |ui| {
@@ -1655,4 +1752,105 @@ fn format_time(value: &str) -> String {
     DateTime::parse_from_rfc3339(value)
         .map(|time| time.with_timezone(&Local).format("%m/%d %H:%M").to_string())
         .unwrap_or_else(|_| value.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc;
+
+    #[test]
+    fn plaintext_prompt_reappears_after_unlock_and_renders_full_path_in_both_languages() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = RuntimePaths {
+            store: directory.path().join("hosts.json"),
+            debug: true,
+            debug_allow_passkey: false,
+        };
+        let ctx = egui::Context::default();
+        let audit = AuditLog::new(directory.path()).unwrap();
+        let (requests, commands) = mpsc::channel();
+        let (_events, results) = mpsc::channel();
+        // No background runtime, hardware authenticator, or user profile in this UI test.
+        let mut app = ManagementApp::initialize(
+            &ctx,
+            paths,
+            audit,
+            Worker {
+                requests,
+                events: results,
+            },
+        );
+        assert_eq!(commands.recv().unwrap()["action"], "storage_status");
+        let full_path = directory.path().join("hosts.json").display().to_string();
+        let mut status = json!({"encrypted":false, "locked":false, "plaintext_exists":true, "plaintext_path":full_path});
+        app.received("storage_status", status.clone());
+        assert!(!app.plaintext_delete_prompt);
+        assert_eq!(commands.recv().unwrap()["action"], "list");
+        status["encrypted"] = json!(true);
+        status["locked"] = json!(true);
+        app.received("storage_status", status.clone());
+        assert!(!app.plaintext_delete_prompt);
+        assert!(
+            app.vault_dialog
+                .as_ref()
+                .is_some_and(|dialog| dialog.mode == VaultMode::Unlock)
+        );
+        status["locked"] = json!(false);
+        for action in ["vault_create", "vault_unlock", "vault_unlock_passkey"] {
+            app.received(action, status.clone());
+            assert!(app.plaintext_delete_prompt);
+            assert!(app.vault_dialog.is_none());
+            assert_eq!(commands.recv().unwrap()["action"], "list");
+            app.busy = false;
+            for language in [Language::ZhTw, Language::EnUs] {
+                app.preferences.language = language;
+                let mut text = String::new();
+                // egui may perform a sizing pass before painting a newly opened modal.
+                for _ in 0..2 {
+                    let mut frame = ctx.run_ui(egui::RawInput::default(), |ui| {
+                        app.plaintext_delete_dialog(ui.ctx())
+                    });
+                    fn collect(shape: &egui::epaint::Shape, text: &mut String) {
+                        match shape {
+                            egui::epaint::Shape::Text(shape) => {
+                                text.push_str(&shape.galley.job.text)
+                            }
+                            egui::epaint::Shape::Vec(shapes) => {
+                                for shape in shapes {
+                                    collect(shape, text);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    frame.textures_delta.clear();
+                    for shape in frame.shapes {
+                        collect(&shape.shape, &mut text);
+                    }
+                }
+                assert!(
+                    text.contains(&full_path),
+                    "Full path missing from {} modal",
+                    language.code()
+                );
+                assert!(text.contains(Translator(language).get("plaintext.confirm_delete")));
+            }
+            app.respond_plaintext_delete(false);
+            assert!(!app.plaintext_delete_prompt);
+            assert!(commands.try_recv().is_err());
+        }
+        app.check_plaintext_copy();
+        app.respond_plaintext_delete(true);
+        let request = commands.recv().unwrap();
+        assert_eq!(
+            request,
+            json!({"action":"vault_delete_plaintext", "path":full_path, "confirmed":true})
+        );
+        status["plaintext_exists"] = json!(false);
+        app.received("vault_delete_plaintext", status.clone());
+        assert!(!app.plaintext_delete_prompt);
+        app.received("vault_unlock", status);
+        assert!(!app.plaintext_delete_prompt);
+    }
 }

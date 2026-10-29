@@ -54,6 +54,9 @@ pub enum Action {
     VaultUnlockPasskey,
     VaultRevokeKey,
     VaultBackup,
+    PlaintextDeletePrompt,
+    PlaintextDeleteCancel,
+    VaultDeletePlaintext,
     FormEdit,
     ValidationRejected,
     PasskeyMethod,
@@ -78,6 +81,7 @@ impl Action {
             "vault_unlock_passkey" => Self::VaultUnlockPasskey,
             "vault_revoke_key" => Self::VaultRevokeKey,
             "vault_backup" => Self::VaultBackup,
+            "vault_delete_plaintext" => Self::VaultDeletePlaintext,
             _ => return None,
         })
     }

@@ -176,6 +176,7 @@ pub struct StorageStatus {
     pub locked: bool,
     pub path: PathBuf,
     pub plaintext_exists: bool,
+    pub plaintext_path: PathBuf,
     pub slots: Vec<SlotInfo>,
     pub warning: String,
 }
@@ -228,6 +229,7 @@ impl StorageSession {
                 self.plain_path.clone()
             },
             plaintext_exists: self.plain_path.exists(),
+            plaintext_path: self.plaintext_path()?,
             slots,
             warning: self.warning.clone(),
         })
@@ -241,6 +243,17 @@ impl StorageSession {
             .to_owned();
         match action.as_str() {
             "storage_status" => Ok(serde_json::to_value(self.status()?)?),
+            "vault_delete_plaintext" => {
+                ensure!(
+                    request["confirmed"].as_bool() == Some(true),
+                    "請先確認刪除明文副本"
+                );
+                let path = request["path"]
+                    .as_str()
+                    .context("缺少已確認的完整檔案路徑")?;
+                self.delete_plaintext(Path::new(path))?;
+                Ok(serde_json::to_value(self.status()?)?)
+            }
             "vault_create" => {
                 let password = take_secret(&mut request)?;
                 validate_passphrase(&password)?;
@@ -336,6 +349,48 @@ impl StorageSession {
             .lock()
             .map_err(|_| anyhow::anyhow!("加密工作階段發生錯誤"))?;
         operation(&mut vault)
+    }
+
+    fn plaintext_path(&self) -> Result<PathBuf> {
+        // Resolve the directory, not the file: never follow a hosts.json symlink.
+        let absolute = std::path::absolute(&self.plain_path)?;
+        let parent = absolute.parent().context("資料路徑無效")?;
+        let parent = if parent.exists() {
+            parent.canonicalize()?
+        } else {
+            parent.to_path_buf()
+        };
+        Ok(parent.join(absolute.file_name().context("資料檔名無效")?))
+    }
+
+    fn delete_plaintext(&self, confirmed_path: &Path) -> Result<()> {
+        ensure!(self.encrypted, "尚未啟用加密，禁止刪除使用中的明文主機庫");
+        // Verify the live encrypted database is readable before allowing data removal.
+        self.with_vault(|vault| vault.read().map(|_| ()))?;
+        let path = self.plaintext_path()?;
+        ensure!(confirmed_path == path, "明文副本路徑已變更，請重新確認");
+        let lock = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(self.plain_path.with_extension("lock"))?;
+        fs2::FileExt::try_lock_exclusive(&lock).context("明文主機庫正被使用，無法刪除")?;
+        let metadata = fs::symlink_metadata(&path).context("無法檢查明文副本")?;
+        ensure!(
+            metadata.is_file() && !metadata.file_type().is_symlink(),
+            "明文副本不是一般檔案，拒絕刪除"
+        );
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            ensure!(
+                metadata.file_attributes() & 0x400 == 0,
+                "明文副本是 reparse point，拒絕刪除"
+            );
+        }
+        fs::remove_file(&path).context("無法刪除明文副本")?;
+        Ok(())
     }
 
     fn enable(&mut self, passphrase: &[u8], params: Argon2idParams) -> Result<()> {
@@ -571,6 +626,111 @@ mod tests {
             })
             .unwrap();
         (dir, StorageSession::new(path))
+    }
+
+    #[tokio::test]
+    async fn plaintext_removal_requires_unlocked_vault_and_explicit_exact_path() {
+        let (dir, mut session) = fixture();
+        let plain = dir.path().join("hosts.json");
+        let path = session.status().unwrap().plaintext_path;
+        assert!(path.is_absolute());
+        let request = json!({"action":"vault_delete_plaintext", "path":path, "confirmed":true});
+        assert!(session.handle(request.clone(), &|_| {}).await.is_err());
+        session.enable(FIRST, params()).unwrap();
+        for rejected in [
+            json!({"action":"vault_delete_plaintext", "path":path}),
+            json!({"action":"vault_delete_plaintext", "path":path, "confirmed":false}),
+            json!({"action":"vault_delete_plaintext", "path":dir.path().join("other.json"), "confirmed":true}),
+        ] {
+            assert!(session.handle(rejected, &|_| {}).await.is_err());
+        }
+        session
+            .handle(json!({"action":"vault_lock"}), &|_| {})
+            .await
+            .unwrap();
+        assert!(session.handle(request.clone(), &|_| {}).await.is_err());
+        assert!(plain.exists());
+        session
+            .handle(
+                json!({"action":"vault_unlock", "passphrase":std::str::from_utf8(FIRST).unwrap()}),
+                &|_| {},
+            )
+            .await
+            .unwrap();
+        let settings = dir.path().join("ui-settings.json");
+        fs::write(&settings, "non-sensitive settings").unwrap();
+        let result = session.handle(request, &|_| {}).await.unwrap();
+        assert_eq!(result["plaintext_exists"], false);
+        assert!(!plain.exists());
+        assert!(settings.exists());
+        let hosts = session
+            .handle(json!({"action":"list"}), &|_| {})
+            .await
+            .unwrap();
+        assert_eq!(hosts["hosts"][0]["password"], "ssh-secret-sentinel");
+        drop(session);
+        let mut restarted = StorageSession::new(plain);
+        assert!(restarted.status().unwrap().locked);
+        restarted
+            .handle(
+                json!({"action":"vault_unlock", "passphrase":std::str::from_utf8(FIRST).unwrap()}),
+                &|_| {},
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            restarted
+                .handle(json!({"action":"list"}), &|_| {})
+                .await
+                .unwrap()["hosts"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn plaintext_removal_refuses_busy_files_and_directories() {
+        let (_dir, mut session) = fixture();
+        session.enable(FIRST, params()).unwrap();
+        let path = session.status().unwrap().plaintext_path;
+        let request = json!({"action":"vault_delete_plaintext", "path":path, "confirmed":true});
+        let lock = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(session.plain_path.with_extension("lock"))
+            .unwrap();
+        fs2::FileExt::lock_exclusive(&lock).unwrap();
+        assert!(session.handle(request.clone(), &|_| {}).await.is_err());
+        assert!(path.is_file());
+        drop(lock);
+        fs::remove_file(&path).unwrap();
+        fs::create_dir(&path).unwrap();
+        assert!(session.handle(request, &|_| {}).await.is_err());
+        assert!(path.is_dir());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn plaintext_removal_refuses_symlink_targets() {
+        let (dir, mut session) = fixture();
+        session.enable(FIRST, params()).unwrap();
+        let path = session.status().unwrap().plaintext_path;
+        let target = dir.path().join("unrelated.json");
+        fs::rename(&path, &target).unwrap();
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+        assert!(
+            session
+                .handle(
+                    json!({"action":"vault_delete_plaintext", "path":path, "confirmed":true}),
+                    &|_| {}
+                )
+                .await
+                .is_err()
+        );
+        assert!(target.is_file());
+        assert!(fs::symlink_metadata(path).unwrap().file_type().is_symlink());
     }
 
     #[tokio::test]
