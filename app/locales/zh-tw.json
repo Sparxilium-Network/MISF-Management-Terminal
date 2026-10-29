@@ -152,6 +152,7 @@
   "progress.apt_list": "正在讀取待更新套件…",
   "audit.failed": "操作日誌無法寫入；請檢查 logs 目錄的權限與磁碟空間。",
   "debug.notice": "DEBUG：獨立目錄；SSH 僅限 loopback IP，停用真實 Passkey，備份限此目錄。",
+  "debug.hardware_notice": "DEBUG：已允許真實 Passkey 操作；僅使用測試金鑰與測試資料。SSH 與備份限制仍生效。",
   "passkey.title": "Passkey",
   "passkey.add": "新增 Passkey…",
   "passkey.unlock": "使用 Passkey 解鎖…",

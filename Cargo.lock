@@ -2378,6 +2378,7 @@ name = "misf-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64ct",
  "chrono",
  "fs2",
  "luksbox-core",
@@ -2392,6 +2393,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "uuid",
+ "windows 0.62.2",
  "zeroize",
 ]
 

@@ -60,6 +60,7 @@ pub struct ManagementApp {
     audit: AuditLog,
     settings_path: PathBuf,
     debug: bool,
+    passkey_allowed: bool,
     preferences: Preferences,
     settings_open: bool,
     worker: Worker,
@@ -100,6 +101,7 @@ impl ManagementApp {
             audit,
             settings_path,
             debug: paths.debug,
+            passkey_allowed: paths.passkey_allowed(),
             preferences,
             settings_open: false,
             worker,
@@ -1018,7 +1020,7 @@ impl ManagementApp {
                             .clicked();
                         passkey = ui
                             .add_enabled(
-                                !self.debug && self.slots.len() < 8,
+                                self.passkey_allowed && self.slots.len() < 8,
                                 egui::Button::new(t.get("passkey.add")),
                             )
                             .clicked();
@@ -1060,7 +1062,7 @@ impl ManagementApp {
                     ui.horizontal(|ui| {
                         submit = ui
                             .add_enabled(
-                                !self.debug,
+                                self.passkey_allowed,
                                 primary(if self.locked {
                                     t.get("passkey.unlock")
                                 } else {
@@ -1111,12 +1113,22 @@ impl ManagementApp {
                     });
                     if dialog.mode == VaultMode::Unlock {
                         passkey = ui
-                            .add_enabled(!self.debug, egui::Button::new(t.get("passkey.unlock")))
+                            .add_enabled(
+                                self.passkey_allowed,
+                                egui::Button::new(t.get("passkey.unlock")),
+                            )
                             .clicked();
                     }
                 }
                 if self.debug {
-                    ui.colored_label(palette.warning, t.get("debug.notice"));
+                    ui.colored_label(
+                        palette.warning,
+                        if self.passkey_allowed {
+                            t.get("debug.hardware_notice")
+                        } else {
+                            t.get("debug.notice")
+                        },
+                    );
                 }
             });
             if self.busy {
@@ -1526,7 +1538,14 @@ impl eframe::App for ManagementApp {
                     );
                 }
                 if self.debug {
-                    ui.colored_label(Palette::for_context(&ctx).warning, t.get("debug.notice"));
+                    ui.colored_label(
+                        Palette::for_context(&ctx).warning,
+                        if self.passkey_allowed {
+                            t.get("debug.hardware_notice")
+                        } else {
+                            t.get("debug.notice")
+                        },
+                    );
                 }
             });
         let palette = Palette::for_context(&ctx);

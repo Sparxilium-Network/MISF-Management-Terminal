@@ -17,7 +17,7 @@ fn main() -> eframe::Result {
         .any(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "MISF Management Terminal\n  --debug.dir=<directory>  Isolated profile; loopback SSH only, real Passkey operations disabled"
+            "MISF Management Terminal\n  --debug.dir=<directory>  Isolated profile; loopback SSH only, real Passkey disabled\n  --debug.allow-passkey    Opt in to real authenticator operations in that debug profile"
         );
         return Ok(());
     }
@@ -60,5 +60,10 @@ fn startup() -> Result<(RuntimePaths, AuditLog), String> {
     audit
         .record(Action::AppStart, Outcome::Succeeded, None, None)
         .map_err(|error| error.to_string())?;
+    if paths.debug_allow_passkey {
+        audit
+            .record(Action::DebugPasskeyEnabled, Outcome::Succeeded, None, None)
+            .map_err(|error| error.to_string())?;
+    }
     Ok((paths, audit))
 }

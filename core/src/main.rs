@@ -19,6 +19,9 @@ async fn main() {
         let paths = RuntimePaths::from_args(std::env::args_os().skip(1))?;
         let audit = AuditLog::new(paths.store.parent().unwrap())?;
         audit.record(Action::AppStart, Outcome::Succeeded, None, None)?;
+        if paths.debug_allow_passkey {
+            audit.record(Action::DebugPasskeyEnabled, Outcome::Succeeded, None, None)?;
+        }
         let result = run(&paths, audit.clone()).await;
         audit.record(
             Action::AppExit,

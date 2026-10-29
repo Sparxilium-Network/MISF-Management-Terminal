@@ -12,6 +12,7 @@ pub struct Session {
     storage: StorageSession,
     pub audit: AuditLog,
     debug: bool,
+    allow_passkey: bool,
     directory: std::path::PathBuf,
 }
 impl Session {
@@ -20,6 +21,7 @@ impl Session {
             storage: StorageSession::new(paths.store.clone()),
             audit,
             debug: paths.debug,
+            allow_passkey: paths.passkey_allowed(),
             directory: paths
                 .store
                 .parent()
@@ -46,8 +48,8 @@ impl Session {
             .as_u64()
             .and_then(|s| usize::try_from(s).ok());
         if self.debug {
-            let blocked = name == "vault_add_passkey"
-                || name == "vault_unlock_passkey"
+            let blocked = (matches!(name.as_str(), "vault_add_passkey" | "vault_unlock_passkey")
+                && !self.allow_passkey)
                 || (matches!(name.as_str(), "probe" | "test" | "check")
                     && !host.as_ref().is_some_and(|h| {
                         h.address
@@ -65,7 +67,7 @@ impl Session {
                 self.audit
                     .record(action, Outcome::Blocked, host.as_ref(), slot)?;
                 anyhow::bail!(
-                    "Debug mode blocks real Passkey operations, SSH outside loopback IPs and backup exports outside the debug directory"
+                    "Debug mode blocks this operation: remote SSH and external backups are prohibited; Passkey requires --debug.allow-passkey"
                 );
             }
         }
@@ -110,6 +112,7 @@ mod tests {
         let paths = RuntimePaths {
             store: dir.path().join("hosts.json"),
             debug: true,
+            debug_allow_passkey: false,
         };
         let log = AuditLog::new(dir.path()).unwrap();
         let mut session = Session::new(&paths, log);
@@ -162,6 +165,7 @@ mod tests {
         let paths = RuntimePaths {
             store: dir.path().join("hosts.json"),
             debug: true,
+            debug_allow_passkey: false,
         };
         let log = AuditLog::new(dir.path()).unwrap();
         std::fs::remove_dir(dir.path().join("logs")).unwrap();
@@ -174,5 +178,36 @@ mod tests {
                 .is_err()
         );
         assert!(!paths.store.exists());
+    }
+
+    #[tokio::test]
+    async fn hardware_opt_in_does_not_disable_other_debug_restrictions() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = RuntimePaths {
+            store: dir.path().join("hosts.json"),
+            debug: true,
+            debug_allow_passkey: true,
+        };
+        let mut session = Session::new(&paths, AuditLog::new(dir.path()).unwrap());
+        // No vault exists: failure happens before the native authenticator is constructed.
+        let error = session
+            .handle(json!({"action":"vault_add_passkey"}), &|_| {})
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(!error.contains("Debug mode"));
+        for request in [
+            json!({"action":"test","id":"missing"}),
+            json!({"action":"vault_backup","path":dir.path().parent().unwrap().join("outside.lbx")}),
+        ] {
+            assert!(
+                session
+                    .handle(request, &|_| {})
+                    .await
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Debug mode")
+            );
+        }
     }
 }

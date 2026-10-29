@@ -1,31 +1,28 @@
 //! LUKSbox's native WebAuthn (Windows) / libfido2 (Linux) transport.
+#[cfg(target_os = "windows")]
+use crate::windows_passkey::WindowsAuthenticator as NativeAuthenticator;
 use anyhow::{Context, Result, ensure};
 use luksbox_core::{Argon2idParams, Header, SlotKind, header::HEADER_SIZE};
-use luksbox_fido2::{Fido2Authenticator, HidAuthenticator, HmacSecretRequest, RP_ID};
+#[cfg(not(target_os = "windows"))]
+use luksbox_fido2::HidAuthenticator as NativeAuthenticator;
+use luksbox_fido2::{Fido2Authenticator, HmacSecretRequest, RP_ID};
 use luksbox_format::{Container, UnlockMaterial};
 use rand_core::{OsRng, RngCore};
 use std::{io::Read, path::Path};
 
-pub(crate) fn authenticator(hello: bool) -> Result<HidAuthenticator> {
+pub(crate) fn authenticator(hello: bool) -> Result<NativeAuthenticator> {
     ensure!(
         std::env::var_os("LUKSBOX_FIDO2_DEBUG").is_none(),
         "Remove LUKSBOX_FIDO2_DEBUG; raw authenticator diagnostics are not allowed"
     );
-    if hello {
-        ensure!(
-            cfg!(target_os = "windows"),
-            "Windows Hello is only available on Windows"
-        );
-        Ok(HidAuthenticator::with_device("windows://hello"))
-    } else {
-        #[cfg(target_os = "windows")]
-        {
-            Ok(HidAuthenticator::with_device("webauthn://usb"))
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            Ok(HidAuthenticator::new())
-        }
+    #[cfg(target_os = "windows")]
+    {
+        Ok(NativeAuthenticator::new(hello)?)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        ensure!(!hello, "Windows Hello is only available on Windows");
+        Ok(NativeAuthenticator::new())
     }
 }
 
@@ -54,14 +51,14 @@ pub(crate) fn enroll(
     // stable PRF material before adding a way to unwrap the volume key.
     let first = auth
         .hmac_secret(RP_ID, &credential.id, &salt, true, pin)
-        .context("Passkey does not provide hmac-secret / PRF")?;
+        .context("Passkey first PRF verification failed")?;
     ensure!(
         first.iter().any(|byte| *byte != 0),
         "Invalid Passkey secret"
     );
     let verified = auth
         .hmac_secret(RP_ID, &credential.id, &salt, true, pin)
-        .context("Passkey verification cancelled or failed")?;
+        .context("Passkey second PRF verification failed")?;
     ensure!(
         first == verified,
         "Passkey secret is not stable; keyslot was not added"
@@ -101,7 +98,7 @@ pub(crate) fn open(
         .collect();
     let (index, secret) = auth
         .hmac_secret_multi(RP_ID, &requests, pin)
-        .context("Passkey verification cancelled or failed")?;
+        .context("Passkey unlock verification failed")?;
     let slot = slots.get(index).context("Invalid authenticator response")?;
     Container::open(
         path,

@@ -77,6 +77,8 @@ BSD 支援 SSH 連線資料與連線測試，目前不提供 BSD 套件檢查。
 
 先以密碼解鎖主機庫，再開啟「管理解鎖金鑰」→「新增 Passkey…」。Windows 可選 **Windows Hello** 或 **FIDO2 安全金鑰**，由原生 WebAuthn 視窗處理 PIN／指紋／臉部驗證。裝置必須支援 **PRF／hmac-secret**；依上游要求，Hello 需要 Windows 11 22H2 以上及相容設定，實際能力以註冊與驗證結果為準。註冊後會要求兩次驗證，取得相同的 PRF 結果後才保存 `Fido2HmacSecret` 槽。取消或驗證失敗不新增槽，但驗證器端可能已建立憑證。
 
+Windows 使用 MISF 自身的 WebAuthn 請求介面，LUKSbox 繼續負責 PRF／容器金鑰包裝。每次註冊或驗證使用新的隨機 challenge 與合法 UTF-8 client JSON，不將固定 32-byte 零值當成 JSON。依 `WebAuthNGetApiVersionNumber` 選擇相容的 options 版本，保持必要的使用者驗證；較新 API 明確啟用 PRF。既有 RP ID、salt 前綴與容器格式維持相容。`0x80090027` 會顯示為原生參數錯誤，並附 API／options 版本，不再籠統標示為取消。
+
 下次啟動可在解鎖提示選「使用 Passkey 解鎖…」。憑證 ID 與公開 salt 儲存在 LUKSbox 槽內；PRF 結果參與包裝／解開容器主金鑰，不保存驗證器私鑰或 PIN。沿用上游 `luksbox.local` RP ID 與跨平台 salt 慣例，保留上游工具相容性。
 
 Linux 使用系統 **libfido2** 與實體 CTAP2 安全金鑰，MISF 要求提供該金鑰的 PIN，僅供當次操作，不保存。Linux 建置另需 `clang libclang-dev libfido2-dev`；執行套件需對應的 libfido2 runtime 與 hidraw 存取權限（Ubuntu 通常為 `libfido2-1`；可能需要發行版的裝置規則）。不把 Windows Hello 的憑證宣稱為跨裝置或雲端同步 Passkey。
@@ -111,6 +113,8 @@ cargo run --locked -p misf -- --debug.dir="C:\temp\misf-test"
 指定後，主機 JSON／LUKSbox、`ui-settings.json` 與 `logs/` 全部使用該目錄，優先於 `MISF_DATA_DIR`；不讀取或遷移預設使用者主機庫，指定失敗直接報錯，禁止回退正式資料。請使用空目錄或測試資料。標題與介面持續顯示 DEBUG；禁止指定預設正式資料目錄。
 
 此模式只允許連線至明確的 loopback IP（`127.0.0.1`／`::1` 等），阻擋外部 SSH 和所有真實 Passkey 註冊／驗證；加密備份也只能匯出至測試目錄內。可測試一般 UI、設定、明文／密碼加密主機庫與金鑰槽撤銷；Passkey 核心流程由模擬驗證器測試，不自動操作使用者的 Hello 或安全金鑰。
+
+實體測試可明確加上 **`--debug.allow-passkey`**，僅在同時提供 `--debug.dir` 時接受。這會允許在測試主機庫使用真實驗證器，可能於安全金鑰或 Hello 建立憑證；請使用測試金鑰。介面持續顯示已啟用硬體操作的 DEBUG 提示，日誌記錄 `debug_passkey_enabled`。外部 SSH／備份位置限制仍生效；不會降級使用者驗證或關閉加密。測試程序見 [Passkey 實體測試](docs/passkey-testing.md)。
 
 原 `hosts.json`、舊 `.msif-management` 目錄、外部備份與磁碟殘留不會自動清除；請在驗證容器和備份後自行處理。啟用後請勿再用不支援 LUKSbox 的舊版操作同一資料目錄，以免重新更新明文副本。看到 `.lbx.header-bak`／`.lbx.meta-bak` 時，這些是上游的加密復原鏡像，請與容器妥善保存。主機資料序列化內容上限 64 MiB。
 

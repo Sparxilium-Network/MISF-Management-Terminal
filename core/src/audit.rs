@@ -15,6 +15,7 @@ use std::{
 #[serde(rename_all = "snake_case")]
 pub enum Action {
     AppStart,
+    DebugPasskeyEnabled,
     AppExit,
     SettingsOpen,
     SettingsClose,

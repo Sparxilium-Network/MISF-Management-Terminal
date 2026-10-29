@@ -20,5 +20,9 @@ luksbox-core = { git = "https://github.com/PentHertz/LUKSbox.git", rev = "69448f
 luksbox-format = { git = "https://github.com/PentHertz/LUKSbox.git", rev = "69448f708f1328d672deb595e359579d630cb0b0" }
 luksbox-vfs = { git = "https://github.com/PentHertz/LUKSbox.git", rev = "69448f708f1328d672deb595e359579d630cb0b0" }
 
+[target.'cfg(target_os = "windows")'.dependencies]
+base64ct = { version = "1", features = ["alloc"] }
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Networking_WindowsWebServices", "Win32_UI_WindowsAndMessaging"] }
+
 [dev-dependencies]
 rand = "0.10"

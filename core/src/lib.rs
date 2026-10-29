@@ -6,6 +6,8 @@ pub mod session;
 pub mod ssh;
 pub mod store;
 pub mod vault;
+#[cfg(target_os = "windows")]
+mod windows_passkey;
 
 use anyhow::{Context, Result, ensure};
 use model::Host;

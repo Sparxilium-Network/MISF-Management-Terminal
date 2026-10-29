@@ -152,6 +152,7 @@
   "progress.apt_list": "Reading available package updates…",
   "audit.failed": "Unable to write the audit log; check logs directory permissions and disk space.",
   "debug.notice": "DEBUG: isolated profile; loopback SSH only, real Passkey disabled, backups confined here.",
+  "debug.hardware_notice": "DEBUG: real Passkey enabled; use test authenticators and test data only. SSH and backup restrictions remain active.",
   "passkey.title": "Passkey",
   "passkey.add": "Add Passkey…",
   "passkey.unlock": "Unlock with Passkey…",
