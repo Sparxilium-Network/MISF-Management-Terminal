@@ -151,6 +151,26 @@ impl Store {
         Ok(result)
     }
 
+    /// "sqlite" with the file's schema version, or "json" for a not yet converted store.
+    pub fn format(&self) -> Result<(&'static str, Option<u32>)> {
+        if let Some(vault) = &self.vault {
+            return vault
+                .lock()
+                .map_err(|_| anyhow::anyhow!("加密工作階段發生錯誤，請重新啟動"))?
+                .format();
+        }
+        if !self.path.exists() {
+            let legacy = self.path.with_extension("json").exists();
+            return Ok((if legacy { "json" } else { "sqlite" }, None));
+        }
+        let mut header = Vec::with_capacity(100);
+        std::io::Read::read_to_end(
+            &mut std::io::Read::take(fs::File::open(&self.path)?, 100),
+            &mut header,
+        )?;
+        Ok(("sqlite", crate::sqlite::header_version(&header)))
+    }
+
     pub fn host(&self, id: &str) -> Result<Host> {
         self.read()?
             .hosts
@@ -237,6 +257,7 @@ mod tests {
         let host = store.host("x").unwrap();
         assert_eq!(host.last_check.unwrap().packages[0].name, "curl");
         assert_eq!(fs::read(&json).unwrap(), original);
+        assert_eq!(store.format().unwrap(), ("sqlite", Some(1)));
         // Later edits go to SQLite only.
         store
             .update(|db| {

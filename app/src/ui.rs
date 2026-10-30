@@ -96,6 +96,9 @@ pub struct ManagementApp {
     batch_manager: String,
     upgrade_confirm: Option<UpgradeConfirm>,
     encrypted: bool,
+    /// "sqlite" or "json" from the last host list; empty while locked.
+    storage_format: String,
+    schema_version: Option<u64>,
     locked: bool,
     plaintext_exists: bool,
     plaintext_path: String,
@@ -154,6 +157,8 @@ impl ManagementApp {
             batch_manager: String::new(),
             upgrade_confirm: None,
             encrypted: false,
+            storage_format: String::new(),
+            schema_version: None,
             locked: false,
             plaintext_exists: false,
             plaintext_path: String::new(),
@@ -210,6 +215,8 @@ impl ManagementApp {
                 self.preferences_form(ui);
                 ui.add_space(12.0);
                 ui.separator();
+                self.about_section(ui);
+                ui.separator();
                 ui.label(t.get("settings.plaintext_notice"));
                 ui.add_space(12.0);
                 close = ui.button(t.get("common.close")).clicked();
@@ -218,6 +225,39 @@ impl ManagementApp {
         if !self.settings_open {
             self.log(Action::SettingsClose, Outcome::Succeeded);
         }
+    }
+
+    fn about_section(&self, ui: &mut egui::Ui) {
+        let t = Translator(self.preferences.language);
+        ui.label(RichText::new(t.get("settings.about")).strong());
+        ui.add_space(4.0);
+        let mut format = match self.storage_format.as_str() {
+            "sqlite" => t.get("settings.format_sqlite").to_owned(),
+            "json" => t.get("settings.format_json").to_owned(),
+            _ => t.get("settings.format_unknown").to_owned(),
+        };
+        if self.encrypted && !self.storage_format.is_empty() {
+            format.push_str(t.get("settings.encrypted_suffix"));
+        }
+        let schema = match (self.storage_format.as_str(), self.schema_version) {
+            ("sqlite", Some(version)) => format!("v{version}"),
+            ("json", _) => t.get("settings.schema_json").to_owned(),
+            _ => "—".to_owned(),
+        };
+        egui::Grid::new("about_grid")
+            .spacing([24.0, 6.0])
+            .show(ui, |ui| {
+                ui.label(t.get("settings.app_version"));
+                ui.label(format!("v{}", env!("CARGO_PKG_VERSION")));
+                ui.end_row();
+                ui.label(t.get("settings.storage_format"));
+                ui.label(format);
+                ui.end_row();
+                ui.label(t.get("settings.schema_version"));
+                ui.label(schema);
+                ui.end_row();
+            });
+        ui.add_space(8.0);
     }
 
     fn preferences_form(&mut self, ui: &mut egui::Ui) {
@@ -401,6 +441,8 @@ impl ManagementApp {
                 }
                 self.path = data["path"].as_str().unwrap_or_default().into();
                 self.encrypted = data["encrypted"].as_bool().unwrap_or(false);
+                self.storage_format = data["format"].as_str().unwrap_or_default().into();
+                self.schema_version = data["schema_version"].as_u64();
                 self.prune_batch();
                 if !self.hosts.iter().any(|h| h.id == self.selected) {
                     self.selected = self.hosts.first().map(|h| h.id.clone()).unwrap_or_default();
@@ -1586,6 +1628,8 @@ impl ManagementApp {
             wipe_host(host);
         }
         self.hosts.clear();
+        self.storage_format.clear();
+        self.schema_version = None;
         self.selected.clear();
         self.search.zeroize();
         self.package_search.zeroize();

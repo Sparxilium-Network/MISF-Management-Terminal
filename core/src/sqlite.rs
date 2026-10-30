@@ -314,6 +314,15 @@ pub(crate) fn to_image(db: &Database) -> Result<Zeroizing<Vec<u8>>> {
     Ok(Zeroizing::new(image.to_vec()))
 }
 
+/// The schema version in a MISF database header, without opening it as a database.
+pub(crate) fn header_version(header: &[u8]) -> Option<u32> {
+    let field = |at: usize| u32::from_be_bytes(header.get(at..at + 4)?.try_into().ok()?).into();
+    let application: Option<u32> = field(68);
+    (header.starts_with(b"SQLite format 3\0") && application == Some(APPLICATION_ID as u32))
+        .then(|| field(60))
+        .flatten()
+}
+
 /// Opens a vault image in memory only, upgrading it like a file on disk.
 pub(crate) fn from_image(bytes: &[u8]) -> Result<Database> {
     let mut conn = Connection::open_in_memory()?;
@@ -464,6 +473,21 @@ mod tests {
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
         assert_eq!(version, 1);
+    }
+
+    #[test]
+    fn header_version_reads_the_slot_only_from_misf_databases() {
+        let image = to_image(&sample()).unwrap();
+        assert_eq!(header_version(&image[..100]), Some(SCHEMA_VERSION as u32));
+        let foreign = {
+            let mut conn = Connection::open_in_memory().unwrap();
+            conn.execute_batch("CREATE TABLE notes (body TEXT)")
+                .unwrap();
+            conn.serialize(MAIN_DB).unwrap().to_vec()
+        };
+        assert_eq!(header_version(&foreign), None);
+        assert_eq!(header_version(b"SQLite format 3\0"), None);
+        assert_eq!(header_version(br#"{"version":1}"#), None);
     }
 
     #[test]

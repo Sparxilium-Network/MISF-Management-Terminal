@@ -755,12 +755,28 @@ async fn ssh_apt_results_roundtrip_inside_luksbox_and_remain_cli_compatible() {
         )
         .await
         .unwrap();
+    let listed = session
+        .handle(json!({"action":"list"}), &|_| {})
+        .await
+        .unwrap();
+    assert_eq!(
+        (listed["format"].clone(), listed["schema_version"].clone()),
+        (json!("json"), json!(null))
+    );
     let result = session
         .handle(json!({"action":"check","id":fixture.host.id}), &|_| {})
         .await
         .unwrap();
     assert_eq!(result["status"], "success");
     assert_eq!(result["packages"].as_array().unwrap().len(), 2);
+    let listed = session
+        .handle(json!({"action":"list"}), &|_| {})
+        .await
+        .unwrap();
+    assert_eq!(
+        (listed["format"].clone(), listed["schema_version"].clone()),
+        (json!("sqlite"), json!(1))
+    );
     session
         .handle(json!({"action":"vault_lock"}), &|_| {})
         .await

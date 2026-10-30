@@ -60,6 +60,16 @@ impl VaultFile {
         crate::store::parse_legacy(&bytes).context("加密主機資料格式錯誤")
     }
 
+    /// Which format the vault holds and its schema version; the legacy JSON has none.
+    pub(crate) fn format(&mut self) -> Result<(&'static str, Option<u32>)> {
+        let Ok(file) = self.vfs.lookup_path(&format!("/{DATABASE_FILE}")) else {
+            return Ok(("json", None));
+        };
+        let mut header = [0; 100];
+        let count = self.vfs.read(file, 0, &mut header)?;
+        Ok(("sqlite", crate::sqlite::header_version(&header[..count])))
+    }
+
     fn read_file(&mut self, name: &str) -> Result<Option<Zeroizing<Vec<u8>>>> {
         let file = match self.vfs.lookup_path(&format!("/{name}")) {
             Ok(file) => file,
