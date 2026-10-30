@@ -2,6 +2,10 @@
 name = "misf"
 version = "0.1.0"
 edition = "2024"
+description = "MISF Management Terminal"
+
+[build-dependencies]
+winresource = "0.1.34"
 
 [features]
 capture = ["dep:image"]

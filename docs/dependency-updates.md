@@ -2,7 +2,7 @@
 
 檢查日期：2026-10-30（Asia/Taipei）。來源為 crates.io 官方 API、Cargo
 registry 與 RustSec。應用程式及本機 FIDO2 副本的直接 registry 依賴已對齊當日
-最新穩定版，共核對 26 種直接 registry 套件；`Cargo.lock` 保存可重現的實際版本。未為了版本數字而強制覆蓋上游
+最新穩定版，共核對 27 種直接 registry 套件（含同日加入的圖示建置套件）；`Cargo.lock` 保存可重現的實際版本。未為了版本數字而強制覆蓋上游
 不相容的間接依賴，因此不能宣稱依賴樹每個節點都是全域最新版。
 
 ## 更新內容
@@ -21,6 +21,7 @@ registry 與 RustSec。應用程式及本機 FIDO2 副本的直接 registry 依�
 | anyhow / fs2 | 1.0.104 / 0.4.3 |
 | tempfile / zeroize | 3.27.0 / 1.9.1 |
 | image / base64ct | 0.25.10 / 1.8.3 |
+| winresource（Windows 圖示建置） | 0.1.34 |
 | windows / getrandom | 0.62.2 / 0.4.3 |
 | rand（測試） | 0.10.3 |
 | russh | 0.65.0 |

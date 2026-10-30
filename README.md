@@ -29,6 +29,8 @@
 
 打包後直接執行 `dist/MISF/misf.exe`。不需要安裝 Rust 或 Java。
 
+圖示素材放在 [`assets/icons/`](assets/icons/)，已納入版本控制。Windows 執行檔與程式視窗均內嵌圖示；Linux 套件另附選單項目與各尺寸圖示，安裝方式見 [`assets/README.md`](assets/README.md)。
+
 Linux／macOS 可使用 `cargo run --locked -p misf`，須在對應平台建置；Linux 建置需要 OpenGL、X11／Wayland、fontconfig 與檔案對話框相關開發套件。此版本已在 Windows 建置與驗證。
 
 ## 自動建置與 Pre-release

@@ -33,8 +33,12 @@ fn main() -> eframe::Result {
             std::process::exit(2);
         }
     };
+    let icon = eframe::icon_data::from_png_bytes(include_bytes!("../../assets/icons/misf-256.png"))
+        .expect("The bundled MISF icon must be a valid PNG");
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
+            .with_app_id("org.sparxilium.misf")
+            .with_icon(icon)
             .with_title(if paths.debug {
                 "MISF · DEBUG · Isolated profile"
             } else {

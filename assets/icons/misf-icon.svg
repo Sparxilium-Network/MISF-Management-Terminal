@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- MISF Management Terminal — flat vector source, transparent canvas -->
+  <g id="terminal">
+    <path fill="#293746" d="M196 160h604c46 0 83 37 83 83v516c0 46-37 83-83 83H213c-46 0-83-37-83-83V243c0-46 37-83 66-83z"/>
+    <path fill="#18212B" d="M130 317h753v442c0 46-37 83-83 83H213c-46 0-83-37-83-83V350c0-18 15-33 33-33z"/>
+    <circle cx="236" cy="245" r="33" fill="#FF5548"/>
+    <circle cx="329" cy="245" r="33" fill="#FFC928"/>
+    <circle cx="421" cy="245" r="33" fill="#46D47A"/>
+    <!-- terminal chevron: path geometry, no text -->
+    <path fill="#F4F5F7" d="M219 397c-9 0-17 4-23 11-12 13-11 33 2 45l88 78-88 78c-13 12-14 32-2 45 12 13 32 14 45 2l113-100c7-6 11-15 11-25s-4-19-11-25L241 406c-6-6-14-9-22-9z"/>
+    <!-- underscore: path geometry, no text -->
+    <path fill="#F4F5F7" d="M380 560h118c12 0 22 10 22 22s-10 22-22 22H380c-12 0-22-10-22-22s10-22 22-22z"/>
+  </g>
+  <g id="lock">
+    <!-- U-shaped shackle -->
+    <path fill="#F4F5F7" fill-rule="evenodd" d="M739 463c-65 0-118 53-118 118v72h45v-72c0-40 33-73 73-73s73 33 73 73v72h45v-72c0-65-53-118-118-118z"/>
+    <!-- lock body -->
+    <path fill="#FFBC19" d="M608 605h261c25 0 45 20 45 45v177c0 25-20 45-45 45H608c-25 0-45-20-45-45V650c0-25 20-45 45-45z"/>
+    <!-- keyhole: path geometry, no text -->
+    <path fill="#18212B" d="M739 670c-27 0-49 22-49 49 0 18 10 34 25 42v45c0 8 7 15 15 15h18c8 0 15-7 15-15v-45c15-8 25-24 25-42 0-27-22-49-49-49z"/>
+  </g>
+</svg>

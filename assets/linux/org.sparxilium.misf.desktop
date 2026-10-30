@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=MISF Management Terminal
+Comment=Manage SSH hosts and check APT package updates
+Comment[zh_TW]=管理 SSH 主機並檢查 APT 套件更新
+Exec=misf
+Icon=misf
+Terminal=false
+Categories=Network;System;
+StartupWMClass=org.sparxilium.misf
