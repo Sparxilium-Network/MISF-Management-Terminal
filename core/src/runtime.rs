@@ -22,13 +22,11 @@ impl RuntimePaths {
                 if let Some(home) =
                     std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"))
                 {
-                    for name in [".misf-management", ".msif-management"] {
-                        let normal = PathBuf::from(&home).join(name);
-                        ensure!(
-                            normal.canonicalize().ok().as_ref() != Some(&directory),
-                            "Debug directory must not be the normal profile directory"
-                        );
-                    }
+                    let normal = PathBuf::from(&home).join(".misf-management");
+                    ensure!(
+                        normal.canonicalize().ok().as_ref() != Some(&directory),
+                        "Debug directory must not be the normal profile directory"
+                    );
                 }
                 Ok(Self {
                     store: directory.join("hosts.db"),

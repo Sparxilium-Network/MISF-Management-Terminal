@@ -10,7 +10,7 @@
 
 預設將主機與憑證存於使用者目錄 `.misf-management/hosts.db`（SQLite 資料庫，檔頭 `user_version` 記錄結構版本，目前為 v2）。開啟較舊版本的資料庫會先在同目錄備份 `hosts.v<N>.bak.db`，再於單一交易內自動升級；較新版本、非 MISF、損壞或結構遭改動的資料庫一律拒絕開啟並保留原檔。可選擇啟用 **LUKSbox 加密主機庫**，之後日常資料改存同目錄的 `hosts.lbx`，每次啟動先解鎖。用 `MISF_DATA_DIR` 可指定資料資料夾。
 
-從 JSON 版本升級時，第一次讀取會把同目錄的 `hosts.json` 匯入新的 `hosts.db`，原 JSON 保持不變（之後的修改只寫入 SQLite）；確認無誤後可自行刪除該明文副本。首次啟動也會自動複製更早的 `.msif-management/hosts.json` 至新資料目錄再匯入，保留原檔，且不覆寫已存在的新資料。
+從 JSON 版本升級時，第一次讀取會把同目錄的 `hosts.json` 匯入新的 `hosts.db`，原 JSON 保持不變（之後的修改只寫入 SQLite）；確認無誤後可自行刪除該明文副本。
 
 ## 啟動與打包
 
@@ -123,7 +123,7 @@ cargo run --locked -p misf -- --debug.dir="C:\temp\misf-test"
 
 實體測試可明確加上 **`--debug.allow-passkey`**，僅在同時提供 `--debug.dir` 時接受。這會允許在測試主機庫使用真實驗證器，可能於安全金鑰或 Hello 建立憑證；請使用測試金鑰。介面持續顯示已啟用硬體操作的 DEBUG 提示，日誌記錄 `debug_passkey_enabled`。外部 SSH／備份位置限制仍生效；不會降級使用者驗證或關閉加密。測試程序見 [Passkey 實體測試](docs/passkey-testing.md)。
 
-每次啟動及密碼／Passkey 解鎖成功後，會檢查目前資料目錄的 `hosts.db`（以及舊版 `hosts.json`）。若已啟用加密且仍有明文副本，解鎖後會顯示欲刪除檔案的完整路徑，提供「保留檔案」與「確認刪除此檔案」。保留後，下次啟動或解鎖會再次詢問，也可從儲存區重新開啟確認。刪除只處理此檔案（刪除 `hosts.db` 時一併刪除中斷交易留下的 `hosts.db-journal`），必須已成功解鎖，且不經資源回收筒；這不是安全抹除。`ui-settings.json` 與 `logs/` 依原設計保持未加密且不會刪除。舊 `.msif-management` 目錄、外部備份與磁碟殘留需自行處理。啟用後請勿再用不支援 LUKSbox 的舊版操作同一資料目錄，以免重新更新明文副本。看到 `.lbx.header-bak`／`.lbx.meta-bak` 時，這些是上游的加密復原鏡像，請與容器妥善保存。主機資料序列化內容上限 64 MiB。
+每次啟動及密碼／Passkey 解鎖成功後，會檢查目前資料目錄的 `hosts.db`（以及舊版 `hosts.json`）。若已啟用加密且仍有明文副本，解鎖後會顯示欲刪除檔案的完整路徑，提供「保留檔案」與「確認刪除此檔案」。保留後，下次啟動或解鎖會再次詢問，也可從儲存區重新開啟確認。刪除只處理此檔案（刪除 `hosts.db` 時一併刪除中斷交易留下的 `hosts.db-journal`），必須已成功解鎖，且不經資源回收筒；這不是安全抹除。`ui-settings.json` 與 `logs/` 依原設計保持未加密且不會刪除。外部備份與磁碟殘留需自行處理。啟用後請勿再用不支援 LUKSbox 的舊版操作同一資料目錄，以免重新更新明文副本。看到 `.lbx.header-bak`／`.lbx.meta-bak` 時，這些是上游的加密復原鏡像，請與容器妥善保存。主機資料序列化內容上限 64 MiB。
 
 可用 [LUKSbox 原生工具](https://github.com/PentHertz/LUKSbox) 直接開啟備份；其容器內保存 `/hosts.db`（標準 SQLite 格式，可用 sqlite3 開啟；舊容器為 `/hosts.json`）。若要讓 MISF 使用備份，請先關閉程式，以備份建立獨立資料目錄並命名為 `hosts.lbx`，再透過 `MISF_DATA_DIR` 指向該目錄；避免覆寫目前主資料。詳細評估見 [LUKSbox 整合評估](docs/luksbox-evaluation.md)。
 

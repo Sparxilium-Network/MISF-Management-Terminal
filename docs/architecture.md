@@ -51,7 +51,7 @@ GUI 與 CLI 經 `core/src/session.rs` 執行共用稽核與 debug 政策，再�
 
 只有明確指定 `--debug.allow-passkey` 且同時指定 debug 目錄，才開放實體驗證器操作，並顯示硬體啟用提示及記錄對應日誌。該開關不解除 SSH 或備份限制；缺少目錄或重複開關均拒絕啟動。
 
-名稱修正後，首次啟動會複製舊版 `.msif-management/hosts.json` 至新目錄（之後由儲存層匯入 SQLite），保留原檔並避免覆寫新目錄既有資料。新目錄有 `.lbx` 時不複製舊明文。明確設定 MISF_DATA_DIR 時使用指定路徑，不自動遷移其他目錄。
+預設資料目錄為使用者目錄下的 `.misf-management`；明確設定 MISF_DATA_DIR 時使用指定路徑。
 
 UI 經工作佇列交給背景執行緒與 Tokio runtime 執行 SSH／磁碟操作，進度與結果回傳畫面，避免介面卡住。執行期間停用衝突操作。關閉程式會終止本機程序及連線，不能保證中止遠端已開始的套件程序。
 

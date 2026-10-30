@@ -34,7 +34,7 @@ impl Store {
         let home = std::env::var_os("USERPROFILE")
             .or_else(|| std::env::var_os("HOME"))
             .context("找不到使用者目錄；請設定 MISF_DATA_DIR")?;
-        profile_path(Path::new(&home))
+        Ok(Path::new(&home).join(".misf-management").join("hosts.db"))
     }
 
     pub fn new(path: PathBuf) -> Self {
@@ -211,33 +211,6 @@ pub(crate) fn parse_legacy(bytes: &[u8]) -> Result<Database> {
     Ok(db)
 }
 
-fn profile_path(home: &Path) -> Result<PathBuf> {
-    let database = home.join(".misf-management").join("hosts.db");
-    let path = database.with_extension("json");
-    // Preserve connection profiles created before the project-name correction;
-    // the store imports the copied JSON into SQLite on first use.
-    let legacy = home.join(".msif-management").join("hosts.json");
-    if !database.exists()
-        && !path.exists()
-        && !crate::vault::encrypted_profile_exists(&path)
-        && legacy.is_file()
-    {
-        let directory = path.parent().unwrap();
-        fs::create_dir_all(directory).context("無法建立 MISF 資料目錄")?;
-        let mut temp = tempfile::NamedTempFile::new_in(directory)?;
-        set_private_permissions(temp.path())?;
-        let mut source = fs::File::open(legacy).context("無法讀取舊版主機資料")?;
-        std::io::copy(&mut source, &mut temp)?;
-        temp.as_file().sync_all()?;
-        if let Err(error) = temp.persist_noclobber(&path)
-            && error.error.kind() != std::io::ErrorKind::AlreadyExists
-        {
-            return Err(error.error).context("無法遷移舊版主機資料");
-        }
-    }
-    Ok(database)
-}
-
 fn set_private_permissions(path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
@@ -252,23 +225,6 @@ fn set_private_permissions(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn legacy_profile_is_copied_once_without_overwriting_existing_data() {
-        let home = tempfile::tempdir().unwrap();
-        let legacy = home.path().join(".msif-management");
-        fs::create_dir(&legacy).unwrap();
-        let original = br#"{"version":1,"hosts":[]}"#;
-        fs::write(legacy.join("hosts.json"), original).unwrap();
-        let database = profile_path(home.path()).unwrap();
-        assert_eq!(database.file_name().unwrap(), "hosts.db");
-        let migrated = database.with_extension("json");
-        assert_eq!(fs::read(&migrated).unwrap(), original);
-        assert_eq!(fs::read(legacy.join("hosts.json")).unwrap(), original);
-        fs::write(&migrated, "existing-new-profile").unwrap();
-        profile_path(home.path()).unwrap();
-        assert_eq!(fs::read(&migrated).unwrap(), b"existing-new-profile");
-    }
 
     #[test]
     fn legacy_json_is_imported_into_sqlite_and_kept_unchanged() {
