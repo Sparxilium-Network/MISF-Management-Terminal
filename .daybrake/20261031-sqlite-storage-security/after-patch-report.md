@@ -9,7 +9,7 @@ Local follow-up: `acf0a0e` adds the `.daybrake/dangerzone/` ignore rule.
 
 The latest source fixes the A7 hostile-WAL issue tested here. MISF rejects a database with a `hosts.db-wal` sidecar before opening it. The command exits with an error, and the supplied main database and WAL remain unchanged.
 
-This result does not resolve every storage finding. A valid plaintext SQLite page bit flip still changes a stored value without being detected, and the Windows-only D1 check was not run in this Ubuntu environment.
+This result does not resolve every storage finding. SQLite does not authenticate individual pages, so a valid altered SQLite image is accepted if it is written through the authorized vault writer. An offline bit flip to the encrypted vault data is rejected by the container's authentication check. The Windows-only D1 check was not run in this Ubuntu environment.
 
 ## Verification
 
@@ -19,7 +19,10 @@ This result does not resolve every storage finding. A valid plaintext SQLite pag
 | `cargo test --locked --workspace` | Passed: 91 tests, 0 failures |
 | A1–A5 hostile schema, application ID, and version cases | Rejected; source main-file hashes unchanged |
 | A6 truncated database, invalid b-tree header, and invalid page size | Rejected; source main-file hashes unchanged |
-| A6 valid-page bit flip | Not detected: `POC_SECRET` became `QOC_SECRET` and the stored value was returned |
+| A6 valid-page bit flip in plaintext `hosts.db` | Not detected: `POC_SECRET` became `QOC_SECRET` and the stored value was returned |
+| A6 malformed SQLite images inside an authenticated vault | Truncated image, invalid page size, and invalid b-tree freeblock pointer were rejected after decryption |
+| A6 valid-page bit flip in an image written by the authorized vault writer | Accepted as `rsh-secret-sentinel`; SQLite has no page-level authentication tag |
+| A6 offline bit flip to an encrypted vault chunk | Rejected by the container authentication check before the SQLite image was read |
 | A7 malicious WAL | Rejected before SQLite open; source main hash unchanged; WAL remained present with identical SHA-256 and 4,152-byte length |
 | B1–B2 encrypted storage lifecycle | Passed; plaintext removed before encrypted writes, no plaintext returned, no secret found in vault bytes |
 | B3 secure deletion | Passed; deleted secret absent from database bytes |
@@ -31,6 +34,8 @@ This result does not resolve every storage finding. A valid plaintext SQLite pag
 | E1 same-account plaintext tampering | Not rerun in this pass; remains a known limitation for a process that can write the profile |
 
 The A7 fixture staged an extra trigger in the WAL. MISF returned the WAL refusal error before replaying it. The test measured the source file and sidecar bytes before opening a disposable inspection copy, so the inspection itself could not consume the source WAL.
+
+The encrypted A6 follow-up used a temporary Rust test injected into `core/src/vault.rs`; the test runner restored that source file byte-for-byte afterward. It intentionally wrote a valid, bit-flipped SQLite image through the unlocked vault writer to distinguish SQLite page validation from at-rest ciphertext authentication. The repeatable harness is `.daybrake/dangerzone/probe_encrypted_a6.py`.
 
 The workflow integration tests bind temporary local TCP sockets. The sandbox denied those binds on the first run; the complete workspace test command was rerun with the required permission and all 91 tests passed.
 
