@@ -56,6 +56,10 @@ fn save_results(store: &Store, results: Vec<(String, model::CheckResult)>) -> Re
     store.update(|db| {
         for (id, result) in results {
             if let Some(current) = db.hosts.iter_mut().find(|h| h.id == id) {
+                if !result.distro.is_empty() {
+                    current.distro = result.distro.clone();
+                    current.package_manager = result.package_manager.clone();
+                }
                 current.last_check = Some(result);
             }
         }
@@ -81,8 +85,13 @@ pub async fn dispatch(request: Value, store: &Store, progress: &dyn Fn(&str)) ->
                 if let Some(old) = db.hosts.iter_mut().find(|h| h.id == host.id) {
                     if old.address != host.address || old.port != host.port {
                         host.fingerprint.clear();
+                        host.distro.clear();
+                        host.package_manager.clear();
                         host.last_check = None;
                     } else {
+                        // Detection results only ever come from the host itself.
+                        host.distro = old.distro.clone();
+                        host.package_manager = old.package_manager.clone();
                         host.fingerprint = old.fingerprint.clone();
                         host.last_check = if old.os == host.os {
                             old.last_check.clone()
@@ -93,6 +102,8 @@ pub async fn dispatch(request: Value, store: &Store, progress: &dyn Fn(&str)) ->
                     *old = host.clone();
                 } else {
                     host.fingerprint.clear();
+                    host.distro.clear();
+                    host.package_manager.clear();
                     host.last_check = None;
                     db.hosts.push(host.clone());
                 }
@@ -126,7 +137,20 @@ pub async fn dispatch(request: Value, store: &Store, progress: &dyn Fn(&str)) ->
             })?;
             Ok(json!({"trusted": true}))
         }
-        "test" => Ok(json!({"os": ssh::test_connection(&store.host(id)?).await?})),
+        "test" => {
+            let platform = ssh::test_connection(&store.host(id)?).await?;
+            let manager = platform.manager.map(ssh::Manager::id).unwrap_or_default();
+            store.update(|db| {
+                if let Some(host) = db.hosts.iter_mut().find(|h| h.id == id) {
+                    host.distro = platform.distro.clone();
+                    host.package_manager = manager.into();
+                }
+                Ok(())
+            })?;
+            Ok(
+                json!({"os": platform.kernel, "distro": platform.distro, "package_manager": manager}),
+            )
+        }
         "check" | "upgrade" => {
             let host = store.host(id)?;
             let result = if action == "upgrade" {
@@ -144,6 +168,12 @@ pub async fn dispatch(request: Value, store: &Store, progress: &dyn Fn(&str)) ->
                 _ => anyhow::bail!("不支援的批次操作"),
             };
             let hosts = batch_hosts(&request, store)?;
+            // Mixed managers would mean mixed commands under one confirmation.
+            let manager = hosts[0].manager();
+            ensure!(
+                !manager.is_empty() && hosts.iter().all(|h| h.manager() == manager),
+                "批次作業只能包含同一種已偵測套件管理器的主機；請先測試連線偵測各主機"
+            );
             let total = hosts.len();
             progress(&format!("批次作業進度 0/{total}"));
             let limit = Arc::new(tokio::sync::Semaphore::new(BATCH_PARALLEL));

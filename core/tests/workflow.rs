@@ -11,7 +11,7 @@ use russh::{
 };
 use serde_json::json;
 use std::{
-    collections::HashSet,
+    collections::HashMap,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -19,30 +19,96 @@ use std::{
     time::Duration,
 };
 
+const APT_HOST: &str = "Linux\n6.12.0\n__MISF_NAME__Debian GNU/Linux\n__MISF_VERSION__13\n__MISF_PRETTY__Debian GNU/Linux 13 (trixie)\n__MISF_PM__apt\n";
+const DNF_HOST: &str = "Linux\n5.14.0\n__MISF_NAME__Rocky Linux\n__MISF_VERSION__9.5\n__MISF_PM__dnf\n__MISF_PM__yum\n";
+
 #[derive(Default)]
 struct State {
     auth_attempts: AtomicUsize,
     commands: Mutex<Vec<String>>,
     pty_count: AtomicUsize,
+    detect: String,
     fail_update: bool,
     wrong_sudo: bool,
     /// Set once an upgrade ran: later listings report only the held-back package.
     upgraded: AtomicBool,
 }
 
+impl State {
+    fn reply(&self, command: &str) -> (String, u32) {
+        let upgraded = self.upgraded.load(Ordering::SeqCst);
+        if command == ssh::DETECT {
+            (self.detect.clone(), 0)
+        } else if command == ssh::LIST {
+            let held = "libc6/stable 2.36-9 amd64 [upgradable from: 2.36-8]\n";
+            let listing = if upgraded {
+                format!("Listing...\n{held}")
+            } else {
+                format!(
+                    "Listing...\nopenssl/stable-security 3.0.17 amd64 [upgradable from: 3.0.16]\n{held}"
+                )
+            };
+            (listing, 0)
+        } else if [ssh::DNF_LIST, ssh::SUDO_DNF_LIST].contains(&command) {
+            // A long name wraps onto its own line, as yum and dnf do on narrow terminals.
+            let held = "kernel-core-with-a-very-long-package-name.x86_64\r\n      5.14.0-503.el9   baseos\r\n";
+            let fresh = if upgraded {
+                ""
+            } else {
+                "openssl.x86_64   1:3.0.7-28.el9   baseos\r\n"
+            };
+            (
+                format!(
+                    "\r\nLast metadata expiration check: 0:00:01 ago.\r\n{fresh}{held}__MISF_INSTALLED__\r\nopenssl.x86_64 1:3.0.7-27.el9\r\nkernel-core-with-a-very-long-package-name.x86_64 5.14.0-427.el9\r\n"
+                ),
+                100,
+            )
+        } else if [
+            ssh::UPGRADE,
+            ssh::SUDO_UPGRADE,
+            ssh::DNF_UPGRADE,
+            ssh::SUDO_DNF_UPGRADE,
+        ]
+        .contains(&command)
+        {
+            self.upgraded.store(true, Ordering::SeqCst);
+            ("Setting up openssl (3.0.17) ...\r\n".into(), 0)
+        } else if [ssh::UPDATE, ssh::SUDO_UPDATE].contains(&command) {
+            if self.fail_update {
+                ("E: repository unavailable\n".into(), 100)
+            } else {
+                (
+                    "0% [Working]\r\x1b[2K0% [Connecting]\r\x1b[32mHit:1 test-repo\x1b[0m\r\nReading package lists... Done\r\n".into(),
+                    0,
+                )
+            }
+        } else if [ssh::DNF_UPDATE, ssh::SUDO_DNF_UPDATE].contains(&command) {
+            if self.fail_update {
+                (
+                    "Error: Failed to download metadata for repo 'baseos'\n".into(),
+                    1,
+                )
+            } else {
+                ("Metadata cache created.\r\n".into(), 0)
+            }
+        } else {
+            ("unexpected command\n".into(), 127)
+        }
+    }
+}
+
 #[derive(Clone)]
 struct Mock {
     state: Arc<State>,
-    waiting: HashSet<ChannelId>,
-    upgrading: HashSet<ChannelId>,
+    /// Commands waiting for their sudo password, by channel.
+    waiting: HashMap<ChannelId, String>,
 }
 impl server::Server for Mock {
     type Handler = Self;
     fn new_client(&mut self, _: Option<std::net::SocketAddr>) -> Self {
         Self {
             state: self.state.clone(),
-            waiting: HashSet::new(),
-            upgrading: HashSet::new(),
+            waiting: HashMap::new(),
         }
     }
 }
@@ -120,35 +186,14 @@ impl server::Handler for Mock {
         let command = String::from_utf8_lossy(data).into_owned();
         self.state.commands.lock().unwrap().push(command.clone());
         session.channel_success(channel)?;
-        if command == "uname -s" {
-            finish(session, channel, "Linux\n", 0)
-        } else if command == ssh::DETECT {
-            finish(session, channel, "Linux\n__MISF_APT__\n", 0)
-        } else if command == ssh::LIST {
-            let held = "libc6/stable 2.36-9 amd64 [upgradable from: 2.36-8]\n";
-            let listing = if self.state.upgraded.load(Ordering::SeqCst) {
-                format!("Listing...\n{held}")
-            } else {
-                format!(
-                    "Listing...\nopenssl/stable-security 3.0.17 amd64 [upgradable from: 3.0.16]\n{held}"
-                )
-            };
-            finish(session, channel, &listing, 0)
-        } else if command == ssh::UPGRADE {
-            self.state.upgraded.store(true, Ordering::SeqCst);
-            finish(session, channel, "Setting up openssl (3.0.17) ...\n", 0)
-        } else if command.starts_with("LC_ALL=C sudo -S") {
-            self.waiting.insert(channel);
-            if command == ssh::SUDO_UPGRADE {
-                self.upgrading.insert(channel);
-            }
+        if command.contains("sudo -S") {
+            self.waiting.insert(channel, command);
             // Deliberately split the sudo marker across SSH packets.
             session.data(channel, b"__MISF_SUDO_".to_vec())?;
             session.data(channel, b"PROMPT__".to_vec())
-        } else if command.starts_with("LC_ALL=C apt-get ") {
-            finish(session, channel, "Reading package lists... Done\n", 0)
         } else {
-            finish(session, channel, "unexpected command\n", 127)
+            let (text, code) = self.state.reply(&command);
+            finish(session, channel, &text, code)
         }
     }
     async fn data(
@@ -157,22 +202,13 @@ impl server::Handler for Mock {
         data: &[u8],
         session: &mut Session,
     ) -> Result<(), Self::Error> {
-        if self.waiting.remove(&channel) {
+        if let Some(command) = self.waiting.remove(&channel) {
             assert_eq!(data, b"sudo-secret\n");
             if self.state.wrong_sudo {
                 session.data(channel, b"Sorry, try again.\n__MISF_SUDO_PROMPT__".to_vec())
-            } else if self.state.fail_update {
-                finish(session, channel, "E: repository unavailable\n", 100)
-            } else if self.upgrading.remove(&channel) {
-                self.state.upgraded.store(true, Ordering::SeqCst);
-                finish(session, channel, "Setting up openssl (3.0.17) ...\r\n", 0)
             } else {
-                finish(
-                    session,
-                    channel,
-                    "0% [Working]\r\x1b[2K0% [Connecting]\r\x1b[32mHit:1 test-repo\x1b[0m\r\nReading package lists... Done\r\n",
-                    0,
-                )
+                let (text, code) = self.state.reply(&command);
+                finish(session, channel, &text, code)
             }
         } else {
             Ok(())
@@ -192,6 +228,10 @@ impl Drop for Fixture {
 }
 
 async fn fixture(fail_update: bool, wrong_sudo: bool) -> Fixture {
+    fixture_on(APT_HOST, fail_update, wrong_sudo).await
+}
+
+async fn fixture_on(detect: &str, fail_update: bool, wrong_sudo: bool) -> Fixture {
     let key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
     let fingerprint = key.public_key().fingerprint(HashAlg::Sha256).to_string();
     let config = Arc::new(server::Config {
@@ -205,14 +245,14 @@ async fn fixture(fail_update: bool, wrong_sudo: bool) -> Fixture {
         .unwrap();
     let port = listener.local_addr().unwrap().port();
     let state = Arc::new(State {
+        detect: detect.into(),
         fail_update,
         wrong_sudo,
         ..Default::default()
     });
     let mut server = Mock {
         state: state.clone(),
-        waiting: HashSet::new(),
-        upgrading: HashSet::new(),
+        waiting: HashMap::new(),
     };
     let task = tokio::spawn(async move {
         server.run_on_socket(config, &listener).await.unwrap();
@@ -229,6 +269,12 @@ async fn fixture(fail_update: bool, wrong_sudo: bool) -> Fixture {
         sudo_password: "sudo-secret".into(),
         use_pty: true,
         fingerprint,
+        package_manager: ssh::parse_platform(detect)
+            .unwrap()
+            .manager
+            .map(ssh::Manager::id)
+            .unwrap_or_default()
+            .into(),
         ..Default::default()
     };
     Fixture { host, state, task }
@@ -237,12 +283,17 @@ async fn fixture(fail_update: bool, wrong_sudo: bool) -> Fixture {
 #[tokio::test]
 async fn password_pty_sudo_and_packages_work_end_to_end() {
     let fixture = fixture(false, false).await;
-    assert_eq!(ssh::test_connection(&fixture.host).await.unwrap(), "Linux");
+    let platform = ssh::test_connection(&fixture.host).await.unwrap();
+    assert_eq!(platform.kernel, "Linux");
+    assert_eq!(platform.distro, "Debian 13");
+    assert_eq!(platform.manager, Some(ssh::Manager::Apt));
     let check = ssh::check(&fixture.host, &|_| {}).await;
     assert_eq!(check.status, "success", "{}", check.error);
     assert_eq!(check.packages.len(), 2);
     assert_eq!(check.packages[0].current_version, "3.0.16");
     assert_eq!(check.packages[0].candidate_version, "3.0.17");
+    assert_eq!(check.distro, "Debian 13");
+    assert_eq!(check.package_manager, "apt");
     assert_eq!(fixture.state.pty_count.load(Ordering::SeqCst), 1);
     assert!(!check.output.contains("sudo-secret"));
     assert!(!check.output.contains("__MISF_SUDO_PROMPT__"));
@@ -284,7 +335,7 @@ async fn sudo_upgrade_reports_installed_and_held_back_packages() {
     assert!(!result.output.contains("sudo-secret"));
     assert_eq!(fixture.state.pty_count.load(Ordering::SeqCst), 2);
     let commands = fixture.state.commands.lock().unwrap();
-    assert_eq!(*commands, ssh::apt_commands(&fixture.host, true));
+    assert_eq!(*commands, ssh::package_commands(&fixture.host, true));
     assert!(
         commands
             .iter()
@@ -315,30 +366,146 @@ async fn failed_index_update_never_starts_an_upgrade() {
 }
 
 #[tokio::test]
+async fn sudo_dnf_upgrade_parses_wrapped_rows_and_reports_held_back_packages() {
+    let fixture = fixture_on(DNF_HOST, false, false).await;
+    let result = ssh::upgrade(&fixture.host, &|_| {}).await;
+    assert_eq!(result.status, "success", "{}", result.error);
+    assert_eq!(result.distro, "Rocky Linux 9.5");
+    assert_eq!(result.package_manager, "dnf");
+    assert_eq!(result.upgraded.len(), 1);
+    assert_eq!(result.upgraded[0].name, "openssl");
+    assert_eq!(result.upgraded[0].current_version, "1:3.0.7-27.el9");
+    assert_eq!(result.upgraded[0].candidate_version, "1:3.0.7-28.el9");
+    assert_eq!(result.packages.len(), 1);
+    assert_eq!(
+        result.packages[0].name,
+        "kernel-core-with-a-very-long-package-name"
+    );
+    assert_eq!(result.packages[0].current_version, "5.14.0-427.el9");
+    // Update, both listings and the upgrade all go through sudo.
+    assert_eq!(fixture.state.pty_count.load(Ordering::SeqCst), 4);
+    let commands = fixture.state.commands.lock().unwrap();
+    assert_eq!(*commands, ssh::package_commands(&fixture.host, true));
+    assert!(commands[1..].iter().all(|c| !c.contains("apt")));
+}
+
+#[tokio::test]
+async fn recorded_manager_mismatch_and_unsupported_systems_never_touch_packages() {
+    let mut fixture = fixture_on(DNF_HOST, false, false).await;
+    fixture.host.package_manager = "apt".into();
+    let result = ssh::upgrade(&fixture.host, &|_| {}).await;
+    assert_eq!(result.status, "failed");
+    assert!(result.error.contains("測試連線"), "{}", result.error);
+    assert_eq!(*fixture.state.commands.lock().unwrap(), [ssh::DETECT]);
+    let mut fixture = fixture_on("OpenBSD\n7.6\n", false, false).await;
+    fixture.host.package_manager.clear();
+    let result = ssh::check(&fixture.host, &|_| {}).await;
+    assert_eq!(result.status, "unsupported");
+    assert_eq!(result.distro, "OpenBSD 7.6");
+    assert_eq!(*fixture.state.commands.lock().unwrap(), [ssh::DETECT]);
+}
+
+/// Saves, trusts and detects a host the way the UI does before batching it.
+async fn register(store: &Store, fixture: &Fixture, name: &str) -> String {
+    let mut host = fixture.host.clone();
+    host.id.clear();
+    host.name = name.into();
+    let saved = dispatch(json!({"action":"save","host":host}), store, &|_| {})
+        .await
+        .unwrap();
+    let id = saved["id"].as_str().unwrap().to_owned();
+    assert!(store.host(&id).unwrap().package_manager.is_empty());
+    dispatch(
+        json!({"action":"trust","id":id,"fingerprint":fixture.host.fingerprint}),
+        store,
+        &|_| {},
+    )
+    .await
+    .unwrap();
+    dispatch(json!({"action":"test","id":id}), store, &|_| {})
+        .await
+        .unwrap();
+    id
+}
+
+#[tokio::test]
+async fn batches_reject_mixed_or_undetected_package_managers() {
+    let (apt, dnf) = (
+        fixture(false, false).await,
+        fixture_on(DNF_HOST, false, false).await,
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::new(dir.path().join("hosts.json"));
+    let debian = register(&store, &apt, "debian").await;
+    let rocky = register(&store, &dnf, "rocky").await;
+    let saved = store.host(&rocky).unwrap();
+    assert_eq!(
+        (saved.distro.as_str(), saved.package_manager.as_str()),
+        ("Rocky Linux 9.5", "dnf")
+    );
+    let mut fresh = apt.host.clone();
+    fresh.id.clear();
+    let fresh = dispatch(json!({"action":"save","host":fresh}), &store, &|_| {})
+        .await
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    for ids in [[&debian, &rocky], [&debian, &fresh]] {
+        let error = dispatch(
+            json!({"action":"batch","operation":"check","ids":ids}),
+            &store,
+            &|_| {},
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("同一種"), "{error}");
+    }
+    assert!(
+        !apt.state
+            .commands
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|c| c.contains("update"))
+    );
+    let response = dispatch(
+        json!({"action":"batch","operation":"check","ids":[rocky]}),
+        &store,
+        &|_| {},
+    )
+    .await
+    .unwrap();
+    assert_eq!(response["results"][0]["result"]["status"], "success");
+    assert_eq!(
+        store
+            .host(&rocky)
+            .unwrap()
+            .last_check
+            .unwrap()
+            .packages
+            .len(),
+        2
+    );
+}
+
+#[tokio::test]
 async fn batch_runs_each_host_and_saves_per_host_results() {
     let fixture = fixture(false, false).await;
     let dir = tempfile::tempdir().unwrap();
     let store = Store::new(dir.path().join("hosts.json"));
     let mut ids = vec![];
-    for name in ["first", "second", "untrusted"] {
-        let mut host = fixture.host.clone();
-        host.id.clear();
-        host.name = name.into();
-        let saved = dispatch(json!({"action":"save","host":host}), &store, &|_| {})
-            .await
-            .unwrap();
-        let id = saved["id"].as_str().unwrap().to_owned();
-        if name != "untrusted" {
-            dispatch(
-                json!({"action":"trust","id":id,"fingerprint":fixture.host.fingerprint}),
-                &store,
-                &|_| {},
-            )
-            .await
-            .unwrap();
-        }
-        ids.push(id);
+    for name in ["first", "second", "changed"] {
+        ids.push(register(&store, &fixture, name).await);
     }
+    // A key that changed after detection fails only that host.
+    dispatch(
+        json!({"action":"trust","id":ids[2],"fingerprint":"SHA256:changed-fingerprint-0000000"}),
+        &store,
+        &|_| {},
+    )
+    .await
+    .unwrap();
     let progress = Mutex::new(vec![]);
     let response = dispatch(
         json!({"action":"batch","operation":"check","ids":[ids[0], ids[1], ids[2], ids[0]]}),
@@ -385,7 +552,10 @@ async fn imported_private_key_authentication_works() {
         .to_string();
     fixture.host.password.clear();
     fixture.host.validate().unwrap();
-    assert_eq!(ssh::test_connection(&fixture.host).await.unwrap(), "Linux");
+    assert_eq!(
+        ssh::test_connection(&fixture.host).await.unwrap().kernel,
+        "Linux"
+    );
 }
 
 #[tokio::test]
@@ -457,16 +627,15 @@ async fn repeated_sudo_prompt_fails_without_repeated_password_submission() {
 }
 
 #[tokio::test]
-async fn failed_authentication_and_bsd_are_reported_without_package_results() {
+async fn failed_authentication_is_reported_without_package_results() {
     let fixture = fixture(false, false).await;
     let mut wrong = fixture.host.clone();
     wrong.password = "wrong".into();
     assert!(ssh::test_connection(&wrong).await.is_err());
-    let before = fixture.state.auth_attempts.load(Ordering::SeqCst);
-    wrong.os = "BSD".into();
     let check = ssh::check(&wrong, &|_| {}).await;
-    assert_eq!(check.status, "unsupported");
-    assert_eq!(fixture.state.auth_attempts.load(Ordering::SeqCst), before);
+    assert_eq!(check.status, "failed");
+    assert!(check.packages.is_empty() && check.distro.is_empty());
+    assert!(fixture.state.commands.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -496,11 +665,23 @@ async fn persistence_saves_check_and_resets_trust_when_endpoint_changes() {
     assert_eq!(result["status"], "success");
     let mut updated = store.host(id).unwrap();
     assert_eq!(updated.last_check.as_ref().unwrap().packages.len(), 2);
+    assert_eq!(updated.distro, "Debian 13");
+    // The editor cannot overwrite detection results.
+    updated.package_manager = "pkg".into();
+    dispatch(
+        json!({"action":"save","host":updated.clone()}),
+        &store,
+        &|_| {},
+    )
+    .await
+    .unwrap();
+    assert_eq!(store.host(id).unwrap().package_manager, "apt");
     updated.port = 1;
     dispatch(json!({"action":"save","host":updated}), &store, &|_| {})
         .await
         .unwrap();
     assert!(store.host(id).unwrap().fingerprint.is_empty());
+    assert!(store.host(id).unwrap().package_manager.is_empty());
     assert!(store.host(id).unwrap().last_check.is_none());
     dispatch(json!({"action":"delete","id":id}), &store, &|_| {})
         .await

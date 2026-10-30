@@ -92,6 +92,8 @@ pub struct ManagementApp {
     tab: usize,
     view: View,
     batch_selected: BTreeSet<String>,
+    /// The one package manager the batch selection may contain.
+    batch_manager: String,
     upgrade_confirm: Option<UpgradeConfirm>,
     encrypted: bool,
     locked: bool,
@@ -149,6 +151,7 @@ impl ManagementApp {
             tab: 0,
             view: View::Host,
             batch_selected: BTreeSet::new(),
+            batch_manager: String::new(),
             upgrade_confirm: None,
             encrypted: false,
             locked: false,
@@ -396,9 +399,7 @@ impl ManagementApp {
                 }
                 self.path = data["path"].as_str().unwrap_or_default().into();
                 self.encrypted = data["encrypted"].as_bool().unwrap_or(false);
-                let hosts = &self.hosts;
-                self.batch_selected
-                    .retain(|id| hosts.iter().any(|h| h.id == *id && batch_ready(h)));
+                self.prune_batch();
                 if !self.hosts.iter().any(|h| h.id == self.selected) {
                     self.selected = self.hosts.first().map(|h| h.id.clone()).unwrap_or_default();
                 }
@@ -449,9 +450,24 @@ impl ManagementApp {
                 }
             }
             "test" => {
+                let distro = data["distro"].as_str().unwrap_or_default();
+                let manager = data["package_manager"].as_str().unwrap_or_default();
+                if let Some(host) = self.hosts.iter_mut().find(|h| h.id == self.selected) {
+                    host.distro = distro.into();
+                    host.package_manager = manager.into();
+                }
+                self.prune_batch();
+                let os = if distro.is_empty() {
+                    data["os"].as_str().unwrap_or_default()
+                } else {
+                    distro
+                };
                 self.status = t.format(
                     "status.connected",
-                    &[("os", data["os"].as_str().unwrap_or_default().into())],
+                    &[
+                        ("os", os.into()),
+                        ("manager", manager_label(t, manager).into()),
+                    ],
                 )
             }
             "check" | "upgrade" => match serde_json::from_value::<CheckResult>(data) {
@@ -464,8 +480,9 @@ impl ManagementApp {
                     }
                     .into();
                     if let Some(host) = self.hosts.iter_mut().find(|h| h.id == self.selected) {
-                        host.last_check = Some(result);
+                        record_result(host, result);
                     }
+                    self.prune_batch();
                 }
                 Err(error) => self.error = Some(error.to_string()),
             },
@@ -484,9 +501,10 @@ impl ManagementApp {
                     }
                     if let Some(host) = self.hosts.iter_mut().find(|h| entry["id"] == h.id.as_str())
                     {
-                        host.last_check = Some(result);
+                        record_result(host, result);
                     }
                 }
+                self.prune_batch();
                 self.status = t.format(
                     "status.batch_done",
                     &[
@@ -636,6 +654,13 @@ impl ManagementApp {
                                 .size(11.0)
                                 .color(Color32::from_rgb(166, 187, 213)),
                             );
+                            if !host.distro.is_empty() {
+                                ui.label(
+                                    RichText::new(&host.distro)
+                                        .size(11.0)
+                                        .color(Color32::from_rgb(166, 187, 213)),
+                                );
+                            }
                         })
                         .response;
                     if ui
@@ -783,7 +808,7 @@ impl ManagementApp {
                 host.username,
                 host.address,
                 host.port,
-                host.os,
+                system_label(t, &host),
                 if host.auth_type == "key" {
                     "SSH Key"
                 } else {
@@ -799,7 +824,7 @@ impl ManagementApp {
                 test,
                 t,
                 t.get("hint.test_title"),
-                &["uname -s"],
+                &[ssh::DETECT],
                 t.get("hint.test_effect"),
                 t.get("hint.test_risk"),
             )
@@ -821,25 +846,44 @@ impl ManagementApp {
                 self.after_trust = None;
                 self.send(json!({"action":"probe","id":self.selected}));
             }
-            let check = ui.add_enabled(host.os != "BSD", primary(t.get("apt.check")));
+            let detected = ssh::Manager::from_id(host.manager());
+            let manager = [("manager", manager_label(t, host.manager()).to_owned())];
+            let (check_label, upgrade_label, check_effect) = match detected {
+                Some(_) => (
+                    t.format("apt.check", &manager),
+                    t.format("apt.upgrade", &manager),
+                    t.get("hint.check_effect").to_owned(),
+                ),
+                None => (
+                    t.get("apt.check_detect").to_owned(),
+                    t.get("apt.upgrade_detect").to_owned(),
+                    format!(
+                        "{}\n{}",
+                        t.get("hint.detect_note"),
+                        t.get("hint.check_effect")
+                    ),
+                ),
+            };
+            let check = ui.add(primary(&check_label));
             if hint(
                 check,
                 t,
-                t.get("hint.check_title"),
-                &ssh::apt_commands(&host, false),
-                t.get("hint.check_effect"),
+                &t.format("hint.check_title", &manager),
+                &ssh::package_commands(&host, false),
+                &check_effect,
                 t.get("hint.check_risk"),
             )
             .clicked()
             {
                 self.start_connection_action("check");
             }
-            let upgrade = ui.add_enabled(host.os != "BSD", danger(t.get("apt.upgrade")));
+            // An upgrade confirmation must show real commands, so it waits for detection.
+            let upgrade = ui.add_enabled(detected.is_some(), danger(&upgrade_label));
             if hint(
-                upgrade,
+                upgrade.on_disabled_hover_text(t.get("apt.upgrade_needs_detect")),
                 t,
-                t.get("hint.upgrade_title"),
-                &ssh::apt_commands(&host, true),
+                &t.format("hint.upgrade_title", &manager),
+                &ssh::package_commands(&host, true),
                 t.get("hint.upgrade_effect"),
                 t.get("hint.upgrade_risk"),
             )
@@ -961,7 +1005,6 @@ impl ManagementApp {
                         }
                     }
                     Some(r) => r.error.as_str(),
-                    None if host.os == "BSD" => t.get("apt.bsd_description"),
                     None => t.get("apt.check_hint"),
                 };
                 (
@@ -1026,26 +1069,73 @@ impl ManagementApp {
         });
     }
 
+    /// Keeps the selection to ready hosts of one package manager, defaulting to the most common.
+    fn prune_batch(&mut self) {
+        let managers = batch_managers(&self.hosts);
+        if !managers.iter().any(|(id, _)| *id == self.batch_manager) {
+            self.batch_manager = managers
+                .first()
+                .map(|(id, _)| id.clone())
+                .unwrap_or_default();
+        }
+        let (hosts, manager) = (&self.hosts, &self.batch_manager);
+        self.batch_selected.retain(|id| {
+            hosts
+                .iter()
+                .any(|h| h.id == *id && batch_ready(h) && h.manager() == manager)
+        });
+    }
+
     fn batch_view(&mut self, ui: &mut egui::Ui, viewport_height: f32) {
         let palette = Palette::for_context(ui.ctx());
         let t = Translator(self.preferences.language);
         ui.label(RichText::new(t.get("batch.title")).size(29.0).strong());
         ui.label(RichText::new(t.get("batch.description")).color(palette.muted));
         ui.add_space(10.0);
+        self.prune_batch();
+        let managers = batch_managers(&self.hosts);
+        ui.horizontal_wrapped(|ui| {
+            ui.label(t.get("batch.manager"));
+            if managers.is_empty() {
+                ui.label(RichText::new(t.get("batch.no_manager")).color(palette.muted));
+            }
+            for (id, count) in &managers {
+                let label = format!("{} ({count})", manager_label(t, id));
+                if ui
+                    .selectable_label(self.batch_manager == *id, label)
+                    .clicked()
+                    && self.batch_manager != *id
+                {
+                    self.batch_manager = id.clone();
+                    self.batch_selected.clear();
+                    self.log(Action::BatchSelect, Outcome::Succeeded);
+                }
+            }
+        });
+        let manager = [("manager", manager_label(t, &self.batch_manager).to_owned())];
+        let commands = |upgrade| {
+            ssh::Manager::from_id(&self.batch_manager)
+                .map(|m| ssh::manager_commands(m, false, upgrade))
+                .unwrap_or_default()
+        };
+        let (check_commands, upgrade_commands) = (commands(false), commands(true));
+        // Most pending updates first; the stable sort keeps the saved order among equals.
+        let mut order: Vec<usize> = (0..self.hosts.len()).collect();
+        order.sort_by_key(|&i| std::cmp::Reverse(pending_count(&self.hosts[i])));
         // Display order, never the set's order, so the request matches what the user sees.
-        let selected: Vec<String> = self
-            .hosts
+        let selected: Vec<String> = order
             .iter()
+            .map(|&i| &self.hosts[i])
             .filter(|h| self.batch_selected.contains(&h.id))
             .map(|h| h.id.clone())
             .collect();
         let ready: BTreeSet<String> = self
             .hosts
             .iter()
-            .filter(|h| batch_ready(h))
+            .filter(|h| batch_ready(h) && h.manager() == self.batch_manager)
             .map(|h| h.id.clone())
             .collect();
-        let count = [("count", selected.len().to_string())];
+        let count = [("count", selected.len().to_string()), manager[0].clone()];
         ui.horizontal_wrapped(|ui| {
             if ui
                 .add_enabled(
@@ -1073,8 +1163,8 @@ impl ManagementApp {
             if hint(
                 check,
                 t,
-                t.get("hint.batch_check_title"),
-                &[ssh::DETECT, ssh::SUDO_UPDATE, ssh::LIST],
+                &t.format("hint.batch_check_title", &manager),
+                &check_commands,
                 t.get("hint.batch_check_effect"),
                 t.get("hint.batch_check_risk"),
             )
@@ -1087,14 +1177,8 @@ impl ManagementApp {
             if hint(
                 upgrade,
                 t,
-                t.get("hint.batch_upgrade_title"),
-                &[
-                    ssh::DETECT,
-                    ssh::SUDO_UPDATE,
-                    ssh::LIST,
-                    ssh::SUDO_UPGRADE,
-                    ssh::LIST,
-                ],
+                &t.format("hint.batch_upgrade_title", &manager),
+                &upgrade_commands,
                 t.get("hint.batch_upgrade_effect"),
                 t.get("hint.batch_upgrade_risk"),
             )
@@ -1105,14 +1189,19 @@ impl ManagementApp {
         });
         ui.add_space(8.0);
         // Only display fields are copied out of the host list; credentials stay in place.
-        let rows: Vec<_> = self
-            .hosts
+        let rows: Vec<_> = order
             .iter()
+            .map(|&i| &self.hosts[i])
             .map(|h| {
-                let reason = if h.os == "BSD" {
-                    Some(t.get("batch.bsd"))
-                } else if h.fingerprint.is_empty() {
-                    Some(t.get("batch.untrusted"))
+                let reason = if h.fingerprint.is_empty() {
+                    Some(t.get("batch.untrusted").to_owned())
+                } else if !batch_ready(h) {
+                    Some(t.get("batch.undetected").to_owned())
+                } else if h.manager() != self.batch_manager {
+                    Some(t.format(
+                        "batch.other_manager",
+                        &[("manager", manager_label(t, h.manager()).into())],
+                    ))
                 } else {
                     None
                 };
@@ -1122,6 +1211,11 @@ impl ManagementApp {
                     h.id.clone(),
                     h.name.clone(),
                     reason,
+                    if h.distro.is_empty() {
+                        "—".to_owned()
+                    } else {
+                        system_label(t, h)
+                    },
                     result.map(|r| {
                         if r.operation == "upgrade" {
                             t.get("batch.operation_upgrade")
@@ -1157,6 +1251,7 @@ impl ManagementApp {
                             ui.label("");
                             for caption in [
                                 t.get("batch.host"),
+                                t.get("batch.system"),
                                 t.get("batch.last_operation"),
                                 t.get("apt.status"),
                                 t.get("apt.pending"),
@@ -1170,6 +1265,7 @@ impl ManagementApp {
                                 id,
                                 name,
                                 reason,
+                                system,
                                 operation,
                                 status,
                                 failed,
@@ -1198,6 +1294,7 @@ impl ManagementApp {
                                     self.selected = id;
                                     self.log(Action::HostSelect, Outcome::Succeeded);
                                 }
+                                ui.label(system);
                                 ui.label(operation.unwrap_or("—"));
                                 ui.label(RichText::new(status).color(if failed {
                                     palette.error
@@ -1217,9 +1314,10 @@ impl ManagementApp {
             return;
         };
         ui.horizontal(|ui| {
-            let index = self.hosts.iter().position(|h| h.id == host.id);
+            // Previous and next follow the table's sorted order.
+            let index = order.iter().position(|&i| self.hosts[i].id == host.id);
             let previous = index.and_then(|i| i.checked_sub(1));
-            let next = index.map(|i| i + 1).filter(|i| *i < self.hosts.len());
+            let next = index.map(|i| i + 1).filter(|i| *i < order.len());
             if ui
                 .add_enabled(
                     previous.is_some(),
@@ -1228,7 +1326,7 @@ impl ManagementApp {
                 .clicked()
                 && let Some(i) = previous
             {
-                self.selected = self.hosts[i].id.clone();
+                self.selected = self.hosts[order[i]].id.clone();
                 self.log(Action::HostSelect, Outcome::Succeeded);
             }
             if ui
@@ -1236,7 +1334,7 @@ impl ManagementApp {
                 .clicked()
                 && let Some(i) = next
             {
-                self.selected = self.hosts[i].id.clone();
+                self.selected = self.hosts[order[i]].id.clone();
                 self.log(Action::HostSelect, Outcome::Succeeded);
             }
             ui.label(
@@ -1268,22 +1366,30 @@ impl ManagementApp {
             .iter()
             .filter_map(|id| self.hosts.iter().find(|h| h.id == *id))
             .collect();
-        let commands = match (confirm.batch, targets.first()) {
-            (false, Some(host)) => ssh::apt_commands(host, true),
-            _ => vec![
-                ssh::DETECT,
-                ssh::SUDO_UPDATE,
-                ssh::LIST,
-                ssh::SUDO_UPGRADE,
-                ssh::LIST,
-            ],
+        // A batch shares one manager; root targets simply skip sudo.
+        let commands = match targets.first() {
+            Some(host) if !confirm.batch => ssh::package_commands(host, true),
+            Some(host) => ssh::Manager::from_id(host.manager())
+                .map(|m| ssh::manager_commands(m, false, true))
+                .unwrap_or_default(),
+            None => vec![],
         };
+        let manager = targets
+            .first()
+            .map(|h| manager_label(t, h.manager()))
+            .unwrap_or_default();
         let names: Vec<String> = targets.iter().map(|h| h.name.clone()).collect();
         let mut proceed = false;
         let mut cancel = false;
         egui::Modal::new(egui::Id::unique("upgrade_confirm")).show(ctx, |ui| {
             ui.set_width(620.0);
-            ui.heading(t.format("upgrade.title", &[("count", names.len().to_string())]));
+            ui.heading(t.format(
+                "upgrade.title",
+                &[
+                    ("count", names.len().to_string()),
+                    ("manager", manager.into()),
+                ],
+            ));
             ui.label(t.get("upgrade.hosts"));
             egui::ScrollArea::vertical()
                 .id_salt("upgrade_hosts")
@@ -1311,7 +1417,7 @@ impl ManagementApp {
                 ui.horizontal(|ui| {
                     proceed = ui
                         .add_enabled(
-                            confirm.acknowledged && !names.is_empty(),
+                            confirm.acknowledged && !names.is_empty() && commands.len() > 1,
                             danger(t.get("upgrade.confirm")),
                         )
                         .clicked();
@@ -2192,9 +2298,48 @@ fn primary(text: &str) -> egui::Button<'_> {
 fn danger(text: &str) -> egui::Button<'_> {
     egui::Button::new(RichText::new(text).color(Color32::WHITE).strong()).fill(RED)
 }
-/// Batch operations need a confirmed fingerprint and APT; BSD and untrusted hosts stay out.
+/// Batch operations need a confirmed fingerprint and a detected, supported package manager.
 fn batch_ready(host: &Host) -> bool {
-    host.os != "BSD" && !host.fingerprint.is_empty()
+    !host.fingerprint.is_empty() && ssh::Manager::from_id(host.manager()).is_some()
+}
+/// Batch-ready package managers with their host counts, most hosts first.
+fn batch_managers(hosts: &[Host]) -> Vec<(String, usize)> {
+    let mut counts: Vec<(String, usize)> = Vec::new();
+    for host in hosts.iter().filter(|h| batch_ready(h)) {
+        match counts.iter_mut().find(|(id, _)| id == host.manager()) {
+            Some((_, count)) => *count += 1,
+            None => counts.push((host.manager().into(), 1)),
+        }
+    }
+    counts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    counts
+}
+fn manager_label(t: Translator, id: &str) -> &'static str {
+    ssh::Manager::from_id(id)
+        .map(ssh::Manager::label)
+        .unwrap_or(t.get("manager.none"))
+}
+/// "Ubuntu 26.04 · APT" once detected, otherwise the OS family chosen in the editor.
+fn system_label(t: Translator, host: &Host) -> String {
+    if host.distro.is_empty() {
+        host.os.clone()
+    } else {
+        format!("{} · {}", host.distro, manager_label(t, host.manager()))
+    }
+}
+/// Pending updates from the last successful run; hosts without one sort with zero.
+fn pending_count(host: &Host) -> usize {
+    host.last_check
+        .as_ref()
+        .filter(|r| r.status == "success")
+        .map_or(0, |r| r.packages.len())
+}
+fn record_result(host: &mut Host, result: CheckResult) {
+    if !result.distro.is_empty() {
+        host.distro = result.distro.clone();
+        host.package_manager = result.package_manager.clone();
+    }
+    host.last_check = Some(result);
 }
 fn status_label(t: Translator, host: &Host) -> &'static str {
     match host.last_check.as_ref() {
@@ -2205,7 +2350,6 @@ fn status_label(t: Translator, host: &Host) -> &'static str {
             (_, false) => t.get("apt.failed"),
             (_, true) => t.get("apt.upgrade_failed"),
         },
-        None if host.os == "BSD" => t.get("apt.unsupported"),
         None => t.get("apt.not_checked"),
     }
 }
@@ -2402,26 +2546,38 @@ mod tests {
             },
         );
         assert_eq!(commands.recv().unwrap()["action"], "storage_status");
-        let host = |id: &str, os: &str, fingerprint: &str| Host {
+        let host = |id: &str, manager: &str, fingerprint: &str| Host {
             id: id.into(),
             name: format!("host-{id}"),
             address: "127.0.0.1".into(),
             username: "operator".into(),
-            os: os.into(),
+            os: "Linux".into(),
+            distro: if manager.is_empty() { "" } else { "Debian 13" }.into(),
+            package_manager: manager.into(),
             fingerprint: fingerprint.into(),
             ..Default::default()
         };
-        app.batch_selected = ["trusted", "untrusted", "bsd", "gone"]
+        let mut busy = host("busy", "apt", "SHA256:busy-fingerprint");
+        busy.last_check = Some(CheckResult {
+            status: "success".into(),
+            packages: vec![Default::default(); 3],
+            ..Default::default()
+        });
+        app.batch_selected = ["trusted", "untrusted", "rocky", "undetected", "gone"]
             .map(String::from)
             .into();
         app.received(
             "list",
             json!({"hosts":[
-                host("trusted", "Linux", "SHA256:trusted-fingerprint"),
-                host("untrusted", "Linux", ""),
-                host("bsd", "BSD", "SHA256:bsd-fingerprint"),
+                host("trusted", "apt", "SHA256:trusted-fingerprint"),
+                host("untrusted", "apt", ""),
+                host("rocky", "dnf", "SHA256:rocky-fingerprint"),
+                host("undetected", "", "SHA256:undetected-fingerprint"),
+                busy,
             ]}),
         );
+        // APT has the most ready hosts, so only same-manager hosts stay selected.
+        assert_eq!(app.batch_manager, "apt");
         assert_eq!(app.batch_selected, ["trusted".to_owned()].into());
         app.received(
             "batch",
@@ -2450,6 +2606,9 @@ mod tests {
             });
             assert!(text.contains(Translator(language).get("batch.title")));
             assert!(text.contains("openssl"));
+            assert!(text.contains("Debian 13 · APT"));
+            // Hosts with more pending updates come first.
+            assert!(text.find("host-busy").unwrap() < text.find("host-trusted").unwrap());
             app.prompt_upgrade(vec!["trusted".into()], true);
             let text = rendered_text(&ctx, |ui| app.upgrade_dialog(ui.ctx()));
             assert!(text.contains("host-trusted"));

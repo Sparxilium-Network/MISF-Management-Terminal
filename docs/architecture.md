@@ -19,11 +19,15 @@ flowchart LR
 
 首次連線先取得 SHA-256 指紋，使用者確認後才提交認證。指紋變更即阻擋連線，可明確重新核對。變更目標位址或埠時，會清除既存信任及檢查結果。
 
-Linux APT 檢查先偵測 Linux 與 APT，root 直接執行 apt-get update，一般帳號透過 sudo 執行。可要求 PTY，sudo 密碼透過 channel 的 stdin 傳送，不放在命令列。APT 更新使用 `-q=1` 紀錄模式，停用會持續重畫的下載進度並保留來源、摘要與錯誤。SSH 收到的 CRLF 統一為換行，單獨 CR 也另起一行以保留診斷訊息；ANSI 顏色／游標及終端控制字串不進入儲存結果。執行輸出以可選取的等寬文字呈現，保留換行並支援水平與垂直捲動，顯示舊紀錄時也清理控制碼。已被舊版串接的歷史進度無法還原，需重新執行檢查。索引更新成功後以固定英文 locale 列出待更新套件；檢查只列清單。索引更新失敗不讀取舊套件清單。
+每次檢查或升級先以 `sh -c` 執行偵測命令：`uname -s`／`uname -r`、讀取 `/etc/os-release` 的 NAME／VERSION_ID（Debian 的「GNU/Linux」省略，例如「Debian 13」「Ubuntu 26.04」），並列出可用的 apt、dnf、yum 與已初始化的 pkg。Linux 依 APT → DNF → YUM 選擇，FreeBSD／DragonFly 使用 pkg，其餘系統標為不支援。偵測結果（`distro`、`package_manager`）寫入檢查結果與主機紀錄；測試連線也會更新，儲存主機時一律沿用伺服器端舊值，位址或埠變更則清除。舊紀錄沒有 `package_manager` 但曾成功檢查者視為 APT。主機已有紀錄時，偵測結果不同即失敗且不執行套件命令，因為確認視窗顯示的是紀錄中的命令。
+
+APT 檢查：root 直接執行 apt-get update，一般帳號透過 sudo 執行。可要求 PTY，sudo 密碼透過 channel 的 stdin 傳送，不放在命令列。APT 更新使用 `-q=1` 紀錄模式，停用會持續重畫的下載進度並保留來源、摘要與錯誤。SSH 收到的 CRLF 統一為換行，單獨 CR 也另起一行以保留診斷訊息；ANSI 顏色／游標及終端控制字串不進入儲存結果。執行輸出以可選取的等寬文字呈現，保留換行並支援水平與垂直捲動，顯示舊紀錄時也清理控制碼。已被舊版串接的歷史進度無法還原，需重新執行檢查。索引更新成功後以固定英文 locale 列出待更新套件；檢查只列清單。索引更新失敗不讀取舊套件清單。
+
+DNF／YUM 以 `makecache` 更新中繼資料（含 `Error:`、`Failed to download metadata` 或 `Ignoring repositories` 即視為失敗），再以 sudo 執行 `check-update -C` 並接著輸出 `rpm -qa` 的已安裝版本；退出碼 0／100 為成功，`name.arch evr repo` 依空白重新分組，以容忍 yum 換行，`Obsoleting` 之後忽略。升級為 `-y upgrade`。FreeBSD pkg 以 `pkg update` 更新目錄，`pkg version -URv -l '<'` 列出需更新的套件（不需 sudo），升級為 `pkg upgrade -y`。
 
 APT 升級在相同流程後追加 `apt-get -y upgrade`：一般帳號以 `sudo -S -- env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l …` 執行，避免 sudo 重設環境變數；dpkg 使用 `--force-confdef --force-confold` 保留既有設定檔。每個 channel 各自偵測 sudo 提示並最多送出一次密碼。升級前後各讀一次待更新清單，`CheckResult.upgraded` 保存升級前有、升級後消失的套件，`packages` 保存剩餘（被保留）的套件，`operation` 區分 check／upgrade；舊紀錄缺少這些欄位時視為檢查。索引更新失敗不會開始升級；升級輸出含 `E:` 或非零退出碼即為失敗，並提示遠端可能已部分升級。連線每 30 秒送 keepalive，避免長時間沉默的 dpkg trigger 觸發閒置斷線。
 
-批次作業 `{"action":"batch","operation":"check"|"upgrade","ids":[…]}` 去除重複 ID 後讀取主機快照，以 Tokio JoinSet 與 Semaphore 最多 8 台並行執行同一流程，每台完成回報 `批次作業進度 n/total`；全部結束後一次寫回各主機結果。任何 ID 不存在則整批拒絕；單台連線、指紋或 sudo 失敗只記在該主機結果。Session 對批次中每台主機各寫一筆開始與結果日誌；debug 模式要求所有主機皆為 loopback IP。介面只允許勾選已確認指紋的 Linux 主機，升級前一律顯示主機清單、實際命令與風險並要求勾選確認。BSD 支援主機保存與 SSH 連線測試，此版不提供 BSD 套件檢查。
+批次作業 `{"action":"batch","operation":"check"|"upgrade","ids":[…]}` 去除重複 ID 後讀取主機快照，以 Tokio JoinSet 與 Semaphore 最多 8 台並行執行同一流程，每台完成回報 `批次作業進度 n/total`；全部結束後一次寫回各主機結果。任何 ID 不存在，或主機的套件管理器未偵測、彼此不同，則整批拒絕；單台連線、指紋或 sudo 失敗只記在該主機結果。Session 對批次中每台主機各寫一筆開始與結果日誌；debug 模式要求所有主機皆為 loopback IP。介面依套件管理器分組，一次只允許勾選同一組中已確認指紋的主機，表格依待更新數量由多到少排序；升級前一律顯示主機清單、該套件管理器的實際命令與風險並要求勾選確認。
 
 ## 本機儲存與背景工作
 
@@ -45,10 +49,10 @@ GUI 與 CLI 經 `core/src/session.rs` 執行共用稽核與 debug 政策，再�
 
 名稱修正後，首次啟動會複製舊版 `.msif-management/hosts.json` 至新目錄，保留原檔並避免覆寫新目錄既有資料。新目錄有 `.lbx` 時不複製舊明文。明確設定 MISF_DATA_DIR 時使用指定路徑，不自動遷移其他目錄。
 
-UI 經工作佇列交給背景執行緒與 Tokio runtime 執行 SSH／磁碟操作，進度與結果回傳畫面，避免介面卡住。執行期間停用衝突操作。關閉程式會終止本機程序及連線，不能保證中止遠端已開始的 APT 程序。
+UI 經工作佇列交給背景執行緒與 Tokio runtime 執行 SSH／磁碟操作，進度與結果回傳畫面，避免介面卡住。執行期間停用衝突操作。關閉程式會終止本機程序及連線，不能保證中止遠端已開始的套件程序。
 
 ## 驗證與限制
 
-測試 SSH 伺服器在 loopback 驗證密碼／私鑰、指紋變更阻擋、PTY、拆包 sudo 提示、APT 失敗、BSD 及儲存流程。原生 UI 以開發用擷取功能驗證排版與中文顯示。
+測試 SSH 伺服器在 loopback 驗證密碼／私鑰、指紋變更阻擋、PTY、拆包 sudo 提示、系統偵測、APT 與 DNF 檢查／升級、套件管理器不符、混合批次、APT 失敗、不支援系統及儲存流程。原生 UI 以開發用擷取功能驗證排版與中文顯示。
 
 目前只保存最近一次檢查或升級，不支援 full-upgrade、任意命令、互動終端、排程、滾動升級順序或 Ansible。Windows 已建置驗證，其他作業系統需在對應環境建置及驗證。Passkey 已通過模擬驗證器測試，仍需實體裝置驗證。尚未支援主金鑰輪替、TPM 或閒置自動鎖定；詳細取捨見 [LUKSbox 整合評估](luksbox-evaluation.md)。FIDO2 依賴的本機相容性修改、版本與仍存在的 RSA 公告見 [依賴更新](dependency-updates.md)。

@@ -91,9 +91,9 @@ impl Translator {
                 "progress.passkey_unlock"
             }
             "正在連線並驗證 SSH 主機指紋…" => "progress.ssh",
-            "正在執行 apt-get update，只更新套件索引…" => "progress.apt_update",
+            "正在更新套件索引…" => "progress.apt_update",
             "正在讀取待更新套件…" => "progress.apt_list",
-            "正在執行 apt-get upgrade，安裝可升級套件…" => "progress.apt_upgrade",
+            "正在升級可升級套件…" => "progress.apt_upgrade",
             "正在重新讀取剩餘待更新套件…" => "progress.apt_relist",
             _ => return message.into(),
         };
