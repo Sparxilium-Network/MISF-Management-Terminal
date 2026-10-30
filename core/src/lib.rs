@@ -1,3 +1,6 @@
+//! `unsafe` is denied everywhere except the Windows WebAuthn FFI adapter.
+#![deny(unsafe_code)]
+
 pub mod audit;
 mod db_upgrade;
 pub mod model;
@@ -10,6 +13,7 @@ pub mod store;
 pub mod transcript;
 pub mod vault;
 #[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
 mod windows_passkey;
 
 use anyhow::{Context, Result, ensure};

@@ -1,3 +1,5 @@
+#![deny(unsafe_code)]
+
 use misf_core::{
     audit::{Action, AuditLog, Outcome},
     runtime::RuntimePaths,
