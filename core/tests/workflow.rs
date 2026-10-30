@@ -405,6 +405,27 @@ async fn recorded_manager_mismatch_and_unsupported_systems_never_touch_packages(
     assert_eq!(*fixture.state.commands.lock().unwrap(), [ssh::DETECT]);
 }
 
+#[tokio::test]
+async fn chosen_package_manager_overrides_detection_only_when_installed() {
+    // Rocky has dnf and yum; detection prefers dnf, but the user chose yum.
+    let mut fixture = fixture_on(DNF_HOST, false, false).await;
+    fixture.host.package_manager = "dnf".into();
+    fixture.host.manager_choice = "yum".into();
+    let result = ssh::check(&fixture.host, &|_| {}).await;
+    let commands = fixture.state.commands.lock().unwrap().clone();
+    let expected = ssh::package_commands(&fixture.host, false);
+    assert!(expected[1].contains("yum"), "{expected:?}");
+    assert_eq!(commands[..2], expected[..2], "{}", result.error);
+    // The detected manager is still recorded as detected.
+    assert_eq!(result.package_manager, "dnf");
+    let mut fixture = fixture_on(DNF_HOST, false, false).await;
+    fixture.host.manager_choice = "apt".into();
+    let result = ssh::upgrade(&fixture.host, &|_| {}).await;
+    assert_eq!(result.status, "failed");
+    assert!(result.error.contains("找不到所選"), "{}", result.error);
+    assert_eq!(*fixture.state.commands.lock().unwrap(), [ssh::DETECT]);
+}
+
 /// Saves, trusts and detects a host the way the UI does before batching it.
 async fn register(store: &Store, fixture: &Fixture, name: &str) -> String {
     let mut host = fixture.host.clone();
@@ -742,6 +763,7 @@ async fn ssh_apt_results_roundtrip_inside_luksbox_and_remain_cli_compatible() {
         let bytes = serde_json::to_vec(&Database {
             version: 1,
             hosts: vec![fixture.host.clone()],
+            ..Default::default()
         })
         .unwrap();
         vfs.write(file, 0, &bytes).unwrap();
@@ -767,7 +789,10 @@ async fn ssh_apt_results_roundtrip_inside_luksbox_and_remain_cli_compatible() {
         .handle(json!({"action":"convert_storage"}), &|_| {})
         .await
         .unwrap();
-    assert_eq!(converted, json!({"format":"sqlite","schema_version":1}));
+    assert_eq!(
+        converted,
+        json!({"format":"sqlite","schema_version":misf_core::sqlite::SCHEMA_VERSION})
+    );
     let listed = session
         .handle(json!({"action":"list"}), &|_| {})
         .await
@@ -785,7 +810,7 @@ async fn ssh_apt_results_roundtrip_inside_luksbox_and_remain_cli_compatible() {
         .unwrap();
     assert_eq!(
         (listed["format"].clone(), listed["schema_version"].clone()),
-        (json!("sqlite"), json!(1))
+        (json!("sqlite"), json!(misf_core::sqlite::SCHEMA_VERSION))
     );
     session
         .handle(json!({"action":"vault_lock"}), &|_| {})
@@ -807,7 +832,7 @@ async fn ssh_apt_results_roundtrip_inside_luksbox_and_remain_cli_compatible() {
     let version: i64 = conn
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 1);
+    assert_eq!(version, misf_core::sqlite::SCHEMA_VERSION as i64);
     let pending: i64 = conn
         .query_row(
             "SELECT count(*) FROM packages WHERE host_id = ?1 AND upgraded = 0",

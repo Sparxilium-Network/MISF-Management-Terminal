@@ -6,6 +6,8 @@ mod theme;
 mod ui;
 mod worker;
 
+use preferences::WindowSize;
+
 use misf_core::{
     audit::{Action, AuditLog, Outcome},
     runtime::RuntimePaths,
@@ -33,6 +35,10 @@ fn main() -> eframe::Result {
             std::process::exit(2);
         }
     };
+    // Reopen at the size the user last closed the window with; the app reports any load error.
+    let window = preferences::Preferences::load(&paths.store.with_file_name("ui-settings.json"))
+        .ok()
+        .and_then(|preferences| preferences.window);
     let icon = eframe::icon_data::from_png_bytes(include_bytes!("../../assets/icons/misf-256.png"))
         .expect("The bundled MISF icon must be a valid PNG");
     let options = eframe::NativeOptions {
@@ -44,8 +50,9 @@ fn main() -> eframe::Result {
             } else {
                 "MISF · Management Terminal"
             })
-            .with_inner_size([1280.0, 820.0])
-            .with_min_inner_size([1024.0, 700.0]),
+            .with_inner_size(window.map_or(WindowSize::DEFAULT, WindowSize::inner_size))
+            .with_maximized(window.is_some_and(|window| window.maximized))
+            .with_min_inner_size(WindowSize::MIN),
         renderer: eframe::Renderer::Glow,
         ..Default::default()
     };

@@ -8,7 +8,7 @@
 
 全 Rust 原生桌面客戶端，以 eframe／egui 繪製畫面，內建 Rust SSH 核心。畫面與核心編譯成同一個執行檔，不需要 Java、瀏覽器或管理伺服器。
 
-預設將主機與憑證存於使用者目錄 `.misf-management/hosts.db`（SQLite 資料庫，檔頭 `user_version` 記錄結構版本，目前為 v1）。開啟較舊版本的資料庫會先在同目錄備份 `hosts.v<N>.bak.db`，再於單一交易內自動升級；較新版本、非 MISF、損壞或結構遭改動的資料庫一律拒絕開啟並保留原檔。可選擇啟用 **LUKSbox 加密主機庫**，之後日常資料改存同目錄的 `hosts.lbx`，每次啟動先解鎖。用 `MISF_DATA_DIR` 可指定資料資料夾。
+預設將主機與憑證存於使用者目錄 `.misf-management/hosts.db`（SQLite 資料庫，檔頭 `user_version` 記錄結構版本，目前為 v2）。開啟較舊版本的資料庫會先在同目錄備份 `hosts.v<N>.bak.db`，再於單一交易內自動升級；較新版本、非 MISF、損壞或結構遭改動的資料庫一律拒絕開啟並保留原檔。可選擇啟用 **LUKSbox 加密主機庫**，之後日常資料改存同目錄的 `hosts.lbx`，每次啟動先解鎖。用 `MISF_DATA_DIR` 可指定資料資料夾。
 
 從 JSON 版本升級時，第一次讀取會把同目錄的 `hosts.json` 匯入新的 `hosts.db`，原 JSON 保持不變（之後的修改只寫入 SQLite）；確認無誤後可自行刪除該明文副本。首次啟動也會自動複製更早的 `.msif-management/hosts.json` 至新資料目錄再匯入，保留原檔，且不覆寫已存在的新資料。
 
@@ -50,7 +50,7 @@ Linux／macOS 可使用 `cargo run --locked -p misf`，須在對應平台建置�
 
 ## 功能
 
-點左上角 **設定** 開啟設定視窗，可選 **繁體中文（台灣）／English**，以及 **跟隨系統／淺色／深色**；切換立即生效，不需要重啟。非敏感偏好另存於資料目錄的 **未加密 `ui-settings.json`**，即使主機庫啟用 LUKSbox 也保持獨立，且不保存憑證。下次啟動自動沿用，主機庫鎖定時也能調整（先關閉解鎖提示即可開啟設定）。
+點左上角 **設定** 開啟設定視窗，可選 **繁體中文（台灣）／English**，以及 **跟隨系統／淺色／深色**；切換立即生效，不需要重啟。非敏感偏好另存於資料目錄的 **未加密 `ui-settings.json`**，即使主機庫啟用 LUKSbox 也保持獨立，且不保存憑證。下次啟動自動沿用，主機庫鎖定時也能調整（先關閉解鎖提示即可開啟設定）。主視窗關閉時的大小與是否最大化也記在同一檔案，下次以相同大小開啟。
 
 介面文字放在 [`app/locales/zh-tw.json`](app/locales/zh-tw.json) 與 [`app/locales/en-us.json`](app/locales/en-us.json)，以固定 key 與 `{name}` 等命名參數維護。語系檔編譯進執行檔，發行套件不需另外安裝語言檔；修改 JSON 後需重新編譯。新增語言時，在 `app/src/i18n.rs` 登記並提供相同 key 與參數。測試會檢查 key 與參數是否一致；缺少翻譯時回退繁體中文。遠端命令原始輸出不翻譯，核心／系統的詳細錯誤亦保留原文。
 
@@ -58,7 +58,7 @@ Linux／macOS 可使用 `cargo run --locked -p misf`，須在對應平台建置�
 - SSH 帳密登入，或匯入 OpenSSH／PEM 私鑰；加密私鑰可填密語。
 - 首次連線先核對並保存 SHA-256 主機指紋，確認前不提交帳密；指紋變更立即阻擋認證。
 - 使用 russh 自帶 SSH，不呼叫系統 ssh，也不讀取電腦的 SSH config、known_hosts、SSH agent 或系統私鑰。
-- 自動偵測發行版本與套件管理器：測試連線或檢查時讀取 `uname` 與 `/etc/os-release`，主機清單與詳情顯示如「Ubuntu 26.04 · APT」「Rocky Linux 9.5 · DNF」「FreeBSD 14.2 · pkg」。支援 APT（Debian／Ubuntu）、DNF（Fedora／RHEL 8+）、YUM（CentOS 7 等）與 FreeBSD pkg；OpenBSD／NetBSD 只支援連線測試。偵測結果只來自主機本身，編輯主機不能改寫；位址或埠變更時清除。
+- 自動偵測發行版本與套件管理器：測試連線或檢查時讀取 `uname` 與 `/etc/os-release`，主機清單與詳情顯示如「Ubuntu 26.04 · APT」「Rocky Linux 9.5 · DNF」「FreeBSD 14.2 · pkg」。支援 APT（Debian／Ubuntu）、DNF（Fedora／RHEL 8+）、YUM（CentOS 7 等）與 FreeBSD pkg；OpenBSD／NetBSD 只支援連線測試。偵測結果只來自主機本身，編輯主機不能改寫；位址或埠變更時清除。編輯主機的「套件管理員」預設為 **自動偵測**，也可手動指定（Linux：APT／DNF／YUM；BSD：pkg），例如同時裝有 DNF 與 YUM 時改用 YUM；指定的管理器必須確實存在於主機上，否則操作會在執行任何套件指令前停止。
 - 一鍵套件檢查：root 直接執行，一般使用者使用 sudo；先更新套件索引（`apt-get update`／`dnf makecache --refresh`／`yum makecache`／`pkg update`），成功後列出可更新套件、目前版本、候選版本與架構。檢查不安裝套件。執行輸出停用動態下載進度，保留來源與錯誤，支援文字選取及雙向捲動。
 - **套件升級**：確認對話框勾選了解風險後，先更新索引，再以 root／sudo 非互動升級：APT 執行 `apt-get -y upgrade`（`DEBIAN_FRONTEND=noninteractive`、保留既有設定檔 `--force-confold`、needrestart 僅列出 `NEEDRESTART_MODE=l`），只升級既有套件，不安裝新相依或移除套件；DNF／YUM 執行 `-y upgrade`（可能依相依關係安裝或移除套件，新設定檔另存為 `.rpmnew`）；pkg 執行 `pkg upgrade -y`。上限 30 分鐘；被保留的套件仍列為待更新。尚未偵測套件管理器的主機需先測試連線或檢查，才能升級，確保確認視窗顯示的是實際命令。結果分別列出「已升級套件」（原版本／新版本）與剩餘待更新套件。升級會直接修改遠端系統，無法自動回復；新核心需自行重開機。
 - **批次作業** 分頁：勾選多台已確認指紋的主機，同時執行檢查或升級（最多 8 台並行，單次最多 256 台），各主機結果分別保存；單台失敗不影響其他主機。一批只能包含同一種套件管理器（上方切換 APT／DNF／YUM／pkg），避免混用命令與跨平台風險，核心也會拒絕混合批次；執行時偵測到的套件管理器若與紀錄不同，該主機失敗而不執行。表格列出每台的系統、上次操作、狀態、待更新與已升級數量，待更新套件越多排越前面；點主機名稱或「上一台／下一台」依同一順序切換下方套件清單。未確認指紋或尚未偵測套件管理器的主機無法勾選。
@@ -73,7 +73,7 @@ FreeBSD／DragonFly 以 pkg 檢查與升級；偵測命令以 `sh -c` 包裝，`
 1. 按資料區底部的「啟用 LUKSbox 加密…」，設定至少 12 字元的解鎖密碼。
 2. 程式建立容器、將資料直接從記憶體寫入，再關閉並重新解鎖驗證。原 `hosts.db` 先保留；驗證後顯示完整路徑，詢問是否刪除此明文副本（若還有舊版 `hosts.json`，刪除後會接著詢問）。
 3. 啟用後，新讀寫只使用 `hosts.lbx`；`hosts.lbx.enabled` 記錄已選擇加密模式。容器內保存 SQLite 資料庫映像 `/hosts.db`，只在記憶體中開啟，不會寫出明文資料庫檔；舊容器內的 `/hosts.json` 會在下一次儲存時於同一次中繼資料提交轉成 `/hosts.db`。鎖定、錯誤密碼或容器遺失時不會退回讀取明文主機庫。按「鎖定」後，必須再次解鎖才能操作主機。
-4. 透過「管理解鎖金鑰」新增備援密碼或 **Passkey**。密碼與 Passkey 合計最多 8 個槽，可分別解鎖同一容器。
+4. 透過「管理解鎖金鑰」新增備援密碼或 **Passkey**。密碼與 Passkey 合計最多 8 個槽，可分別解鎖同一容器。每個槽可命名（例如「管理密碼 1」「Google Titan」），建立或新增時填寫，之後在管理畫面重新命名；名稱存在加密容器內的主機資料庫，解鎖後才顯示。
 5. 按「匯出加密備份…」建立新的 `.lbx` 備份檔。請保留可取回的備援密碼，並實際驗證備份可解鎖；遺失所有密碼將無法復原。
 
 使用 LUKSbox v0.6.1（固定 commit `69448f708f1328d672deb595e359579d630cb0b0`）的 core／format／VFS 函式庫；FIDO2 使用有修改紀錄的本機相容性副本，將 P-256 等依賴更新至新版。不掛載磁碟、不需要 WinFsp 或 TPM 整合。加密為 AES-256-GCM-SIV；密碼採 Argon2id（256 MiB、3 次、4 lanes）。這不是 LUKS2 磁碟格式。版本與仍未修補的 RSA 公告見 [依賴更新與安全公告](docs/dependency-updates.md)。

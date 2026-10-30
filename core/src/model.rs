@@ -22,6 +22,8 @@ pub struct Host {
     pub distro: String,
     /// Detected package manager ID ("apt", "dnf", "yum" or "pkg").
     pub package_manager: String,
+    /// Package manager chosen in the editor; empty means use the detected one.
+    pub manager_choice: String,
     pub last_check: Option<CheckResult>,
 }
 
@@ -45,6 +47,10 @@ impl Host {
             ["password", "key"].contains(&self.auth_type.as_str()),
             "不支援的認證方式"
         );
+        ensure!(
+            manager_choices(&self.os).contains(&self.manager_choice.as_str()),
+            "此目標系統不支援所選的套件管理器"
+        );
         if self.auth_type == "key" {
             ensure!(!self.private_key.trim().is_empty(), "請匯入 SSH 私鑰");
             russh::keys::decode_secret_key(&self.private_key, self.passphrase())
@@ -58,9 +64,12 @@ impl Host {
         Ok(())
     }
 
-    /// The detected package manager; records older than detection only ever succeeded with APT.
+    /// The chosen, else the detected package manager; records older than detection only
+    /// ever succeeded with APT.
     pub fn manager(&self) -> &str {
-        if !self.package_manager.is_empty() {
+        if !self.manager_choice.is_empty() {
+            &self.manager_choice
+        } else if !self.package_manager.is_empty() {
             &self.package_manager
         } else if self
             .last_check
@@ -100,6 +109,15 @@ impl Host {
             }
         }
         result
+    }
+}
+
+/// Package managers a host of this OS family may be set to; "" means detect automatically.
+pub fn manager_choices(os: &str) -> &'static [&'static str] {
+    if os == "BSD" {
+        &["", "pkg"]
+    } else {
+        &["", "apt", "dnf", "yum"]
     }
 }
 

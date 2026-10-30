@@ -1,6 +1,6 @@
 use crate::{
     i18n::{Language, Translator},
-    preferences::Preferences,
+    preferences::{Preferences, WindowSize},
     theme::{self, Appearance, Palette},
     worker::{Event, Worker},
 };
@@ -45,6 +45,12 @@ struct TrustDialog {
     next: Option<String>,
 }
 
+struct SlotRow {
+    index: usize,
+    kind: String,
+    name: String,
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum VaultMode {
     Create,
@@ -53,9 +59,12 @@ enum VaultMode {
     AddKey,
     Passkey,
     Revoke(usize),
+    Rename(usize),
 }
 struct VaultDialog {
     mode: VaultMode,
+    /// Slot name for a new or renamed slot; not a secret.
+    name: String,
     password: String,
     confirmation: String,
     error: String,
@@ -72,6 +81,9 @@ impl Drop for VaultDialog {
 pub struct ManagementApp {
     audit: AuditLog,
     settings_path: PathBuf,
+    /// False when ui-settings.json could not be read, so closing never overwrites it.
+    window_loaded: bool,
+    saved_window: Option<WindowSize>,
     debug: bool,
     passkey_allowed: bool,
     preferences: Preferences,
@@ -103,7 +115,7 @@ pub struct ManagementApp {
     plaintext_exists: bool,
     plaintext_path: String,
     plaintext_delete_prompt: bool,
-    slots: Vec<(usize, String)>,
+    slots: Vec<SlotRow>,
     storage_warning: String,
     vault_dialog: Option<VaultDialog>,
     #[cfg(feature = "capture")]
@@ -127,11 +139,14 @@ impl ManagementApp {
         let settings_path = paths.store.with_file_name("ui-settings.json");
         let loaded = Preferences::load(&settings_path);
         let preferences = loaded.clone().unwrap_or_default();
+        let window_loaded = loaded.is_ok();
         theme::install(ctx);
         preferences.appearance.apply(ctx);
         let mut app = Self {
             audit,
             settings_path,
+            window_loaded,
+            saved_window: preferences.window,
             debug: paths.debug,
             passkey_allowed: paths.passkey_allowed(),
             preferences,
@@ -195,6 +210,30 @@ impl ManagementApp {
             app.log(Action::MainTab, Outcome::Succeeded);
         }
         app
+    }
+
+    /// Remembers the restored size and the maximized state, saved when the app closes.
+    fn track_window(&mut self, ctx: &egui::Context) {
+        let (rect, maximized, minimized) = ctx.input(|input| {
+            let viewport = input.viewport();
+            (viewport.inner_rect, viewport.maximized, viewport.minimized)
+        });
+        if minimized == Some(true) {
+            return;
+        }
+        let maximized = maximized.unwrap_or(false);
+        let previous = self.preferences.window;
+        let [width, height] = match (rect, maximized, previous) {
+            // A maximized window keeps the size it returns to when restored.
+            (_, true, Some(previous)) => previous.inner_size(),
+            (Some(rect), _, _) => [rect.width(), rect.height()],
+            (None, _, _) => return,
+        };
+        self.preferences.window = Some(WindowSize {
+            width: width.max(WindowSize::MIN[0]),
+            height: height.max(WindowSize::MIN[1]),
+            maximized,
+        });
     }
 
     fn settings_window(&mut self, ctx: &egui::Context) {
@@ -438,6 +477,12 @@ impl ManagementApp {
                 self.open_vault_dialog(VaultMode::Manage);
                 self.status =
                     t.format("status.slot_revoked", &[("slot", data["slot"].to_string())]);
+            }
+            "vault_rename_key" => {
+                self.apply_storage(&data["storage"]);
+                self.open_vault_dialog(VaultMode::Manage);
+                self.status =
+                    t.format("status.slot_renamed", &[("slot", data["slot"].to_string())]);
             }
             "convert_storage" => {
                 self.status = t.get("settings.converted").into();
@@ -1572,11 +1617,10 @@ impl ManagementApp {
             .into_iter()
             .flatten()
             .filter_map(|slot| {
-                slot["index"].as_u64().map(|index| {
-                    (
-                        index as usize,
-                        slot["kind"].as_str().unwrap_or_default().to_owned(),
-                    )
+                slot["index"].as_u64().map(|index| SlotRow {
+                    index: index as usize,
+                    kind: slot["kind"].as_str().unwrap_or_default().to_owned(),
+                    name: slot["name"].as_str().unwrap_or_default().to_owned(),
                 })
             })
             .collect();
@@ -1667,12 +1711,25 @@ impl ManagementApp {
         self.log(Action::VaultDialogOpen, Outcome::Succeeded);
         self.vault_dialog = Some(VaultDialog {
             mode,
+            name: String::new(),
             password: String::new(),
             confirmation: String::new(),
             error: String::new(),
             hello: cfg!(target_os = "windows"),
             acknowledged: false,
         });
+    }
+
+    /// "#1（Google Titan）", or "#1" for an unnamed slot.
+    fn slot_title(&self, index: usize) -> String {
+        let t = Translator(self.preferences.language);
+        match self.slots.iter().find(|slot| slot.index == index) {
+            Some(slot) if !slot.name.is_empty() => t.format(
+                "vault.slot_named",
+                &[("slot", index.to_string()), ("name", slot.name.clone())],
+            ),
+            _ => format!("#{index}"),
+        }
     }
 
     fn choose_backup(&mut self) {
@@ -1702,6 +1759,7 @@ impl ManagementApp {
         let mut backup = false;
         let mut passkey = false;
         let mut revoke = None;
+        let mut rename = None;
         egui::Modal::new(egui::Id::unique("vault_dialog")).show(ctx, |ui| {
             ui.set_width(570.0);
             ui.heading(match dialog.mode {
@@ -1711,6 +1769,7 @@ impl ManagementApp {
                 VaultMode::AddKey => t.get("vault.add_password"),
                 VaultMode::Passkey => t.get("passkey.title"),
                 VaultMode::Revoke(_) => t.get("vault.revoke"),
+                VaultMode::Rename(_) => t.get("vault.rename_title"),
             });
             ui.add_space(12.0);
             ui.add_enabled_ui(!self.busy, |ui| {
@@ -1719,14 +1778,24 @@ impl ManagementApp {
                         "vault.slot_count",
                         &[("count", self.slots.len().to_string())],
                     ));
-                    for (slot, kind) in &self.slots {
+                    for slot in &self.slots {
                         ui.horizontal(|ui| {
-                            ui.label(t.format("vault.slot", &[("slot", slot.to_string())]));
-                            ui.label(if kind == "Fido2HmacSecret" {
+                            ui.label(t.format("vault.slot", &[("slot", slot.index.to_string())]));
+                            ui.label(if slot.kind == "Fido2HmacSecret" {
                                 t.get("passkey.title")
                             } else {
                                 t.get("auth.password")
                             });
+                            if slot.name.is_empty() {
+                                ui.label(
+                                    RichText::new(t.get("vault.slot_unnamed")).color(palette.muted),
+                                );
+                            } else {
+                                ui.label(RichText::new(&slot.name).strong());
+                            }
+                            if ui.button(t.get("vault.rename")).clicked() {
+                                rename = Some((slot.index, slot.name.clone()));
+                            }
                             if ui
                                 .add_enabled(
                                     self.slots.len() > 1,
@@ -1734,7 +1803,7 @@ impl ManagementApp {
                                 )
                                 .clicked()
                             {
-                                revoke = Some(*slot);
+                                revoke = Some(slot.index);
                             }
                         });
                     }
@@ -1753,8 +1822,21 @@ impl ManagementApp {
                         backup = ui.button(t.get("vault.export")).clicked();
                         cancel = ui.button(t.get("common.close")).clicked();
                     });
+                } else if let VaultMode::Rename(slot) = dialog.mode {
+                    ui.label(t.format("vault.slot", &[("slot", slot.to_string())]));
+                    field(
+                        ui,
+                        t.get("vault.slot_name"),
+                        &mut dialog.name,
+                        t.get("vault.slot_name_hint"),
+                        false,
+                    );
+                    ui.horizontal(|ui| {
+                        submit = ui.add(primary(t.get("vault.rename_save"))).clicked();
+                        cancel = ui.button(t.get("common.cancel")).clicked();
+                    });
                 } else if let VaultMode::Revoke(slot) = dialog.mode {
-                    ui.label(t.format("vault.revoke_prompt", &[("slot", slot.to_string())]));
+                    ui.label(t.format("vault.revoke_prompt", &[("slot", self.slot_title(slot))]));
                     ui.colored_label(palette.warning, t.get("vault.revoke_backup_warning"));
                     ui.checkbox(&mut dialog.acknowledged, t.get("vault.revoke_ack"));
                     ui.horizontal(|ui| {
@@ -1777,6 +1859,15 @@ impl ManagementApp {
                             self.log(Action::PasskeyMethod, Outcome::Succeeded);
                         }
                     });
+                    if !self.locked {
+                        field(
+                            ui,
+                            t.get("vault.slot_name"),
+                            &mut dialog.name,
+                            t.get("passkey.name_hint"),
+                            false,
+                        );
+                    }
                     #[cfg(not(target_os = "windows"))]
                     field(
                         ui,
@@ -1803,6 +1894,15 @@ impl ManagementApp {
                         ui.label(t.get("vault.create_description"));
                         ui.colored_label(palette.warning, t.get("vault.experimental"));
                         ui.label(t.get("vault.retain_plaintext"));
+                    }
+                    if dialog.mode != VaultMode::Unlock {
+                        field(
+                            ui,
+                            t.get("vault.slot_name"),
+                            &mut dialog.name,
+                            t.get("vault.slot_name_hint"),
+                            false,
+                        );
                     }
                     field(
                         ui,
@@ -1874,6 +1974,12 @@ impl ManagementApp {
             dialog.mode = VaultMode::Passkey;
             self.log(Action::VaultDialogOpen, Outcome::Succeeded);
         }
+        if let Some((slot, name)) = rename {
+            dialog.mode = VaultMode::Rename(slot);
+            dialog.name = name;
+            dialog.error.clear();
+            self.log_at_slot(Action::VaultDialogOpen, Outcome::Succeeded, Some(slot));
+        }
         if let Some(slot) = revoke {
             dialog.mode = VaultMode::Revoke(slot);
             dialog.acknowledged = false;
@@ -1885,13 +1991,15 @@ impl ManagementApp {
         if submit {
             if let VaultMode::Revoke(slot) = dialog.mode {
                 self.send(json!({"action":"vault_revoke_key","slot":slot}));
+            } else if let VaultMode::Rename(slot) = dialog.mode {
+                self.send(json!({"action":"vault_rename_key","slot":slot,"name":dialog.name}));
             } else if dialog.mode == VaultMode::Passkey {
                 let action = if self.locked {
                     "vault_unlock_passkey"
                 } else {
                     "vault_add_passkey"
                 };
-                self.send(json!({"action":action,"hello":dialog.hello,"pin":std::mem::take(&mut dialog.password)}));
+                self.send(json!({"action":action,"hello":dialog.hello,"name":dialog.name,"pin":std::mem::take(&mut dialog.password)}));
             } else if dialog.mode != VaultMode::Unlock && dialog.password != dialog.confirmation {
                 dialog.error = t.get("vault.password_mismatch").into();
             } else if dialog.mode != VaultMode::Unlock && dialog.password.chars().count() < 12 {
@@ -1906,6 +2014,9 @@ impl ManagementApp {
                     _ => "vault_add_key",
                 };
                 let mut request = json!({"action":action});
+                if dialog.mode != VaultMode::Unlock {
+                    request["name"] = Value::String(dialog.name.clone());
+                }
                 request["passphrase"] = Value::String(std::mem::take(&mut dialog.password));
                 dialog.confirmation.zeroize();
                 self.send(request);
@@ -2013,6 +2124,43 @@ impl ManagementApp {
                             });
                             editor_changed |= choices_before
                                 != (editor.host.os.clone(), editor.host.auth_type.clone());
+                            let managers = misf_core::model::manager_choices(&editor.host.os);
+                            // Switching between Linux and BSD drops a choice the new OS lacks.
+                            if !managers.contains(&editor.host.manager_choice.as_str()) {
+                                editor.host.manager_choice.clear();
+                                editor_changed = true;
+                            }
+                            let auto = if editor.host.package_manager.is_empty() {
+                                t.get("host.manager_auto").to_owned()
+                            } else {
+                                t.format(
+                                    "host.manager_auto_detected",
+                                    &[(
+                                        "manager",
+                                        manager_label(t, &editor.host.package_manager).into(),
+                                    )],
+                                )
+                            };
+                            let choice_label = |id: &str| {
+                                if id.is_empty() {
+                                    auto.clone()
+                                } else {
+                                    manager_label(t, id).to_owned()
+                                }
+                            };
+                            let choice_before = editor.host.manager_choice.clone();
+                            egui::ComboBox::from_label(t.get("host.manager"))
+                                .selected_text(choice_label(&editor.host.manager_choice))
+                                .show_ui(ui, |ui| {
+                                    for id in managers {
+                                        ui.selectable_value(
+                                            &mut editor.host.manager_choice,
+                                            (*id).into(),
+                                            choice_label(id),
+                                        );
+                                    }
+                                });
+                            editor_changed |= choice_before != editor.host.manager_choice;
                             if ui
                                 .checkbox(&mut editor.show_secrets, t.get("auth.show_secrets"))
                                 .changed()
@@ -2235,6 +2383,10 @@ impl ManagementApp {
 
 impl Drop for ManagementApp {
     fn drop(&mut self) {
+        // Settings that failed to load are left as they are rather than overwritten.
+        if self.window_loaded && self.preferences.window != self.saved_window {
+            let _ = self.preferences.save(&self.settings_path);
+        }
         let _ = self
             .audit
             .record(Action::AppExit, Outcome::Succeeded, None, None);
@@ -2246,6 +2398,7 @@ impl eframe::App for ManagementApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.process_events();
         let ctx = ui.ctx().clone();
+        self.track_window(&ctx);
         egui::Panel::top("preferences")
             .frame(
                 egui::Frame::new()

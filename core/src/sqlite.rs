@@ -5,7 +5,7 @@ use crate::model::{CheckResult, Host, Package};
 use crate::store::Database;
 use anyhow::{Context, Result, ensure};
 use rusqlite::{Connection, MAIN_DB, config::DbConfig, limits::Limit, params};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use zeroize::Zeroizing;
 
 /// "MISF" in ASCII.
@@ -13,7 +13,7 @@ pub const APPLICATION_ID: i32 = 0x4D49_5346;
 /// `MIGRATIONS[n]` upgrades schema version n to n + 1; version 0 is an empty file.
 /// Append new versions; never edit a released one, because opened files are compared
 /// against the schema these statements produce.
-const MIGRATIONS: &[&str] = &[V1];
+const MIGRATIONS: &[&str] = &[V1, V2];
 pub const SCHEMA_VERSION: usize = MIGRATIONS.len();
 
 const V1: &str = "
@@ -56,6 +56,15 @@ CREATE TABLE packages (
     architecture TEXT NOT NULL,
     repository TEXT NOT NULL,
     PRIMARY KEY (host_id, upgraded, position)
+) STRICT;
+";
+
+/// v2: a package manager chosen in the editor ("" = detect), and LUKSbox key slot names.
+const V2: &str = "
+ALTER TABLE hosts ADD COLUMN manager_choice TEXT NOT NULL DEFAULT '';
+CREATE TABLE key_slots (
+    slot INTEGER PRIMARY KEY NOT NULL,
+    name TEXT NOT NULL
 ) STRICT;
 ";
 
@@ -199,7 +208,8 @@ pub(crate) fn load(conn: &Connection) -> Result<Database> {
     }
     let mut statement = conn.prepare(
         "SELECT id, name, address, port, username, os, auth_type, password, private_key,
-                key_passphrase, sudo_password, use_pty, fingerprint, notes, distro, package_manager
+                key_passphrase, sudo_password, use_pty, fingerprint, notes, distro, package_manager,
+                manager_choice
          FROM hosts ORDER BY position",
     )?;
     let mut rows = statement.query([])?;
@@ -224,27 +234,44 @@ pub(crate) fn load(conn: &Connection) -> Result<Database> {
             notes: row.get(13)?,
             distro: row.get(14)?,
             package_manager: row.get(15)?,
+            manager_choice: row.get(16)?,
         });
     }
-    Ok(Database { version: 1, hosts })
+    let mut statement = conn.prepare("SELECT slot, name FROM key_slots")?;
+    let slot_names = statement
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<rusqlite::Result<BTreeMap<_, _>>>()?;
+    Ok(Database {
+        version: 1,
+        hosts,
+        slot_names,
+    })
 }
 
 /// Replaces the stored hosts in one transaction; secure_delete zeroes the old rows.
 pub(crate) fn save(conn: &mut Connection, db: &Database) -> Result<()> {
     let tx = conn.transaction()?;
-    tx.execute_batch("DELETE FROM packages; DELETE FROM check_results; DELETE FROM hosts;")?;
+    tx.execute_batch(
+        "DELETE FROM packages; DELETE FROM check_results; DELETE FROM hosts;
+         DELETE FROM key_slots;",
+    )?;
     {
         let mut host_row = tx.prepare(
             "INSERT INTO hosts (id, position, name, address, port, username, os, auth_type,
                  password, private_key, key_passphrase, sudo_password, use_pty, fingerprint,
-                 notes, distro, package_manager)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+                 notes, distro, package_manager, manager_choice)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
+                 ?18)",
         )?;
         let mut result_row = tx.prepare(
             "INSERT INTO check_results (host_id, checked_at, operation, status, distro,
                  package_manager, output, error)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         )?;
+        let mut slot_row = tx.prepare("INSERT INTO key_slots (slot, name) VALUES (?1, ?2)")?;
+        for (slot, name) in &db.slot_names {
+            slot_row.execute(params![slot, name])?;
+        }
         let mut package_row = tx.prepare(
             "INSERT INTO packages (host_id, upgraded, position, name, current_version,
                  candidate_version, architecture, repository)
@@ -270,6 +297,7 @@ pub(crate) fn save(conn: &mut Connection, db: &Database) -> Result<()> {
                     host.notes,
                     host.distro,
                     host.package_manager,
+                    host.manager_choice,
                 ])
                 .with_context(|| format!("無法寫入主機 {}；主機 ID 可能重複", host.name))?;
             let Some(result) = &host.last_check else {
@@ -383,9 +411,11 @@ mod tests {
                 Host {
                     id: "a".into(),
                     name: "plain".into(),
+                    manager_choice: "dnf".into(),
                     ..Default::default()
                 },
             ],
+            slot_names: BTreeMap::from([(0, "管理密碼 1".into()), (3, "YubiKey".into())]),
         }
     }
 
@@ -463,16 +493,26 @@ mod tests {
         }
     }
 
+    /// A database written by a v1 build, with one host.
+    fn v1_image() -> Vec<u8> {
+        let mut conn = Connection::open_in_memory().unwrap();
+        prepare_with(&mut conn, &[V1], |_| Ok(())).unwrap();
+        conn.execute_batch(
+            "INSERT INTO hosts VALUES ('a', 0, 'web', 'host', 22, 'ops', 'Linux', 'password',
+                 'pw', '', '', '', 0, 'SHA256:x', '', 'Debian 13', 'apt')",
+        )
+        .unwrap();
+        conn.serialize(MAIN_DB).unwrap().to_vec()
+    }
+
     #[test]
     fn older_versions_upgrade_once_after_the_backup_hook() {
-        // A stand-in v2 shows the path every future migration takes.
-        let v2 = "ALTER TABLE hosts ADD COLUMN tags TEXT NOT NULL DEFAULT ''";
-        let image = to_image(&sample()).unwrap();
+        let image = v1_image();
         let mut conn = Connection::open_in_memory().unwrap();
         conn.deserialize_read_exact(MAIN_DB, &image[..], image.len(), false)
             .unwrap();
         let mut seen = None;
-        prepare_with(&mut conn, &[V1, v2], |version| {
+        prepare(&mut conn, |version| {
             seen = Some(version);
             Ok(())
         })
@@ -481,16 +521,31 @@ mod tests {
         let version: i64 = conn
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 2);
-        assert_eq!(load(&conn).unwrap().hosts.len(), 2);
-        // Already current: no second upgrade, and this build refuses the newer file.
-        prepare_with(&mut conn, &[V1, v2], |_| panic!("upgraded twice")).unwrap();
+        assert_eq!(version, SCHEMA_VERSION as i64);
+        let db = load(&conn).unwrap();
+        assert_eq!(
+            (
+                db.hosts[0].name.as_str(),
+                db.hosts[0].manager(),
+                db.slot_names.len()
+            ),
+            ("web", "apt", 0)
+        );
+        // Already current: no second upgrade. A stand-in v3 shows the next upgrade,
+        // and this build then refuses the newer file.
+        prepare(&mut conn, |_| panic!("upgraded twice")).unwrap();
+        let v3 = "ALTER TABLE hosts ADD COLUMN tags TEXT NOT NULL DEFAULT ''";
+        prepare_with(&mut conn, &[V1, V2, v3], |version| {
+            assert_eq!(version, 2);
+            Ok(())
+        })
+        .unwrap();
         assert!(prepare(&mut conn, |_| Ok(())).is_err());
         // A failed backup leaves the file at its old version.
         let mut conn = Connection::open_in_memory().unwrap();
         conn.deserialize_read_exact(MAIN_DB, &image[..], image.len(), false)
             .unwrap();
-        assert!(prepare_with(&mut conn, &[V1, v2], |_| anyhow::bail!("disk full")).is_err());
+        assert!(prepare(&mut conn, |_| anyhow::bail!("disk full")).is_err());
         let version: i64 = conn
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();

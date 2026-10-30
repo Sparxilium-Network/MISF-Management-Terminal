@@ -114,6 +114,8 @@ pub struct Platform {
     pub kernel: String,
     pub distro: String,
     pub manager: Option<Manager>,
+    /// Every supported manager on the host, preferred first.
+    pub available: Vec<Manager>,
 }
 
 pub fn parse_platform(output: &str) -> Result<Platform> {
@@ -151,11 +153,16 @@ pub fn parse_platform(output: &str) -> Result<Platform> {
         "FreeBSD" | "DragonFly" => &[Manager::Pkg],
         _ => &[],
     };
-    let manager = preferred.iter().copied().find(|m| found.contains(m));
+    let available: Vec<Manager> = preferred
+        .iter()
+        .copied()
+        .filter(|m| found.contains(m))
+        .collect();
     Ok(Platform {
         kernel,
         distro,
-        manager,
+        manager: available.first().copied(),
+        available,
     })
 }
 
@@ -396,18 +403,28 @@ pub(crate) async fn run_apt<P: Fn(&str) + ?Sized>(
             let (code, output) = execute(&session, DETECT, false, "", 20).await?;
             ensure!(code == 0, "無法辨識遠端作業系統");
             let detected = parse_platform(&output)?;
-            let manager = detected.manager;
+            let (detected_manager, available) = (detected.manager, detected.available.clone());
             platform = Some(detected);
-            let manager = manager.context(
-                "此主機沒有支援的套件管理器（APT、DNF、YUM 或 FreeBSD pkg）；不支援此檢查",
-            )?;
-            // The confirmation showed the recorded manager's commands; never run another's.
-            let expected = host.manager();
-            ensure!(
-                expected.is_empty() || expected == manager.id(),
-                "偵測到的套件管理器（{}）與紀錄（{expected}）不同；請先按「測試連線」更新主機資訊",
-                manager.label()
-            );
+            let manager = if let Some(chosen) = Manager::from_id(&host.manager_choice) {
+                ensure!(
+                    available.contains(&chosen),
+                    "主機上找不到所選的套件管理器（{}）；請在編輯主機改回自動偵測或選擇其他項目",
+                    chosen.label()
+                );
+                chosen
+            } else {
+                let manager = detected_manager.context(
+                    "此主機沒有支援的套件管理器（APT、DNF、YUM 或 FreeBSD pkg）；不支援此檢查",
+                )?;
+                // The confirmation showed the recorded manager's commands; never run another's.
+                let expected = host.manager();
+                ensure!(
+                    expected.is_empty() || expected == manager.id(),
+                    "偵測到的套件管理器（{}）與紀錄（{expected}）不同；請先按「測試連線」更新主機資訊",
+                    manager.label()
+                );
+                manager
+            };
             let [update, list_command, install] = manager.commands(host.username == "root");
             progress("正在更新套件索引…");
             let (code, output) =
@@ -456,7 +473,7 @@ pub(crate) async fn run_apt<P: Fn(&str) + ?Sized>(
     if let Some(platform) = platform {
         check.distro = platform.distro;
         check.package_manager = platform.manager.map(Manager::id).unwrap_or_default().into();
-        if platform.manager.is_none() {
+        if platform.available.is_empty() {
             check.status = "unsupported".into();
         }
     }
@@ -568,6 +585,7 @@ mod tests {
                 kernel: "Linux".into(),
                 distro: "Debian 13".into(),
                 manager: Some(Manager::Apt),
+                available: vec![Manager::Apt, Manager::Yum],
             }
         );
         let ubuntu = linux(
@@ -580,8 +598,12 @@ mod tests {
             "__MISF_PM__dnf\n__MISF_PM__yum\n",
         );
         assert_eq!(
-            (rocky.distro.as_str(), rocky.manager),
-            ("Rocky Linux 9.5", Some(Manager::Dnf))
+            (rocky.distro.as_str(), rocky.manager, rocky.available),
+            (
+                "Rocky Linux 9.5",
+                Some(Manager::Dnf),
+                vec![Manager::Dnf, Manager::Yum]
+            )
         );
         let sid = linux(
             "__MISF_NAME__Debian GNU/Linux\n__MISF_VERSION__\n__MISF_PRETTY__Debian GNU/Linux trixie/sid\n",
@@ -597,7 +619,7 @@ mod tests {
             ("FreeBSD 14.2-RELEASE", Some(Manager::Pkg))
         );
         let openbsd = parse_platform("OpenBSD\n7.6\n__MISF_PM__pkg\n").unwrap();
-        assert_eq!(openbsd.manager, None);
+        assert_eq!((openbsd.manager, openbsd.available), (None, vec![]));
         assert!(parse_platform("Darwin\n24.0\n").is_err());
     }
 

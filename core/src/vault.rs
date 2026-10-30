@@ -10,6 +10,7 @@ use luksbox_vfs::Vfs;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::{
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -25,6 +26,8 @@ const LEGACY_FILE: &str = "hosts.json";
 pub(crate) struct VaultFile {
     vfs: Vfs,
     poisoned: bool,
+    /// Slot names from the last database read or written, so status needs no decryption.
+    slot_names: BTreeMap<u32, String>,
 }
 
 impl VaultFile {
@@ -40,6 +43,7 @@ impl VaultFile {
         let mut vault = Self {
             vfs,
             poisoned: false,
+            slot_names: BTreeMap::new(),
         };
         vault.read()?;
         Ok(vault)
@@ -50,14 +54,17 @@ impl VaultFile {
             !self.poisoned,
             "先前儲存失敗；請鎖定後重新解鎖，確認容器狀態"
         );
-        if let Some(bytes) = self.read_file(DATABASE_FILE)? {
+        let db = if let Some(bytes) = self.read_file(DATABASE_FILE)? {
             // The image is opened in memory only; no plaintext SQLite file is written.
-            return crate::sqlite::from_image(&bytes).context("加密主機資料庫無法使用");
-        }
-        let bytes = self
-            .read_file(LEGACY_FILE)?
-            .context("容器內沒有 MISF 主機資料庫")?;
-        crate::store::parse_legacy(&bytes).context("加密主機資料格式錯誤")
+            crate::sqlite::from_image(&bytes).context("加密主機資料庫無法使用")?
+        } else {
+            let bytes = self
+                .read_file(LEGACY_FILE)?
+                .context("容器內沒有 MISF 主機資料庫")?;
+            crate::store::parse_legacy(&bytes).context("加密主機資料格式錯誤")?
+        };
+        self.slot_names = db.slot_names.clone();
+        Ok(db)
     }
 
     /// Which format the vault holds and its schema version; the legacy JSON has none.
@@ -111,10 +118,25 @@ impl VaultFile {
             self.vfs.flush()?;
             Ok(())
         })();
-        if operation.is_err() {
-            self.poisoned = true;
+        match operation {
+            Ok(()) => self.slot_names = db.slot_names.clone(),
+            Err(_) => self.poisoned = true,
         }
         operation
+    }
+
+    /// Names a slot, or clears its name when `name` is empty, e.g. after revoking it.
+    fn name_slot(&mut self, index: usize, name: &str) -> Result<()> {
+        let mut db = self.read()?;
+        let index = u32::try_from(index)?;
+        if name.is_empty() {
+            if db.slot_names.remove(&index).is_none() {
+                return Ok(());
+            }
+        } else {
+            db.slot_names.insert(index, name.into());
+        }
+        self.write(&db)
     }
 
     fn finish(&mut self) -> Result<()> {
@@ -134,6 +156,11 @@ impl VaultFile {
             .map(|(index, kind)| SlotInfo {
                 index,
                 kind: format!("{kind:?}"),
+                name: u32::try_from(index)
+                    .ok()
+                    .and_then(|index| self.slot_names.get(&index))
+                    .cloned()
+                    .unwrap_or_default(),
             })
             .collect()
     }
@@ -194,6 +221,8 @@ impl VaultFile {
 pub struct SlotInfo {
     pub index: usize,
     pub kind: String,
+    /// What the user called it, e.g. "Google Titan"; empty when unnamed.
+    pub name: String,
 }
 
 #[derive(Serialize)]
@@ -281,10 +310,11 @@ impl StorageSession {
                 Ok(serde_json::to_value(self.status()?)?)
             }
             "vault_create" => {
+                let name = slot_name(&request)?;
                 let password = take_secret(&mut request)?;
                 validate_passphrase(&password)?;
                 progress("正在建立 LUKSbox，並驗證資料可重新解鎖…");
-                self.enable(&password, Argon2idParams::INTERACTIVE)?;
+                self.enable(&password, &name, Argon2idParams::INTERACTIVE)?;
                 Ok(serde_json::to_value(self.status()?)?)
             }
             "vault_unlock" => {
@@ -307,20 +337,28 @@ impl StorageSession {
                 Ok(serde_json::to_value(self.status()?)?)
             }
             "vault_add_key" => {
+                let name = slot_name(&request)?;
                 let password = take_secret(&mut request)?;
                 validate_passphrase(&password)?;
                 progress("正在新增 LUKSbox 解鎖密碼…");
-                let index =
-                    self.with_vault(|vault| vault.add_key(&password, Argon2idParams::INTERACTIVE))?;
+                let index = self.with_vault(|vault| {
+                    let index = vault.add_key(&password, Argon2idParams::INTERACTIVE)?;
+                    // A reused index must not keep a revoked slot's name.
+                    vault.name_slot(index, &name)?;
+                    Ok(index)
+                })?;
                 Ok(json!({"slot":index,"storage":self.status()?}))
             }
             "vault_add_passkey" => {
+                let name = slot_name(&request)?;
                 let pin = take_pin(&mut request)?;
                 require_hardware_pin(&pin)?;
                 let hello = request["hello"].as_bool().unwrap_or(false);
                 progress("請在系統視窗或安全金鑰上完成 Passkey 註冊與兩次驗證…");
                 let index = self.with_vault(|vault| {
-                    vault.add_passkey(hello, pin.as_deref().map(String::as_str))
+                    let index = vault.add_passkey(hello, pin.as_deref().map(String::as_str))?;
+                    vault.name_slot(index, &name)?;
+                    Ok(index)
                 })?;
                 Ok(json!({"slot":index,"storage":self.status()?}))
             }
@@ -347,7 +385,25 @@ impl StorageSession {
                     .as_u64()
                     .and_then(|n| usize::try_from(n).ok())
                     .context("缺少有效的金鑰槽編號")?;
-                self.with_vault(|vault| vault.revoke_key(index))?;
+                self.with_vault(|vault| {
+                    vault.revoke_key(index)?;
+                    vault.name_slot(index, "")
+                })?;
+                Ok(json!({"slot":index,"storage":self.status()?}))
+            }
+            "vault_rename_key" => {
+                let index = request["slot"]
+                    .as_u64()
+                    .and_then(|n| usize::try_from(n).ok())
+                    .context("缺少有效的金鑰槽編號")?;
+                let name = slot_name(&request)?;
+                self.with_vault(|vault| {
+                    ensure!(
+                        vault.slots().iter().any(|slot| slot.index == index),
+                        "指定金鑰槽不存在"
+                    );
+                    vault.name_slot(index, &name)
+                })?;
                 Ok(json!({"slot":index,"storage":self.status()?}))
             }
             "vault_backup" => {
@@ -425,7 +481,7 @@ impl StorageSession {
         Ok(())
     }
 
-    fn enable(&mut self, passphrase: &[u8], params: Argon2idParams) -> Result<()> {
+    fn enable(&mut self, passphrase: &[u8], name: &str, params: Argon2idParams) -> Result<()> {
         check_environment()?;
         ensure!(!self.encrypted, "已啟用 LUKSbox，禁止覆寫現有容器");
         let source = self.store.as_ref().context("目前主機庫不可用")?;
@@ -458,7 +514,14 @@ impl StorageSession {
                 let mut vault = VaultFile {
                     vfs: Vfs::open(container)?,
                     poisoned: false,
+                    slot_names: BTreeMap::new(),
                 };
+                // Only the new container's single passphrase slot exists.
+                db.slot_names.clear();
+                if !name.is_empty() {
+                    let first = vault.slots().first().context("新容器沒有金鑰槽")?.index;
+                    db.slot_names.insert(u32::try_from(first)?, name.into());
+                }
                 vault.write(db)?;
                 vault.finish()?;
                 drop(vault);
@@ -590,6 +653,17 @@ fn ensure_encrypted_marker(plain_path: &Path) -> Result<()> {
     }
 }
 
+/// The optional slot name in a request: trimmed, short, and free of control characters.
+fn slot_name(request: &Value) -> Result<String> {
+    let name = request["name"].as_str().unwrap_or_default().trim();
+    ensure!(name.chars().count() <= 64, "金鑰槽名稱最多 64 個字");
+    ensure!(
+        !name.chars().any(char::is_control),
+        "金鑰槽名稱不可包含控制字元"
+    );
+    Ok(name.into())
+}
+
 fn validate_passphrase(password: &[u8]) -> Result<()> {
     ensure!(
         std::str::from_utf8(password)?.chars().count() >= 12,
@@ -685,7 +759,7 @@ mod tests {
         assert!(path.is_absolute());
         let request = json!({"action":"vault_delete_plaintext", "path":path, "confirmed":true});
         assert!(session.handle(request.clone(), &|_| {}).await.is_err());
-        session.enable(FIRST, params()).unwrap();
+        session.enable(FIRST, "", params()).unwrap();
         for rejected in [
             json!({"action":"vault_delete_plaintext", "path":path}),
             json!({"action":"vault_delete_plaintext", "path":path, "confirmed":false}),
@@ -746,7 +820,7 @@ mod tests {
         fs::write(&json, "{}").unwrap();
         let journal = dir.path().join("hosts.db-journal");
         fs::write(&journal, "interrupted transaction pages").unwrap();
-        session.enable(FIRST, params()).unwrap();
+        session.enable(FIRST, "", params()).unwrap();
         for expected in ["hosts.db", "hosts.json"] {
             let path = session.status().unwrap().plaintext_path;
             assert_eq!(path.file_name().unwrap(), expected);
@@ -766,7 +840,7 @@ mod tests {
     #[tokio::test]
     async fn plaintext_removal_refuses_busy_files_and_directories() {
         let (_dir, mut session) = fixture();
-        session.enable(FIRST, params()).unwrap();
+        session.enable(FIRST, "", params()).unwrap();
         let path = session.status().unwrap().plaintext_path;
         let request = json!({"action":"vault_delete_plaintext", "path":path, "confirmed":true});
         let lock = fs::OpenOptions::new()
@@ -788,7 +862,7 @@ mod tests {
     #[tokio::test]
     async fn plaintext_removal_refuses_symlink_targets() {
         let (dir, mut session) = fixture();
-        session.enable(FIRST, params()).unwrap();
+        session.enable(FIRST, "", params()).unwrap();
         let path = session.status().unwrap().plaintext_path;
         let target = dir.path().join("unrelated.json");
         fs::rename(&path, &target).unwrap();
@@ -810,7 +884,7 @@ mod tests {
     async fn migration_preserves_original_and_locked_session_never_falls_back_to_plaintext() {
         let (dir, mut session) = fixture();
         let original = fs::read(dir.path().join("hosts.db")).unwrap();
-        session.enable(FIRST, params()).unwrap();
+        session.enable(FIRST, "", params()).unwrap();
         assert!(session.status().unwrap().encrypted);
         assert!(session.status().unwrap().plaintext_exists);
         assert_eq!(fs::read(dir.path().join("hosts.db")).unwrap(), original);
@@ -863,7 +937,7 @@ mod tests {
     #[tokio::test]
     async fn two_independent_password_slots_survive_restart_and_encrypted_backup() {
         let (dir, mut session) = fixture();
-        session.enable(FIRST, params()).unwrap();
+        session.enable(FIRST, "", params()).unwrap();
         let slot = session
             .with_vault(|vault| vault.add_key(SECOND, params()))
             .unwrap();
@@ -900,10 +974,84 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn slot_names_follow_their_slots_and_survive_restart() {
+        let (dir, mut session) = fixture();
+        session.enable(FIRST, "管理密碼 1", params()).unwrap();
+        let slot = session
+            .with_vault(|vault| {
+                let slot = vault.add_key(SECOND, params())?;
+                vault.name_slot(slot, "Google Titan")?;
+                Ok(slot)
+            })
+            .unwrap();
+        let names = |session: &mut StorageSession| {
+            session
+                .status()
+                .unwrap()
+                .slots
+                .into_iter()
+                .map(|slot| (slot.index, slot.name))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            names(&mut session),
+            [(0, "管理密碼 1".into()), (slot, "Google Titan".into())]
+        );
+        let rename =
+            |slot: usize, name: &str| json!({"action":"vault_rename_key","slot":slot,"name":name});
+        session
+            .handle(rename(0, "  主要密碼  "), &|_| {})
+            .await
+            .unwrap();
+        for invalid in [
+            rename(5, "nothing here"),
+            rename(0, &"x".repeat(65)),
+            rename(0, "a\nb"),
+        ] {
+            assert!(session.handle(invalid, &|_| {}).await.is_err());
+        }
+        // Host edits rewrite the database and keep the names.
+        session
+            .handle(json!({"action":"delete","id":"sample"}), &|_| {})
+            .await
+            .unwrap();
+        session
+            .handle(json!({"action":"vault_revoke_key","slot":slot}), &|_| {})
+            .await
+            .unwrap();
+        assert_eq!(names(&mut session), [(0, "主要密碼".into())]);
+        // A new slot reusing the revoked index starts unnamed.
+        let reused = session
+            .with_vault(|vault| {
+                let slot = vault.add_key(SECOND, params())?;
+                vault.name_slot(slot, "")?;
+                Ok(slot)
+            })
+            .unwrap();
+        assert_eq!(reused, slot);
+        session
+            .handle(json!({"action":"vault_lock"}), &|_| {})
+            .await
+            .unwrap();
+        let mut restarted = StorageSession::new(dir.path().join("hosts.db"));
+        restarted
+            .handle(
+                json!({"action":"vault_unlock","passphrase":std::str::from_utf8(SECOND).unwrap()}),
+                &|_| {},
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            names(&mut restarted),
+            [(0, "主要密碼".into()), (slot, String::new())]
+        );
+    }
+
     #[test]
     fn encrypted_updates_replace_shorter_snapshots_and_never_write_secrets_to_sidecars() {
         let (dir, mut session) = fixture();
-        session.enable(FIRST, params()).unwrap();
+        session.enable(FIRST, "", params()).unwrap();
         let original = fs::read(dir.path().join("hosts.db")).unwrap();
         let store = session.store.as_ref().unwrap();
         store
@@ -944,7 +1092,7 @@ mod tests {
         use std::io::{Read, Seek, SeekFrom, Write};
         let (dir, mut session) = fixture();
         let original = fs::read(dir.path().join("hosts.db")).unwrap();
-        session.enable(FIRST, params()).unwrap();
+        session.enable(FIRST, "", params()).unwrap();
         let offset = session
             .with_vault(|vault| Ok(vault.vfs.container().data_offset()))
             .unwrap();
@@ -970,8 +1118,8 @@ mod tests {
     #[test]
     fn duplicate_conversion_and_concurrent_open_cannot_overwrite_the_vault() {
         let (dir, mut session) = fixture();
-        session.enable(FIRST, params()).unwrap();
-        assert!(session.enable(SECOND, params()).is_err());
+        session.enable(FIRST, "", params()).unwrap();
+        assert!(session.enable(SECOND, "", params()).is_err());
         assert!(VaultFile::open(&dir.path().join("hosts.lbx"), FIRST).is_err());
         assert!(
             Store::new(dir.path().join("hosts.db"))
@@ -996,7 +1144,7 @@ mod tests {
     #[tokio::test]
     async fn revoke_password_survives_restart_and_last_slot_cannot_be_removed() {
         let (dir, mut session) = fixture();
-        session.enable(FIRST, params()).unwrap();
+        session.enable(FIRST, "", params()).unwrap();
         assert!(session.with_vault(|vault| vault.revoke_key(0)).is_err());
         session
             .with_vault(|vault| vault.add_key(SECOND, params()))
@@ -1035,7 +1183,7 @@ mod tests {
     fn real_passkey_protocol_with_mock_devices_supports_backup_unlock_and_revocation() {
         use luksbox_fido2::MockAuthenticator;
         let (dir, mut session) = fixture();
-        session.enable(FIRST, params()).unwrap();
+        session.enable(FIRST, "", params()).unwrap();
         let mut primary = MockAuthenticator::new();
         let mut backup = MockAuthenticator::new();
         for auth in [&mut primary, &mut backup] {
@@ -1071,7 +1219,7 @@ mod tests {
     fn failed_passkey_enrollment_does_not_add_a_slot() {
         use luksbox_fido2::MockAuthenticator;
         let (_dir, mut session) = fixture();
-        session.enable(FIRST, params()).unwrap();
+        session.enable(FIRST, "", params()).unwrap();
         let mut cancelled = MockAuthenticator::new();
         cancelled.simulate_no_touch();
         let mut zero_secret = MockAuthenticator::new();
@@ -1095,7 +1243,7 @@ mod tests {
     #[tokio::test]
     async fn missing_vault_stays_locked_even_when_original_plaintext_still_exists() {
         let (dir, mut session) = fixture();
-        session.enable(FIRST, params()).unwrap();
+        session.enable(FIRST, "", params()).unwrap();
         session
             .handle(json!({"action":"vault_lock"}), &|_| {})
             .await

@@ -5,6 +5,7 @@ use fs2::FileExt;
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::BTreeMap,
     fs::{self, OpenOptions},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -15,6 +16,9 @@ use std::{
 pub struct Database {
     pub version: u32,
     pub hosts: Vec<Host>,
+    /// Names the user gave LUKSbox key slots, by slot index; never in the legacy JSON.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub slot_names: BTreeMap<u32, String>,
 }
 
 pub struct Store {
@@ -113,6 +117,7 @@ impl Store {
                 Ok(Database {
                     version: db.version,
                     hosts: db.hosts.clone(),
+                    slot_names: db.slot_names.clone(),
                 })
             },
             false,
@@ -275,7 +280,10 @@ mod tests {
         let host = store.host("x").unwrap();
         assert_eq!(host.last_check.unwrap().packages[0].name, "curl");
         assert_eq!(fs::read(&json).unwrap(), original);
-        assert_eq!(store.format().unwrap(), ("sqlite", Some(1)));
+        assert_eq!(
+            store.format().unwrap(),
+            ("sqlite", Some(crate::sqlite::SCHEMA_VERSION as u32))
+        );
         // Later edits go to SQLite only.
         store
             .update(|db| {
