@@ -268,7 +268,8 @@ impl ManagementApp {
         }
     }
 
-    /// Returns true when the user asked to convert a legacy JSON store to SQLite.
+    /// Returns true when the user asked to convert a legacy JSON store, or rewrite an
+    /// encrypted database still stored at an older schema version (upgraded only in memory).
     fn about_section(&self, ui: &mut egui::Ui) -> bool {
         let t = Translator(self.preferences.language);
         ui.label(RichText::new(t.get("settings.about")).strong());
@@ -286,7 +287,14 @@ impl ManagementApp {
             ("json", _) => t.get("settings.schema_json").to_owned(),
             _ => "—".to_owned(),
         };
-        let mut convert = false;
+        let current = misf_core::sqlite::SCHEMA_VERSION as u64;
+        let action = match (self.storage_format.as_str(), self.schema_version) {
+            ("json", _) => Some(t.get("settings.convert_db").to_owned()),
+            ("sqlite", Some(version)) if version < current => {
+                Some(t.format("settings.upgrade_db", &[("version", current.to_string())]))
+            }
+            _ => None,
+        };
         egui::Grid::new("about_grid")
             .spacing([24.0, 6.0])
             .show(ui, |ui| {
@@ -294,22 +302,18 @@ impl ManagementApp {
                 ui.label(format!("v{}", env!("CARGO_PKG_VERSION")));
                 ui.end_row();
                 ui.label(t.get("settings.storage_format"));
-                ui.vertical(|ui| {
-                    ui.label(format);
-                    if self.storage_format == "json" {
-                        convert = ui
-                            .add_enabled(
-                                !self.busy,
-                                egui::Button::new(t.get("settings.convert_db")),
-                            )
-                            .clicked();
-                    }
-                });
+                ui.label(format);
                 ui.end_row();
                 ui.label(t.get("settings.schema_version"));
                 ui.label(schema);
                 ui.end_row();
             });
+        // Outside the grid: a widget group in a cell would shrink that column to nothing.
+        let convert = action.is_some_and(|label| {
+            ui.add_space(4.0);
+            ui.add_enabled(!self.busy, egui::Button::new(label))
+                .clicked()
+        });
         ui.add_space(8.0);
         convert
     }
@@ -485,7 +489,10 @@ impl ManagementApp {
                     t.format("status.slot_renamed", &[("slot", data["slot"].to_string())]);
             }
             "convert_storage" => {
-                self.status = t.get("settings.converted").into();
+                self.status = t.format(
+                    "settings.converted",
+                    &[("version", data["schema_version"].to_string())],
+                );
                 self.send(json!({"action":"list"}));
             }
             "vault_backup" => {
