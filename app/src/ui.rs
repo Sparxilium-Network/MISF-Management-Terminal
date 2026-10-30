@@ -215,7 +215,9 @@ impl ManagementApp {
                 self.preferences_form(ui);
                 ui.add_space(12.0);
                 ui.separator();
-                self.about_section(ui);
+                if self.about_section(ui) {
+                    self.send(json!({"action":"convert_storage"}));
+                }
                 ui.separator();
                 ui.label(t.get("settings.plaintext_notice"));
                 ui.add_space(12.0);
@@ -227,7 +229,8 @@ impl ManagementApp {
         }
     }
 
-    fn about_section(&self, ui: &mut egui::Ui) {
+    /// Returns true when the user asked to convert a legacy JSON store to SQLite.
+    fn about_section(&self, ui: &mut egui::Ui) -> bool {
         let t = Translator(self.preferences.language);
         ui.label(RichText::new(t.get("settings.about")).strong());
         ui.add_space(4.0);
@@ -244,6 +247,7 @@ impl ManagementApp {
             ("json", _) => t.get("settings.schema_json").to_owned(),
             _ => "—".to_owned(),
         };
+        let mut convert = false;
         egui::Grid::new("about_grid")
             .spacing([24.0, 6.0])
             .show(ui, |ui| {
@@ -251,13 +255,24 @@ impl ManagementApp {
                 ui.label(format!("v{}", env!("CARGO_PKG_VERSION")));
                 ui.end_row();
                 ui.label(t.get("settings.storage_format"));
-                ui.label(format);
+                ui.vertical(|ui| {
+                    ui.label(format);
+                    if self.storage_format == "json" {
+                        convert = ui
+                            .add_enabled(
+                                !self.busy,
+                                egui::Button::new(t.get("settings.convert_db")),
+                            )
+                            .clicked();
+                    }
+                });
                 ui.end_row();
                 ui.label(t.get("settings.schema_version"));
                 ui.label(schema);
                 ui.end_row();
             });
         ui.add_space(8.0);
+        convert
     }
 
     fn preferences_form(&mut self, ui: &mut egui::Ui) {
@@ -423,6 +438,10 @@ impl ManagementApp {
                 self.open_vault_dialog(VaultMode::Manage);
                 self.status =
                     t.format("status.slot_revoked", &[("slot", data["slot"].to_string())]);
+            }
+            "convert_storage" => {
+                self.status = t.get("settings.converted").into();
+                self.send(json!({"action":"list"}));
             }
             "vault_backup" => {
                 self.status = t.format(

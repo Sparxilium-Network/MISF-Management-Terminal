@@ -83,6 +83,13 @@ pub async fn dispatch(request: Value, store: &Store, progress: &dyn Fn(&str)) ->
                 "schema_version": schema_version,
             }))
         }
+        "convert_storage" => {
+            // Reading already converts a plaintext hosts.json; writing the unchanged
+            // hosts converts a vault's legacy /hosts.json in one metadata commit.
+            store.update(|_| Ok(()))?;
+            let (format, schema_version) = store.format()?;
+            Ok(json!({"format": format, "schema_version": schema_version}))
+        }
         "save" => {
             let mut host: Host =
                 serde_json::from_value(request["host"].clone()).context("主機資料格式錯誤")?;

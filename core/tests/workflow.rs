@@ -763,6 +763,16 @@ async fn ssh_apt_results_roundtrip_inside_luksbox_and_remain_cli_compatible() {
         (listed["format"].clone(), listed["schema_version"].clone()),
         (json!("json"), json!(null))
     );
+    let converted = session
+        .handle(json!({"action":"convert_storage"}), &|_| {})
+        .await
+        .unwrap();
+    assert_eq!(converted, json!({"format":"sqlite","schema_version":1}));
+    let listed = session
+        .handle(json!({"action":"list"}), &|_| {})
+        .await
+        .unwrap();
+    assert_eq!(listed["hosts"][0]["id"], json!(fixture.host.id));
     let result = session
         .handle(json!({"action":"check","id":fixture.host.id}), &|_| {})
         .await
@@ -786,7 +796,7 @@ async fn ssh_apt_results_roundtrip_inside_luksbox_and_remain_cli_compatible() {
     let mut vfs =
         Vfs::open(Container::open(&path, None, UnlockMaterial::Passphrase(password)).unwrap())
             .unwrap();
-    // The first save converted the legacy JSON into a stock SQLite image.
+    // Converting replaced the legacy JSON with a stock SQLite image.
     assert!(vfs.lookup_path("/hosts.json").is_err());
     let file = vfs.lookup_path("/hosts.db").unwrap();
     let mut bytes = vec![0; vfs.stat(file).unwrap().size as usize];

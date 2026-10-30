@@ -31,7 +31,7 @@ APT 升級在相同流程後追加 `apt-get -y upgrade`：一般帳號以 `sudo 
 
 ## 本機儲存與背景工作
 
-左上角「設定」按鈕開啟集中管理語言與外觀的視窗，並顯示版本資訊：MISF 程式版本（取自 Cargo 套件版本，目前 0.1.0）、主機庫格式（SQLite 或尚未轉換的舊版 JSON，以及是否 LUKSbox 加密）與資料庫結構版本（讀自檔頭 `user_version`）；這些值隨 `list` 回應更新，鎖定時不顯示。介面語系由 `app/locales/zh-tw.json`／`en-us.json` 提供，內嵌進執行檔，透過穩定 key 與命名參數即時切換。`app/src/theme.rs` 統一管理淺色／深色配色及系統主題選項，涵蓋卡片、輸入框、對話框與警告。非敏感偏好以獨立、未加密的 `ui-settings.json` 保存，不進入主機資料／加密容器，因此鎖定主機庫也可讀取語言及外觀；使用暫存檔原子替換，寫入失敗會顯示錯誤。
+左上角「設定」按鈕開啟集中管理語言與外觀的視窗，並顯示版本資訊：MISF 程式版本（取自 Cargo 套件版本，目前 0.1.0）、主機庫格式（SQLite 或尚未轉換的舊版 JSON，以及是否 LUKSbox 加密）與資料庫結構版本（讀自檔頭 `user_version`）；格式為 JSON 時旁邊顯示「轉換為 SQLite 資料庫」按鈕，送出 `convert_storage` 寫回一次未變更的主機資料，加密容器的 `/hosts.json` 便在同一次提交中轉成 `/hosts.db`，不必等下一次編輯；這些值隨 `list` 回應更新，鎖定時不顯示。介面語系由 `app/locales/zh-tw.json`／`en-us.json` 提供，內嵌進執行檔，透過穩定 key 與命名參數即時切換。`app/src/theme.rs` 統一管理淺色／深色配色及系統主題選項，涵蓋卡片、輸入框、對話框與警告。非敏感偏好以獨立、未加密的 `ui-settings.json` 保存，不進入主機資料／加密容器，因此鎖定主機庫也可讀取語言及外觀；使用暫存檔原子替換，寫入失敗會顯示錯誤。
 
 預設儲存於使用者目錄 `.misf-management/hosts.db`，以 MISF_DATA_DIR 可更改位置。主機資料使用 SQLite（靜態連結 bundled SQLite 3.54.1，`core/src/sqlite.rs`），資料表為 `hosts`、`check_results`、`packages`（STRICT，以 position 保留順序）。檔頭 `application_id` 固定為 `0x4D495346`（"MISF"），`user_version` 是結構版本槽；`MIGRATIONS[n]` 把 vN 升到 vN+1，只能追加、不得修改已發佈的版本。
 
