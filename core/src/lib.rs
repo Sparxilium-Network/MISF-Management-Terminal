@@ -3,6 +3,7 @@ pub mod model;
 mod passkey;
 pub mod runtime;
 pub mod session;
+pub mod sqlite;
 pub mod ssh;
 pub mod store;
 pub mod transcript;

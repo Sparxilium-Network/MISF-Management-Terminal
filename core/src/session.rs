@@ -166,7 +166,7 @@ mod tests {
     async fn debug_blocks_remote_network_and_authenticator_and_logs_only_metadata() {
         let dir = tempfile::tempdir().unwrap();
         let paths = RuntimePaths {
-            store: dir.path().join("hosts.json"),
+            store: dir.path().join("hosts.db"),
             debug: true,
             debug_allow_passkey: false,
         };
@@ -219,7 +219,7 @@ mod tests {
     async fn unavailable_log_blocks_mutations_before_they_start() {
         let dir = tempfile::tempdir().unwrap();
         let paths = RuntimePaths {
-            store: dir.path().join("hosts.json"),
+            store: dir.path().join("hosts.db"),
             debug: true,
             debug_allow_passkey: false,
         };
@@ -240,7 +240,7 @@ mod tests {
     async fn hardware_opt_in_does_not_disable_other_debug_restrictions() {
         let dir = tempfile::tempdir().unwrap();
         let paths = RuntimePaths {
-            store: dir.path().join("hosts.json"),
+            store: dir.path().join("hosts.db"),
             debug: true,
             debug_allow_passkey: true,
         };
@@ -271,7 +271,7 @@ mod tests {
     async fn debug_blocks_upgrades_and_batches_reaching_any_remote_or_unknown_host() {
         let dir = tempfile::tempdir().unwrap();
         let paths = RuntimePaths {
-            store: dir.path().join("hosts.json"),
+            store: dir.path().join("hosts.db"),
             debug: true,
             debug_allow_passkey: false,
         };

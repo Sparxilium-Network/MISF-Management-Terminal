@@ -18,7 +18,9 @@ use zeroize::Zeroizing;
 
 const MAX_DATABASE_BYTES: u64 = 64 * 1024 * 1024;
 const METADATA_BYTES: u64 = 1024 * 1024;
-const DATABASE_FILE: &str = "hosts.json";
+const DATABASE_FILE: &str = "hosts.db";
+/// Vaults created before SQLite hold this JSON until the next save replaces it.
+const LEGACY_FILE: &str = "hosts.json";
 
 pub(crate) struct VaultFile {
     vfs: Vfs,
@@ -48,10 +50,22 @@ impl VaultFile {
             !self.poisoned,
             "先前儲存失敗；請鎖定後重新解鎖，確認容器狀態"
         );
-        let file = self
-            .vfs
-            .lookup_path("/hosts.json")
-            .context("容器內沒有 MISF hosts.json")?;
+        if let Some(bytes) = self.read_file(DATABASE_FILE)? {
+            // The image is opened in memory only; no plaintext SQLite file is written.
+            return crate::sqlite::from_image(&bytes).context("加密主機資料庫無法使用");
+        }
+        let bytes = self
+            .read_file(LEGACY_FILE)?
+            .context("容器內沒有 MISF 主機資料庫")?;
+        crate::store::parse_legacy(&bytes).context("加密主機資料格式錯誤")
+    }
+
+    fn read_file(&mut self, name: &str) -> Result<Option<Zeroizing<Vec<u8>>>> {
+        let file = match self.vfs.lookup_path(&format!("/{name}")) {
+            Ok(file) => file,
+            Err(luksbox_vfs::Error::NotFound) => return Ok(None),
+            Err(error) => return Err(error).context("無法讀取 LUKSbox 目錄"),
+        };
         let size = self.vfs.stat(file)?.size;
         ensure!(size <= MAX_DATABASE_BYTES, "主機資料超過 64 MiB 上限");
         let mut bytes = Zeroizing::new(vec![0; size as usize]);
@@ -61,14 +75,12 @@ impl VaultFile {
             ensure!(count > 0, "LUKSbox 主機資料不完整");
             read += count;
         }
-        let db: Database = serde_json::from_slice(&bytes).context("加密主機資料格式錯誤")?;
-        ensure!(db.version == 1, "不支援的主機資料版本");
-        Ok(db)
+        Ok(Some(bytes))
     }
 
     pub(crate) fn write(&mut self, db: &Database) -> Result<()> {
         ensure!(!self.poisoned, "先前儲存失敗；請鎖定後重新解鎖");
-        let bytes = Zeroizing::new(serde_json::to_vec(db)?);
+        let bytes = crate::sqlite::to_image(db)?;
         ensure!(
             bytes.len() as u64 <= MAX_DATABASE_BYTES,
             "主機資料超過 64 MiB 上限"
@@ -82,6 +94,10 @@ impl VaultFile {
             let written = self.vfs.write(file, 0, &bytes)?;
             ensure!(written == bytes.len(), "LUKSbox 寫入不完整");
             self.vfs.rename(root, &name, root, DATABASE_FILE)?;
+            // Dropped in the same metadata commit that makes the SQLite image visible.
+            if self.vfs.lookup_path(&format!("/{LEGACY_FILE}")).is_ok() {
+                self.vfs.unlink(root, LEGACY_FILE)?;
+            }
             self.vfs.flush()?;
             Ok(())
         })();
@@ -228,7 +244,7 @@ impl StorageSession {
             } else {
                 self.plain_path.clone()
             },
-            plaintext_exists: self.plain_path.exists(),
+            plaintext_exists: self.plaintext_file().exists(),
             plaintext_path: self.plaintext_path()?,
             slots,
             warning: self.warning.clone(),
@@ -351,9 +367,19 @@ impl StorageSession {
         operation(&mut vault)
     }
 
+    /// The plaintext database left beside the vault; once that is gone, a legacy JSON copy.
+    fn plaintext_file(&self) -> PathBuf {
+        let legacy = self.plain_path.with_extension("json");
+        if !self.plain_path.exists() && legacy.exists() {
+            legacy
+        } else {
+            self.plain_path.clone()
+        }
+    }
+
     fn plaintext_path(&self) -> Result<PathBuf> {
-        // Resolve the directory, not the file: never follow a hosts.json symlink.
-        let absolute = std::path::absolute(&self.plain_path)?;
+        // Resolve the directory, not the file: never follow a hosts.db symlink.
+        let absolute = std::path::absolute(self.plaintext_file())?;
         let parent = absolute.parent().context("資料路徑無效")?;
         let parent = if parent.exists() {
             parent.canonicalize()?
@@ -376,20 +402,16 @@ impl StorageSession {
             .write(true)
             .open(self.plain_path.with_extension("lock"))?;
         fs2::FileExt::try_lock_exclusive(&lock).context("明文主機庫正被使用，無法刪除")?;
-        let metadata = fs::symlink_metadata(&path).context("無法檢查明文副本")?;
-        ensure!(
-            metadata.is_file() && !metadata.file_type().is_symlink(),
-            "明文副本不是一般檔案，拒絕刪除"
-        );
-        #[cfg(windows)]
-        {
-            use std::os::windows::fs::MetadataExt;
-            ensure!(
-                metadata.file_attributes() & 0x400 == 0,
-                "明文副本是 reparse point，拒絕刪除"
-            );
-        }
+        ensure_regular_file(&path)?;
         fs::remove_file(&path).context("無法刪除明文副本")?;
+        // An interrupted transaction leaves a rollback journal holding plaintext pages.
+        let mut journal = path.into_os_string();
+        journal.push("-journal");
+        let journal = PathBuf::from(journal);
+        if journal.exists() {
+            ensure_regular_file(&journal)?;
+            fs::remove_file(&journal).context("無法刪除明文資料庫日誌")?;
+        }
         Ok(())
     }
 
@@ -505,6 +527,23 @@ impl StorageSession {
     }
 }
 
+fn ensure_regular_file(path: &Path) -> Result<()> {
+    let metadata = fs::symlink_metadata(path).context("無法檢查明文副本")?;
+    ensure!(
+        metadata.is_file() && !metadata.file_type().is_symlink(),
+        "明文副本不是一般檔案，拒絕刪除"
+    );
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        ensure!(
+            metadata.file_attributes() & 0x400 == 0,
+            "明文副本是 reparse point，拒絕刪除"
+        );
+    }
+    Ok(())
+}
+
 fn encrypted_store(path: PathBuf, vault: VaultFile) -> Store {
     Store {
         path,
@@ -607,7 +646,7 @@ mod tests {
 
     fn fixture() -> (tempfile::TempDir, StorageSession) {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("hosts.json");
+        let path = dir.path().join("hosts.db");
         let store = Store::new(path.clone());
         store
             .update(|db| {
@@ -631,7 +670,7 @@ mod tests {
     #[tokio::test]
     async fn plaintext_removal_requires_unlocked_vault_and_explicit_exact_path() {
         let (dir, mut session) = fixture();
-        let plain = dir.path().join("hosts.json");
+        let plain = dir.path().join("hosts.db");
         let path = session.status().unwrap().plaintext_path;
         assert!(path.is_absolute());
         let request = json!({"action":"vault_delete_plaintext", "path":path, "confirmed":true});
@@ -691,6 +730,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn legacy_json_copy_is_offered_after_the_plaintext_database_and_journal_are_gone() {
+        let (dir, mut session) = fixture();
+        let json = dir.path().join("hosts.json");
+        fs::write(&json, "{}").unwrap();
+        let journal = dir.path().join("hosts.db-journal");
+        fs::write(&journal, "interrupted transaction pages").unwrap();
+        session.enable(FIRST, params()).unwrap();
+        for expected in ["hosts.db", "hosts.json"] {
+            let path = session.status().unwrap().plaintext_path;
+            assert_eq!(path.file_name().unwrap(), expected);
+            session
+                .handle(
+                    json!({"action":"vault_delete_plaintext", "path":path, "confirmed":true}),
+                    &|_| {},
+                )
+                .await
+                .unwrap();
+            assert!(!journal.exists());
+        }
+        assert!(!json.exists());
+        assert!(!session.status().unwrap().plaintext_exists);
+    }
+
+    #[tokio::test]
     async fn plaintext_removal_refuses_busy_files_and_directories() {
         let (_dir, mut session) = fixture();
         session.enable(FIRST, params()).unwrap();
@@ -736,11 +799,11 @@ mod tests {
     #[tokio::test]
     async fn migration_preserves_original_and_locked_session_never_falls_back_to_plaintext() {
         let (dir, mut session) = fixture();
-        let original = fs::read(dir.path().join("hosts.json")).unwrap();
+        let original = fs::read(dir.path().join("hosts.db")).unwrap();
         session.enable(FIRST, params()).unwrap();
         assert!(session.status().unwrap().encrypted);
         assert!(session.status().unwrap().plaintext_exists);
-        assert_eq!(fs::read(dir.path().join("hosts.json")).unwrap(), original);
+        assert_eq!(fs::read(dir.path().join("hosts.db")).unwrap(), original);
         let hosts = session
             .handle(json!({"action":"list"}), &|_| {})
             .await
@@ -808,7 +871,7 @@ mod tests {
             .unwrap();
         drop(session);
         for passphrase in [FIRST, SECOND] {
-            let mut restarted = StorageSession::new(dir.path().join("hosts.json"));
+            let mut restarted = StorageSession::new(dir.path().join("hosts.db"));
             assert!(restarted.status().unwrap().locked);
             restarted.handle(json!({"action":"vault_unlock","passphrase":std::str::from_utf8(passphrase).unwrap()}), &|_| {}).await.unwrap();
             assert_eq!(restarted.status().unwrap().slots.len(), 2);
@@ -831,7 +894,7 @@ mod tests {
     fn encrypted_updates_replace_shorter_snapshots_and_never_write_secrets_to_sidecars() {
         let (dir, mut session) = fixture();
         session.enable(FIRST, params()).unwrap();
-        let original = fs::read(dir.path().join("hosts.json")).unwrap();
+        let original = fs::read(dir.path().join("hosts.db")).unwrap();
         let store = session.store.as_ref().unwrap();
         store
             .update(|db| {
@@ -848,7 +911,7 @@ mod tests {
             .unwrap();
         assert!(store.read().unwrap().hosts.is_empty());
         session.with_vault(|vault| vault.finish()).unwrap();
-        assert_eq!(fs::read(dir.path().join("hosts.json")).unwrap(), original);
+        assert_eq!(fs::read(dir.path().join("hosts.db")).unwrap(), original);
         drop(session);
         for entry in fs::read_dir(dir.path()).unwrap() {
             let path = entry.unwrap().path();
@@ -870,7 +933,7 @@ mod tests {
     fn tampered_file_chunk_fails_closed_and_does_not_change_original_json() {
         use std::io::{Read, Seek, SeekFrom, Write};
         let (dir, mut session) = fixture();
-        let original = fs::read(dir.path().join("hosts.json")).unwrap();
+        let original = fs::read(dir.path().join("hosts.db")).unwrap();
         session.enable(FIRST, params()).unwrap();
         let offset = session
             .with_vault(|vault| Ok(vault.vfs.container().data_offset()))
@@ -891,7 +954,7 @@ mod tests {
         file.sync_all().unwrap();
         drop(file);
         assert!(VaultFile::open(&path, FIRST).is_err());
-        assert_eq!(fs::read(dir.path().join("hosts.json")).unwrap(), original);
+        assert_eq!(fs::read(dir.path().join("hosts.db")).unwrap(), original);
     }
 
     #[test]
@@ -901,7 +964,7 @@ mod tests {
         assert!(session.enable(SECOND, params()).is_err());
         assert!(VaultFile::open(&dir.path().join("hosts.lbx"), FIRST).is_err());
         assert!(
-            Store::new(dir.path().join("hosts.json"))
+            Store::new(dir.path().join("hosts.db"))
                 .update(|db| {
                     db.hosts.clear();
                     Ok(())
@@ -1033,7 +1096,7 @@ mod tests {
             dir.path().join("offline-copy.lbx"),
         )
         .unwrap();
-        let mut restarted = StorageSession::new(dir.path().join("hosts.json"));
+        let mut restarted = StorageSession::new(dir.path().join("hosts.db"));
         assert!(restarted.status().unwrap().encrypted);
         assert!(restarted.status().unwrap().locked);
         assert!(
@@ -1043,6 +1106,6 @@ mod tests {
                 .is_err()
         );
         assert!(restarted.handle(json!({"action":"vault_unlock","passphrase":std::str::from_utf8(FIRST).unwrap()}), &|_| {}).await.is_err());
-        assert!(Store::new(dir.path().join("hosts.json")).read().is_err());
+        assert!(Store::new(dir.path().join("hosts.db")).read().is_err());
     }
 }

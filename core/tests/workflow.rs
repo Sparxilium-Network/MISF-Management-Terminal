@@ -435,7 +435,7 @@ async fn batches_reject_mixed_or_undetected_package_managers() {
         fixture_on(DNF_HOST, false, false).await,
     );
     let dir = tempfile::tempdir().unwrap();
-    let store = Store::new(dir.path().join("hosts.json"));
+    let store = Store::new(dir.path().join("hosts.db"));
     let debian = register(&store, &apt, "debian").await;
     let rocky = register(&store, &dnf, "rocky").await;
     let saved = store.host(&rocky).unwrap();
@@ -493,7 +493,7 @@ async fn batches_reject_mixed_or_undetected_package_managers() {
 async fn batch_runs_each_host_and_saves_per_host_results() {
     let fixture = fixture(false, false).await;
     let dir = tempfile::tempdir().unwrap();
-    let store = Store::new(dir.path().join("hosts.json"));
+    let store = Store::new(dir.path().join("hosts.db"));
     let mut ids = vec![];
     for name in ["first", "second", "changed"] {
         ids.push(register(&store, &fixture, name).await);
@@ -642,7 +642,7 @@ async fn failed_authentication_is_reported_without_package_results() {
 async fn persistence_saves_check_and_resets_trust_when_endpoint_changes() {
     let fixture = fixture(false, false).await;
     let dir = tempfile::tempdir().unwrap();
-    let store = Store::new(dir.path().join("hosts.json"));
+    let store = Store::new(dir.path().join("hosts.db"));
     let saved = dispatch(
         json!({"action":"save", "host":fixture.host}),
         &store,
@@ -692,7 +692,7 @@ async fn persistence_saves_check_and_resets_trust_when_endpoint_changes() {
 #[test]
 fn malformed_store_is_preserved_and_unparseable_apt_output_is_not_success() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("hosts.json");
+    let path = dir.path().join("hosts.db");
     std::fs::write(&path, "damaged-data").unwrap();
     let store = Store::new(path.clone());
     assert!(
@@ -747,7 +747,7 @@ async fn ssh_apt_results_roundtrip_inside_luksbox_and_remain_cli_compatible() {
         vfs.write(file, 0, &bytes).unwrap();
         vfs.finish().unwrap();
     }
-    let mut session = StorageSession::new(dir.path().join("hosts.json"));
+    let mut session = StorageSession::new(dir.path().join("hosts.db"));
     session
         .handle(
             json!({"action":"vault_unlock","passphrase":std::str::from_utf8(password).unwrap()}),
@@ -765,21 +765,29 @@ async fn ssh_apt_results_roundtrip_inside_luksbox_and_remain_cli_compatible() {
         .handle(json!({"action":"vault_lock"}), &|_| {})
         .await
         .unwrap();
+    assert!(!dir.path().join("hosts.db").exists());
     assert!(!dir.path().join("hosts.json").exists());
     let mut vfs =
         Vfs::open(Container::open(&path, None, UnlockMaterial::Passphrase(password)).unwrap())
             .unwrap();
-    let file = vfs.lookup_path("/hosts.json").unwrap();
+    // The first save converted the legacy JSON into a stock SQLite image.
+    assert!(vfs.lookup_path("/hosts.json").is_err());
+    let file = vfs.lookup_path("/hosts.db").unwrap();
     let mut bytes = vec![0; vfs.stat(file).unwrap().size as usize];
     vfs.read(file, 0, &mut bytes).unwrap();
-    let database: Database = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(
-        database.hosts[0]
-            .last_check
-            .as_ref()
-            .unwrap()
-            .packages
-            .len(),
-        2
-    );
+    let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.deserialize_read_exact(rusqlite::MAIN_DB, &bytes[..], bytes.len(), true)
+        .unwrap();
+    let version: i64 = conn
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 1);
+    let pending: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM packages WHERE host_id = ?1 AND upgraded = 0",
+            [&fixture.host.id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(pending, 2);
 }

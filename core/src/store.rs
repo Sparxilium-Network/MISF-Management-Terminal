@@ -2,14 +2,15 @@ use crate::model::Host;
 use crate::vault::VaultFile;
 use anyhow::{Context, Result, ensure};
 use fs2::FileExt;
+use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, OpenOptions},
-    io::Write,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
+/// The in-memory host list, also the shape of the legacy `hosts.json` format (version 1).
 #[derive(Default, Deserialize, Serialize)]
 pub struct Database {
     pub version: u32,
@@ -24,7 +25,7 @@ pub struct Store {
 impl Store {
     pub fn default_path() -> Result<PathBuf> {
         if let Some(path) = std::env::var_os("MISF_DATA_DIR") {
-            return Ok(PathBuf::from(path).join("hosts.json"));
+            return Ok(PathBuf::from(path).join("hosts.db"));
         }
         let home = std::env::var_os("USERPROFILE")
             .or_else(|| std::env::var_os("HOME"))
@@ -40,18 +41,60 @@ impl Store {
         self.vault.is_some()
     }
 
-    fn load(&self) -> Result<Database> {
+    /// Opens the SQLite file, creating it (from a legacy `hosts.json` when present) on first use.
+    fn open(&self, dir: &Path) -> Result<Connection> {
         if !self.path.exists() {
-            return Ok(Database {
-                version: 1,
-                hosts: vec![],
-            });
+            self.create(dir)?;
         }
-        let bytes = fs::read(&self.path).context("無法讀取主機資料")?;
-        let db: Database =
-            serde_json::from_slice(&bytes).context("主機資料格式錯誤；原始檔案已保留")?;
-        ensure!(db.version == 1, "不支援的主機資料版本");
-        Ok(db)
+        let mut conn = Connection::open_with_flags(
+            &self.path,
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .context("無法開啟主機資料庫")?;
+        // Another tool may briefly hold a SQLite lock; wait instead of failing at once.
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        crate::sqlite::prepare(&mut conn, |version| {
+            // The app lock is held and no transaction is open, so the file is consistent.
+            let backup = self.path.with_extension(format!("v{version}.bak.db"));
+            if !backup.exists() {
+                fs::copy(&self.path, &backup).context("升級前無法備份主機資料庫")?;
+                set_private_permissions(&backup)?;
+            }
+            Ok(())
+        })?;
+        Ok(conn)
+    }
+
+    /// Builds the new database beside the target, then moves it into place only if
+    /// nothing else created one meanwhile. The legacy JSON is left untouched.
+    fn create(&self, dir: &Path) -> Result<()> {
+        let legacy = self.path.with_extension("json");
+        let imported = if legacy.is_file() {
+            Some(parse_legacy(
+                &fs::read(&legacy).context("無法讀取舊版 hosts.json")?,
+            )?)
+        } else {
+            None
+        };
+        let temp = tempfile::Builder::new()
+            .prefix(".misf-hosts-")
+            .suffix(".db")
+            .tempfile_in(dir)?
+            .into_temp_path();
+        set_private_permissions(&temp)?;
+        {
+            let mut conn = Connection::open(&temp)?;
+            crate::sqlite::prepare(&mut conn, |_| Ok(()))?;
+            if let Some(db) = &imported {
+                crate::sqlite::save(&mut conn, db).context("無法匯入舊版 hosts.json")?;
+            }
+        }
+        if let Err(error) = temp.persist_noclobber(&self.path)
+            && error.error.kind() != std::io::ErrorKind::AlreadyExists
+        {
+            return Err(error.error).context("無法建立主機資料庫");
+        }
+        Ok(())
     }
 
     pub fn read(&self) -> Result<Database> {
@@ -99,16 +142,11 @@ impl Store {
             !crate::vault::encrypted_profile_exists(&self.path),
             "此主機庫已啟用加密；請重新啟動並解鎖，禁止回退明文儲存"
         );
-        let mut db = self.load()?;
+        let mut conn = self.open(dir)?;
+        let mut db = crate::sqlite::load(&conn)?;
         let result = op(&mut db)?;
         if write {
-            let mut temp = tempfile::NamedTempFile::new_in(dir)?;
-            set_private_permissions(temp.path())?;
-            temp.write_all(&serde_json::to_vec_pretty(&db)?)?;
-            temp.as_file().sync_all()?;
-            temp.persist(&self.path)
-                .map_err(|e| e.error)
-                .context("無法儲存主機資料")?;
+            crate::sqlite::save(&mut conn, &db)?;
         }
         Ok(result)
     }
@@ -122,11 +160,25 @@ impl Store {
     }
 }
 
+/// Reads the JSON format used before SQLite; the file itself is never modified.
+pub(crate) fn parse_legacy(bytes: &[u8]) -> Result<Database> {
+    let db: Database =
+        serde_json::from_slice(bytes).context("舊版主機資料格式錯誤；原始檔案已保留")?;
+    ensure!(db.version == 1, "不支援的舊版主機資料版本");
+    Ok(db)
+}
+
 fn profile_path(home: &Path) -> Result<PathBuf> {
-    let path = home.join(".misf-management").join("hosts.json");
-    // Preserve connection profiles created before the project-name correction.
+    let database = home.join(".misf-management").join("hosts.db");
+    let path = database.with_extension("json");
+    // Preserve connection profiles created before the project-name correction;
+    // the store imports the copied JSON into SQLite on first use.
     let legacy = home.join(".msif-management").join("hosts.json");
-    if !path.exists() && !crate::vault::encrypted_profile_exists(&path) && legacy.is_file() {
+    if !database.exists()
+        && !path.exists()
+        && !crate::vault::encrypted_profile_exists(&path)
+        && legacy.is_file()
+    {
         let directory = path.parent().unwrap();
         fs::create_dir_all(directory).context("無法建立 MISF 資料目錄")?;
         let mut temp = tempfile::NamedTempFile::new_in(directory)?;
@@ -140,7 +192,7 @@ fn profile_path(home: &Path) -> Result<PathBuf> {
             return Err(error.error).context("無法遷移舊版主機資料");
         }
     }
-    Ok(path)
+    Ok(database)
 }
 
 fn set_private_permissions(path: &Path) -> Result<()> {
@@ -165,11 +217,43 @@ mod tests {
         fs::create_dir(&legacy).unwrap();
         let original = br#"{"version":1,"hosts":[]}"#;
         fs::write(legacy.join("hosts.json"), original).unwrap();
-        let migrated = profile_path(home.path()).unwrap();
+        let database = profile_path(home.path()).unwrap();
+        assert_eq!(database.file_name().unwrap(), "hosts.db");
+        let migrated = database.with_extension("json");
         assert_eq!(fs::read(&migrated).unwrap(), original);
         assert_eq!(fs::read(legacy.join("hosts.json")).unwrap(), original);
         fs::write(&migrated, "existing-new-profile").unwrap();
         profile_path(home.path()).unwrap();
         assert_eq!(fs::read(&migrated).unwrap(), b"existing-new-profile");
+    }
+
+    #[test]
+    fn legacy_json_is_imported_into_sqlite_and_kept_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let json = dir.path().join("hosts.json");
+        let original = br#"{"version":1,"hosts":[{"id":"x","name":"old","port":22,"password":"p","last_check":{"status":"success","packages":[{"name":"curl","current_version":"1","candidate_version":"2","architecture":"amd64","repository":"main"}]}}]}"#;
+        fs::write(&json, original).unwrap();
+        let store = Store::new(dir.path().join("hosts.db"));
+        let host = store.host("x").unwrap();
+        assert_eq!(host.last_check.unwrap().packages[0].name, "curl");
+        assert_eq!(fs::read(&json).unwrap(), original);
+        // Later edits go to SQLite only.
+        store
+            .update(|db| {
+                db.hosts.clear();
+                Ok(())
+            })
+            .unwrap();
+        assert!(store.read().unwrap().hosts.is_empty());
+        assert_eq!(fs::read(&json).unwrap(), original);
+    }
+
+    #[test]
+    fn damaged_legacy_json_creates_no_database() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("hosts.json"), "{broken").unwrap();
+        let store = Store::new(dir.path().join("hosts.db"));
+        assert!(store.read().is_err());
+        assert!(!dir.path().join("hosts.db").exists());
     }
 }

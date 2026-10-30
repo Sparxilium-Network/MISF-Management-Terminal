@@ -9,7 +9,7 @@
 ```mermaid
 flowchart LR
     UI[egui 原生 UI] -->|背景工作佇列| Core[Rust 核心]
-    Core --> Store[(明文 hosts.json 或 LUKSbox hosts.lbx)]
+    Core --> Store[(明文 SQLite hosts.db 或 LUKSbox hosts.lbx)]
     Core -->|russh / PTY| Host[Linux / BSD 目標主機]
 ```
 
@@ -33,9 +33,13 @@ APT 升級在相同流程後追加 `apt-get -y upgrade`：一般帳號以 `sudo 
 
 左上角「設定」按鈕開啟集中管理語言與外觀的視窗。介面語系由 `app/locales/zh-tw.json`／`en-us.json` 提供，內嵌進執行檔，透過穩定 key 與命名參數即時切換。`app/src/theme.rs` 統一管理淺色／深色配色及系統主題選項，涵蓋卡片、輸入框、對話框與警告。非敏感偏好以獨立、未加密的 `ui-settings.json` 保存，不進入主機資料／加密容器，因此鎖定主機庫也可讀取語言及外觀；使用暫存檔原子替換，寫入失敗會顯示錯誤。
 
-預設儲存於使用者目錄 `.misf-management/hosts.json`，以 MISF_DATA_DIR 可更改位置。明文模式使用檔案鎖與暫存檔原子替換；損壞或不支援版本的既存檔案不會被自動覆寫。
+預設儲存於使用者目錄 `.misf-management/hosts.db`，以 MISF_DATA_DIR 可更改位置。主機資料使用 SQLite（靜態連結 bundled SQLite 3.54.1，`core/src/sqlite.rs`），資料表為 `hosts`、`check_results`、`packages`（STRICT，以 position 保留順序）。檔頭 `application_id` 固定為 `0x4D495346`（"MISF"），`user_version` 是結構版本槽；`MIGRATIONS[n]` 把 vN 升到 vN+1，只能追加、不得修改已發佈的版本。
 
-使用者可將主機庫轉成同目錄 `hosts.lbx`，內含加密的 `/hosts.json`。使用 LUKSbox v0.6.1 固定版本的 core／format／VFS，以 AES-256-GCM-SIV 與 Argon2id 保存內容及中繼資料，無須掛載磁碟。轉換驗證後原明文檔先保留。GUI 每次啟動與解鎖後檢查目前資料目錄 hosts.json，解鎖後以確認視窗顯示完整路徑並詢問刪除；保留不會停用下次詢問。核心 vault_delete_plaintext 要求已解鎖、明確確認及完全相同的絕對路徑，先讀取驗證容器、取得明文資料鎖，再拒絕非一般檔案／symlink／Windows reparse point，最後只刪除固定 hosts.json。設定、日誌及其他副本不在刪除範圍，這不是安全抹除。詢問、保留與刪除結果皆使用固定事件寫入日誌，不記錄路徑或內容。加密模式鎖定時不提供主機操作，也禁止回退明文；支援手動鎖定、密碼與 Passkey 合計最多 8 槽、指定槽撤銷與加密備份。儲存狀態和解鎖金鑰保存在背景 worker 的 StorageSession，非每次請求重建。
+每次開啟先強化連線：DEFENSIVE、關閉 trusted_schema、停用 trigger／view、ATTACH 上限 0、rollback journal（不用 WAL）、secure_delete、temp_store=MEMORY、mmap_size=0、cell_size_check；未編入 load_extension。接著執行 quick_check，核對 application_id 與版本，再把 sqlite_schema 與同版本遷移在記憶體重建的參考結構逐列比對；多出的 trigger、view、index 或改過的欄位定義都會拒絕。版本較新時拒絕開啟，不降級寫入；版本較舊時明文檔先複製為 `hosts.v<N>.bak.db`，再於單一交易執行遷移並更新 user_version。所有 SQL 為固定語句與綁定參數。
+
+明文模式仍以 `hosts.lock` 跨程序互斥，讀取時整份載入、寫入時於單一交易取代全部列；SQLite busy_timeout 為 5 秒。新資料庫先在同目錄暫存檔建立，必要時匯入同目錄舊版 `hosts.json`（原檔不變），再以不覆寫方式移入定位；損壞的 JSON 不會產生資料庫。損壞或不支援版本的既存檔案不會被自動覆寫。
+
+使用者可將主機庫轉成同目錄 `hosts.lbx`，內含加密的 SQLite 映像 `/hosts.db`：每次儲存在記憶體建立全新資料庫並序列化（已刪除的列不會殘留），寫入新 inode 後以 rename 於單一中繼資料提交取代；讀取時以 sqlite3_deserialize 在記憶體開啟並套用與檔案相同的檢查與遷移。舊容器的 `/hosts.json` 可直接讀取，下一次儲存時在同一提交中移除。使用 LUKSbox v0.6.1 固定版本的 core／format／VFS，以 AES-256-GCM-SIV 與 Argon2id 保存內容及中繼資料，無須掛載磁碟。轉換驗證後原明文檔先保留。GUI 每次啟動與解鎖後檢查目前資料目錄 hosts.db 及舊版 hosts.json，解鎖後以確認視窗顯示完整路徑並詢問刪除；保留不會停用下次詢問。核心 vault_delete_plaintext 要求已解鎖、明確確認及完全相同的絕對路徑，先讀取驗證容器、取得明文資料鎖，再拒絕非一般檔案／symlink／Windows reparse point，最後只刪除該檔（hosts.db 時連同 `-journal`）；hosts.db 刪除後若仍有舊版 hosts.json，會接著詢問。設定、日誌及其他副本不在刪除範圍，這不是安全抹除。詢問、保留與刪除結果皆使用固定事件寫入日誌，不記錄路徑或內容。加密模式鎖定時不提供主機操作，也禁止回退明文；支援手動鎖定、密碼與 Passkey 合計最多 8 槽、指定槽撤銷與加密備份。儲存狀態和解鎖金鑰保存在背景 worker 的 StorageSession，非每次請求重建。
 
 `core/src/passkey.rs` 使用相同上游的 FIDO2 crate：Windows 透過 webauthn.dll 要求使用者驗證並選擇 Hello／外接安全金鑰；Linux 透過 libfido2 與當次 PIN 操作 CTAP2 裝置。只接入 `Fido2HmacSecret` 包裝槽，不使用直接派生主金鑰槽。註冊後兩次讀取 PRF 確認一致，才追加並同步 header；公開 credential ID 與 salt 隨槽保存，PIN／PRF 不落地。解鎖從公開 header 取候選槽後取得 PRF，再由 Container 驗證容器；不存在相符金鑰或驗證失敗均禁止開啟。撤銷先檢查槽存在且不是最後一個槽，再同步 header。撤銷不代表使舊容器或已解鎖工作階段失效。
 
@@ -47,7 +51,7 @@ GUI 與 CLI 經 `core/src/session.rs` 執行共用稽核與 debug 政策，再�
 
 只有明確指定 `--debug.allow-passkey` 且同時指定 debug 目錄，才開放實體驗證器操作，並顯示硬體啟用提示及記錄對應日誌。該開關不解除 SSH 或備份限制；缺少目錄或重複開關均拒絕啟動。
 
-名稱修正後，首次啟動會複製舊版 `.msif-management/hosts.json` 至新目錄，保留原檔並避免覆寫新目錄既有資料。新目錄有 `.lbx` 時不複製舊明文。明確設定 MISF_DATA_DIR 時使用指定路徑，不自動遷移其他目錄。
+名稱修正後，首次啟動會複製舊版 `.msif-management/hosts.json` 至新目錄（之後由儲存層匯入 SQLite），保留原檔並避免覆寫新目錄既有資料。新目錄有 `.lbx` 時不複製舊明文。明確設定 MISF_DATA_DIR 時使用指定路徑，不自動遷移其他目錄。
 
 UI 經工作佇列交給背景執行緒與 Tokio runtime 執行 SSH／磁碟操作，進度與結果回傳畫面，避免介面卡住。執行期間停用衝突操作。關閉程式會終止本機程序及連線，不能保證中止遠端已開始的套件程序。
 

@@ -7,7 +7,7 @@
 
 Windows MSVC 的隔離原型已驗證可直接以 Rust 函式庫建立容器、用兩組密碼解鎖並讀寫檔案，不需掛載驅動。依使用者選擇，MISF 加入「可選的加密本機主機庫」，保留原生 Rust UI；現有使用者需在介面主動啟用。
 
-採用 upstream core／format／VFS／FIDO2；容器內保存單一 `/hosts.json`，其內容、SSH 憑證、套件結果及 VFS 中繼資料都經上游加密。未自行設計新容器格式。最多 8 個密碼／Passkey keyslot 彼此獨立解鎖，支援指定槽撤銷；不接入掛載層。Apache-2.0 的 LICENSE 與 NOTICE 一併發佈。
+採用 upstream core／format／VFS／FIDO2；容器內保存單一 SQLite 映像 `/hosts.db`（舊容器為 `/hosts.json`，下次儲存時轉換），其內容、SSH 憑證、套件結果及 VFS 中繼資料都經上游加密。未自行設計新容器格式。最多 8 個密碼／Passkey keyslot 彼此獨立解鎖，支援指定槽撤銷；不接入掛載層。Apache-2.0 的 LICENSE 與 NOTICE 一併發佈。
 
 ## 實作決定
 

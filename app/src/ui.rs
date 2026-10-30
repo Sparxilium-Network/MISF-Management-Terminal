@@ -364,6 +364,8 @@ impl ManagementApp {
                 self.apply_storage(&data);
                 self.plaintext_delete_prompt = false;
                 self.status = t.get("plaintext.deleted").into();
+                // A legacy hosts.json may remain after the plaintext database is gone.
+                self.check_plaintext_copy();
             }
             "vault_lock" => {
                 self.apply_storage(&data);
@@ -2410,7 +2412,7 @@ mod tests {
     fn plaintext_prompt_reappears_after_unlock_and_renders_full_path_in_both_languages() {
         let directory = tempfile::tempdir().unwrap();
         let paths = RuntimePaths {
-            store: directory.path().join("hosts.json"),
+            store: directory.path().join("hosts.db"),
             debug: true,
             debug_allow_passkey: false,
         };
@@ -2429,7 +2431,7 @@ mod tests {
             },
         );
         assert_eq!(commands.recv().unwrap()["action"], "storage_status");
-        let full_path = directory.path().join("hosts.json").display().to_string();
+        let full_path = directory.path().join("hosts.db").display().to_string();
         let mut status = json!({"encrypted":false, "locked":false, "plaintext_exists":true, "plaintext_path":full_path});
         app.received("storage_status", status.clone());
         assert!(!app.plaintext_delete_prompt);
@@ -2529,7 +2531,7 @@ mod tests {
     fn batch_selection_keeps_only_eligible_hosts_and_upgrade_waits_for_confirmation() {
         let directory = tempfile::tempdir().unwrap();
         let paths = RuntimePaths {
-            store: directory.path().join("hosts.json"),
+            store: directory.path().join("hosts.db"),
             debug: true,
             debug_allow_passkey: false,
         };

@@ -31,7 +31,7 @@ impl RuntimePaths {
                     }
                 }
                 Ok(Self {
-                    store: directory.join("hosts.json"),
+                    store: directory.join("hosts.db"),
                     debug: true,
                     debug_allow_passkey,
                 })
@@ -143,7 +143,7 @@ mod tests {
         assert!(paths.debug);
         assert_eq!(
             paths.store,
-            directory.canonicalize().unwrap().join("hosts.json")
+            directory.canonicalize().unwrap().join("hosts.db")
         );
         assert_eq!(std::fs::read_dir(directory).unwrap().count(), 0);
     }
