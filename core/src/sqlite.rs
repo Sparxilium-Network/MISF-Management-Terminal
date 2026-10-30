@@ -1,6 +1,7 @@
 //! SQLite host database. The schema version lives in the file header's `user_version`
 //! slot and `application_id` marks the file as MISF's, so opening or importing an older
 //! database detects its version and upgrades it, while foreign or newer files are refused.
+use crate::db_upgrade::{MIGRATIONS, Migration};
 use crate::model::{CheckResult, Host, Package};
 use crate::store::Database;
 use anyhow::{Context, Result, ensure};
@@ -10,63 +11,7 @@ use zeroize::Zeroizing;
 
 /// "MISF" in ASCII.
 pub const APPLICATION_ID: i32 = 0x4D49_5346;
-/// `MIGRATIONS[n]` upgrades schema version n to n + 1; version 0 is an empty file.
-/// Append new versions; never edit a released one, because opened files are compared
-/// against the schema these statements produce.
-const MIGRATIONS: &[&str] = &[V1, V2];
 pub const SCHEMA_VERSION: usize = MIGRATIONS.len();
-
-const V1: &str = "
-CREATE TABLE hosts (
-    id TEXT PRIMARY KEY NOT NULL,
-    position INTEGER NOT NULL,
-    name TEXT NOT NULL,
-    address TEXT NOT NULL,
-    port INTEGER NOT NULL,
-    username TEXT NOT NULL,
-    os TEXT NOT NULL,
-    auth_type TEXT NOT NULL,
-    password TEXT NOT NULL,
-    private_key TEXT NOT NULL,
-    key_passphrase TEXT NOT NULL,
-    sudo_password TEXT NOT NULL,
-    use_pty INTEGER NOT NULL,
-    fingerprint TEXT NOT NULL,
-    notes TEXT NOT NULL,
-    distro TEXT NOT NULL,
-    package_manager TEXT NOT NULL
-) STRICT;
-CREATE TABLE check_results (
-    host_id TEXT PRIMARY KEY NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
-    checked_at TEXT NOT NULL,
-    operation TEXT NOT NULL,
-    status TEXT NOT NULL,
-    distro TEXT NOT NULL,
-    package_manager TEXT NOT NULL,
-    output TEXT NOT NULL,
-    error TEXT NOT NULL
-) STRICT;
-CREATE TABLE packages (
-    host_id TEXT NOT NULL REFERENCES check_results(host_id) ON DELETE CASCADE,
-    upgraded INTEGER NOT NULL,
-    position INTEGER NOT NULL,
-    name TEXT NOT NULL,
-    current_version TEXT NOT NULL,
-    candidate_version TEXT NOT NULL,
-    architecture TEXT NOT NULL,
-    repository TEXT NOT NULL,
-    PRIMARY KEY (host_id, upgraded, position)
-) STRICT;
-";
-
-/// v2: a package manager chosen in the editor ("" = detect), and LUKSbox key slot names.
-const V2: &str = "
-ALTER TABLE hosts ADD COLUMN manager_choice TEXT NOT NULL DEFAULT '';
-CREATE TABLE key_slots (
-    slot INTEGER PRIMARY KEY NOT NULL,
-    name TEXT NOT NULL
-) STRICT;
-";
 
 /// Nothing here needs triggers, views, attached files or a trusted schema, so a crafted
 /// database cannot run SQL of its own while it is read or written.
@@ -103,7 +48,7 @@ pub(crate) fn prepare(
 
 fn prepare_with(
     conn: &mut Connection,
-    migrations: &[&str],
+    migrations: &[Migration],
     before_upgrade: impl FnOnce(usize) -> Result<()>,
 ) -> Result<()> {
     harden(conn).context("無法開啟主機資料庫；檔案可能不是 SQLite 資料庫")?;
@@ -135,8 +80,8 @@ fn prepare_with(
             before_upgrade(version)?;
         }
         let tx = conn.transaction()?;
-        for sql in &migrations[version..] {
-            tx.execute_batch(sql)?;
+        for step in &migrations[version..] {
+            step(&tx)?;
         }
         tx.pragma_update(None, "application_id", APPLICATION_ID)?;
         tx.pragma_update(None, "user_version", migrations.len() as i64)?;
@@ -158,10 +103,10 @@ fn schema(conn: &Connection) -> Result<Vec<SchemaRow>> {
 
 /// The exact schema a genuine file at this version has; anything extra, such as a
 /// trigger or view planted in an imported file, makes the comparison fail.
-fn reference_schema(migrations: &[&str]) -> Result<Vec<SchemaRow>> {
+fn reference_schema(migrations: &[Migration]) -> Result<Vec<SchemaRow>> {
     let conn = Connection::open_in_memory()?;
-    for sql in migrations {
-        conn.execute_batch(sql)?;
+    for step in migrations {
+        step(&conn)?;
     }
     schema(&conn)
 }
@@ -375,7 +320,7 @@ pub(crate) fn from_image(bytes: &[u8]) -> Result<Database> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     fn sample() -> Database {
@@ -494,9 +439,9 @@ mod tests {
     }
 
     /// A database written by a v1 build, with one host.
-    fn v1_image() -> Vec<u8> {
+    pub(crate) fn v1_image() -> Vec<u8> {
         let mut conn = Connection::open_in_memory().unwrap();
-        prepare_with(&mut conn, &[V1], |_| Ok(())).unwrap();
+        prepare_with(&mut conn, &MIGRATIONS[..1], |_| Ok(())).unwrap();
         conn.execute_batch(
             "INSERT INTO hosts VALUES ('a', 0, 'web', 'host', 22, 'ops', 'Linux', 'password',
                  'pw', '', '', '', 0, 'SHA256:x', '', 'Debian 13', 'apt')",
@@ -534,13 +479,29 @@ mod tests {
         // Already current: no second upgrade. A stand-in v3 shows the next upgrade,
         // and this build then refuses the newer file.
         prepare(&mut conn, |_| panic!("upgraded twice")).unwrap();
-        let v3 = "ALTER TABLE hosts ADD COLUMN tags TEXT NOT NULL DEFAULT ''";
-        prepare_with(&mut conn, &[V1, V2, v3], |version| {
+        fn v3(conn: &Connection) -> Result<()> {
+            conn.execute_batch("ALTER TABLE hosts ADD COLUMN tags TEXT NOT NULL DEFAULT ''")?;
+            Ok(())
+        }
+        prepare_with(&mut conn, &[MIGRATIONS[0], MIGRATIONS[1], v3], |version| {
             assert_eq!(version, 2);
             Ok(())
         })
         .unwrap();
         assert!(prepare(&mut conn, |_| Ok(())).is_err());
+        // A v1 file skips no step on its way to v3.
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.deserialize_read_exact(MAIN_DB, &image[..], image.len(), false)
+            .unwrap();
+        prepare_with(&mut conn, &[MIGRATIONS[0], MIGRATIONS[1], v3], |_| Ok(())).unwrap();
+        let columns: Vec<String> = conn
+            .prepare("SELECT name FROM pragma_table_info('hosts') ORDER BY cid DESC LIMIT 2")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(columns, ["tags", "manager_choice"]);
         // A failed backup leaves the file at its old version.
         let mut conn = Connection::open_in_memory().unwrap();
         conn.deserialize_read_exact(MAIN_DB, &image[..], image.len(), false)

@@ -1,4 +1,5 @@
 pub mod audit;
+mod db_upgrade;
 pub mod model;
 mod passkey;
 pub mod runtime;

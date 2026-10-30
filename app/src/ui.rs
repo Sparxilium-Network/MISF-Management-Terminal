@@ -115,6 +115,8 @@ pub struct ManagementApp {
     plaintext_exists: bool,
     plaintext_path: String,
     plaintext_delete_prompt: bool,
+    /// The older schema version of a just-decrypted vault, waiting for upgrade consent.
+    schema_upgrade_prompt: Option<u64>,
     slots: Vec<SlotRow>,
     storage_warning: String,
     vault_dialog: Option<VaultDialog>,
@@ -178,6 +180,7 @@ impl ManagementApp {
             plaintext_exists: false,
             plaintext_path: String::new(),
             plaintext_delete_prompt: false,
+            schema_upgrade_prompt: None,
             slots: vec![],
             storage_warning: String::new(),
             vault_dialog: None,
@@ -268,8 +271,7 @@ impl ManagementApp {
         }
     }
 
-    /// Returns true when the user asked to convert a legacy JSON store, or rewrite an
-    /// encrypted database still stored at an older schema version (upgraded only in memory).
+    /// Returns true when the user asked to convert a legacy JSON store.
     fn about_section(&self, ui: &mut egui::Ui) -> bool {
         let t = Translator(self.preferences.language);
         ui.label(RichText::new(t.get("settings.about")).strong());
@@ -287,14 +289,8 @@ impl ManagementApp {
             ("json", _) => t.get("settings.schema_json").to_owned(),
             _ => "—".to_owned(),
         };
-        let current = misf_core::sqlite::SCHEMA_VERSION as u64;
-        let action = match (self.storage_format.as_str(), self.schema_version) {
-            ("json", _) => Some(t.get("settings.convert_db").to_owned()),
-            ("sqlite", Some(version)) if version < current => {
-                Some(t.format("settings.upgrade_db", &[("version", current.to_string())]))
-            }
-            _ => None,
-        };
+        let action =
+            (self.storage_format == "json").then(|| t.get("settings.convert_db").to_owned());
         egui::Grid::new("about_grid")
             .spacing([24.0, 6.0])
             .show(ui, |ui| {
@@ -452,9 +448,19 @@ impl ManagementApp {
                     self.send(json!({"action":"list"}));
                 }
             }
-            "vault_create" | "vault_unlock" | "vault_unlock_passkey" => {
+            "vault_create" | "vault_unlock" | "vault_unlock_passkey" | "vault_upgrade" => {
                 self.apply_storage(&data);
                 self.vault_dialog = None;
+                self.schema_upgrade_prompt = data["pending_upgrade"].as_u64();
+                if self.schema_upgrade_prompt.is_some() {
+                    return;
+                }
+                if action == "vault_upgrade" {
+                    self.status = t.format(
+                        "settings.converted",
+                        &[("version", misf_core::sqlite::SCHEMA_VERSION.to_string())],
+                    );
+                }
                 self.check_plaintext_copy();
                 self.send(json!({"action":"list"}));
             }
@@ -465,8 +471,15 @@ impl ManagementApp {
                 // A legacy hosts.json may remain after the plaintext database is gone.
                 self.check_plaintext_copy();
             }
+            "vault_upgrade_cancel" => {
+                self.apply_storage(&data);
+                self.schema_upgrade_prompt = None;
+                self.open_vault_dialog(VaultMode::Unlock);
+                self.status = t.get("vault.locked").into();
+            }
             "vault_lock" => {
                 self.apply_storage(&data);
+                self.schema_upgrade_prompt = None;
                 self.clear_host_cache();
                 self.vault_dialog = None;
                 self.status = t.get("status.locked").into();
@@ -1684,6 +1697,42 @@ impl ManagementApp {
         }
     }
 
+    /// Asks before writing a decrypted older database back at this build's version.
+    fn schema_upgrade_dialog(&mut self, ctx: &egui::Context) {
+        let Some(from) = self.schema_upgrade_prompt else {
+            return;
+        };
+        let t = Translator(self.preferences.language);
+        let versions = [
+            ("from", from.to_string()),
+            ("to", misf_core::sqlite::SCHEMA_VERSION.to_string()),
+        ];
+        let mut upgrade = false;
+        let mut cancel = false;
+        egui::Modal::new(egui::Id::unique("schema_upgrade")).show(ctx, |ui| {
+            ui.set_width(520.0);
+            ui.heading(t.get("schema_upgrade.title"));
+            ui.label(t.format("schema_upgrade.description", &versions));
+            ui.add_space(8.0);
+            ui.label(t.get("schema_upgrade.notice"));
+            ui.add_space(8.0);
+            ui.add_enabled_ui(!self.busy, |ui| {
+                ui.horizontal(|ui| {
+                    upgrade = ui
+                        .add(primary(&t.format("schema_upgrade.confirm", &versions)))
+                        .clicked();
+                    cancel = ui.button(t.get("schema_upgrade.cancel")).clicked();
+                });
+            });
+        });
+        if upgrade {
+            self.send(json!({"action":"vault_upgrade"}));
+        }
+        if cancel {
+            self.send(json!({"action":"vault_upgrade_cancel"}));
+        }
+    }
+
     fn respond_plaintext_delete(&mut self, delete: bool) {
         if delete {
             self.send(json!({"action":"vault_delete_plaintext", "path":self.plaintext_path, "confirmed":true}));
@@ -2371,6 +2420,7 @@ impl ManagementApp {
         }
         self.upgrade_dialog(ctx);
         self.vault_dialog(ctx);
+        self.schema_upgrade_dialog(ctx);
         self.plaintext_delete_dialog(ctx);
         if let Some(error) = self.error.clone() {
             let mut close = false;
@@ -2722,8 +2772,27 @@ mod tests {
         status["plaintext_exists"] = json!(false);
         app.received("vault_delete_plaintext", status.clone());
         assert!(!app.plaintext_delete_prompt);
-        app.received("vault_unlock", status);
+        app.received("vault_unlock", status.clone());
         assert!(!app.plaintext_delete_prompt);
+        assert_eq!(commands.recv().unwrap()["action"], "list");
+        // An older vault database: no hosts are requested until the upgrade is accepted.
+        let mut pending = status.clone();
+        pending["locked"] = json!(true);
+        pending["pending_upgrade"] = json!(1);
+        app.received("vault_unlock", pending.clone());
+        assert_eq!(app.schema_upgrade_prompt, Some(1));
+        assert!(commands.try_recv().is_err());
+        app.received("vault_upgrade_cancel", status.clone());
+        assert_eq!(app.schema_upgrade_prompt, None);
+        assert!(
+            app.vault_dialog
+                .as_ref()
+                .is_some_and(|dialog| dialog.mode == VaultMode::Unlock)
+        );
+        app.received("vault_unlock_passkey", pending);
+        app.received("vault_upgrade", status);
+        assert_eq!(app.schema_upgrade_prompt, None);
+        assert_eq!(commands.recv().unwrap()["action"], "list");
     }
 
     fn rendered_text(ctx: &egui::Context, mut draw: impl FnMut(&mut egui::Ui)) -> String {

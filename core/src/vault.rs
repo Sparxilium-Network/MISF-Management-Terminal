@@ -67,6 +67,17 @@ impl VaultFile {
         Ok(db)
     }
 
+    /// The stored schema version when it is older than this build's, which reading
+    /// upgrades in memory only; the user decides whether to write the upgrade back.
+    fn outdated_version(&mut self) -> Result<Option<u32>> {
+        Ok(match self.format()? {
+            ("sqlite", Some(version)) if (version as usize) < crate::sqlite::SCHEMA_VERSION => {
+                Some(version)
+            }
+            _ => None,
+        })
+    }
+
     /// Which format the vault holds and its schema version; the legacy JSON has none.
     pub(crate) fn format(&mut self) -> Result<(&'static str, Option<u32>)> {
         let Ok(file) = self.vfs.lookup_path(&format!("/{DATABASE_FILE}")) else {
@@ -98,6 +109,13 @@ impl VaultFile {
     pub(crate) fn write(&mut self, db: &Database) -> Result<()> {
         ensure!(!self.poisoned, "先前儲存失敗；請鎖定後重新解鎖");
         let bytes = crate::sqlite::to_image(db)?;
+        self.write_image(&bytes)?;
+        self.slot_names = db.slot_names.clone();
+        Ok(())
+    }
+
+    fn write_image(&mut self, bytes: &[u8]) -> Result<()> {
+        ensure!(!self.poisoned, "先前儲存失敗；請鎖定後重新解鎖");
         ensure!(
             bytes.len() as u64 <= MAX_DATABASE_BYTES,
             "主機資料超過 64 MiB 上限"
@@ -108,7 +126,7 @@ impl VaultFile {
             let root = self.vfs.root_id();
             let name = format!(".misf-pending-{}", uuid::Uuid::new_v4());
             let file = self.vfs.create(root, &name)?;
-            let written = self.vfs.write(file, 0, &bytes)?;
+            let written = self.vfs.write(file, 0, bytes)?;
             ensure!(written == bytes.len(), "LUKSbox 寫入不完整");
             self.vfs.rename(root, &name, root, DATABASE_FILE)?;
             // Dropped in the same metadata commit that makes the SQLite image visible.
@@ -118,9 +136,8 @@ impl VaultFile {
             self.vfs.flush()?;
             Ok(())
         })();
-        match operation {
-            Ok(()) => self.slot_names = db.slot_names.clone(),
-            Err(_) => self.poisoned = true,
+        if operation.is_err() {
+            self.poisoned = true;
         }
         operation
     }
@@ -234,12 +251,17 @@ pub struct StorageStatus {
     pub plaintext_path: PathBuf,
     pub slots: Vec<SlotInfo>,
     pub warning: String,
+    /// Unlocked, but the database is this older version and waits for the user's consent
+    /// to upgrade; hosts stay unavailable until then.
+    pub pending_upgrade: Option<u32>,
 }
 
 /// Lives on the background worker. Decryption keys remain inside LUKSbox.
 pub struct StorageSession {
     plain_path: PathBuf,
     store: Option<Store>,
+    /// A decrypted vault with an older database, held until the upgrade is confirmed.
+    pending: Option<VaultFile>,
     encrypted: bool,
     warning: String,
 }
@@ -254,6 +276,7 @@ impl StorageSession {
         Self {
             plain_path,
             store,
+            pending: None,
             encrypted,
             warning: String::new(),
         }
@@ -287,6 +310,10 @@ impl StorageSession {
             plaintext_path: self.plaintext_path()?,
             slots,
             warning: self.warning.clone(),
+            pending_upgrade: match self.pending.as_mut() {
+                Some(vault) => vault.outdated_version()?,
+                None => None,
+            },
         })
     }
 
@@ -321,15 +348,33 @@ impl StorageSession {
                 ensure!(self.encrypted, "尚未啟用 LUKSbox");
                 let password = take_secret(&mut request)?;
                 progress("正在解鎖 LUKSbox…");
-                let path = self.plain_path.with_extension("lbx");
-                let vault = VaultFile::open(&path, &password)?;
-                self.store = Some(encrypted_store(path, vault));
-                self.warning.clear();
+                let vault = VaultFile::open(&self.plain_path.with_extension("lbx"), &password)?;
+                self.unlocked(vault)
+            }
+            "vault_upgrade" => {
+                let mut vault = self.pending.take().context("沒有等待升級的主機資料庫")?;
+                progress("正在升級加密主機資料庫…");
+                // Reading upgraded the image in memory; writing stores it at this version.
+                let db = vault.read()?;
+                vault.write(&db)?;
+                self.store = Some(encrypted_store(
+                    self.plain_path.with_extension("lbx"),
+                    vault,
+                ));
+                Ok(serde_json::to_value(self.status()?)?)
+            }
+            "vault_upgrade_cancel" => {
+                if let Some(mut vault) = self.pending.take() {
+                    vault.finish()?;
+                }
                 Ok(serde_json::to_value(self.status()?)?)
             }
             "vault_lock" => {
                 ensure!(self.encrypted, "目前使用明文儲存");
-                let result = self.with_vault(|vault| vault.finish());
+                let result = match self.pending.take() {
+                    Some(mut vault) => vault.finish(),
+                    None => self.with_vault(|vault| vault.finish()),
+                };
                 self.store = None;
                 if let Err(error) = result {
                     self.warning = format!("已鎖定；最後同步失敗，請重新解鎖確認：{error:#}");
@@ -370,15 +415,12 @@ impl StorageSession {
                 let mut auth =
                     crate::passkey::authenticator(request["hello"].as_bool().unwrap_or(false))?;
                 progress("請在系統視窗或安全金鑰上完成 Passkey 驗證…");
-                let path = self.plain_path.with_extension("lbx");
                 let vault = VaultFile::from_container(crate::passkey::open(
-                    &path,
+                    &self.plain_path.with_extension("lbx"),
                     &mut auth,
                     pin.as_deref().map(String::as_str),
                 )?)?;
-                self.store = Some(encrypted_store(path, vault));
-                self.warning.clear();
-                Ok(serde_json::to_value(self.status()?)?)
+                self.unlocked(vault)
             }
             "vault_revoke_key" => {
                 let index = request["slot"]
@@ -419,6 +461,22 @@ impl StorageSession {
                 dispatch(request, store, progress).await
             }
         }
+    }
+
+    /// Opens the hosts, or holds an older database back until the user agrees to upgrade.
+    fn unlocked(&mut self, mut vault: VaultFile) -> Result<Value> {
+        self.warning.clear();
+        if vault.outdated_version()?.is_some() {
+            self.store = None;
+            self.pending = Some(vault);
+        } else {
+            self.pending = None;
+            self.store = Some(encrypted_store(
+                self.plain_path.with_extension("lbx"),
+                vault,
+            ));
+        }
+        Ok(serde_json::to_value(self.status()?)?)
     }
 
     fn with_vault<T>(&self, operation: impl FnOnce(&mut VaultFile) -> Result<T>) -> Result<T> {
@@ -1238,6 +1296,62 @@ mod tests {
             );
             assert_eq!(session.status().unwrap().slots.len(), 1);
         }
+    }
+
+    #[tokio::test]
+    async fn an_older_vault_database_opens_only_after_the_user_agrees_to_upgrade() {
+        let (dir, mut session) = fixture();
+        session.enable(FIRST, "", params()).unwrap();
+        let v1 = crate::sqlite::tests::v1_image();
+        session.with_vault(|vault| vault.write_image(&v1)).unwrap();
+        let unlock =
+            || json!({"action":"vault_unlock","passphrase":std::str::from_utf8(FIRST).unwrap()});
+        let action = |name: &str| json!({ "action": name });
+        session.handle(action("vault_lock"), &|_| {}).await.unwrap();
+        let mut restarted = StorageSession::new(dir.path().join("hosts.db"));
+        for _ in 0..2 {
+            let status = restarted.handle(unlock(), &|_| {}).await.unwrap();
+            assert_eq!(
+                (
+                    status["locked"].as_bool(),
+                    status["pending_upgrade"].as_u64()
+                ),
+                (Some(true), Some(1))
+            );
+            assert!(restarted.handle(action("list"), &|_| {}).await.is_err());
+            // Declining leaves the file at v1, so the next unlock asks again.
+            let status = restarted
+                .handle(action("vault_upgrade_cancel"), &|_| {})
+                .await
+                .unwrap();
+            assert!(status["pending_upgrade"].is_null() && status["locked"] == true);
+        }
+        restarted.handle(unlock(), &|_| {}).await.unwrap();
+        let status = restarted
+            .handle(action("vault_upgrade"), &|_| {})
+            .await
+            .unwrap();
+        assert_eq!(status["locked"], false);
+        let list = restarted.handle(action("list"), &|_| {}).await.unwrap();
+        assert_eq!(
+            (
+                list["hosts"][0]["name"].as_str(),
+                list["schema_version"].as_u64()
+            ),
+            (Some("web"), Some(crate::sqlite::SCHEMA_VERSION as u64))
+        );
+        restarted
+            .handle(action("vault_lock"), &|_| {})
+            .await
+            .unwrap();
+        let status = restarted.handle(unlock(), &|_| {}).await.unwrap();
+        assert_eq!(
+            (
+                status["locked"].as_bool(),
+                status["pending_upgrade"].as_u64()
+            ),
+            (Some(false), None)
+        );
     }
 
     #[tokio::test]
