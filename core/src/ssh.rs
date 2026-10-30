@@ -1,4 +1,4 @@
-use crate::model::{CheckResult, Host, parse_packages};
+use crate::model::{CheckResult, Host, Package, parse_packages};
 use anyhow::{Context, Result, bail, ensure};
 use chrono::Utc;
 use russh::{
@@ -14,9 +14,13 @@ use tokio::time::timeout;
 const PROMPT: &str = "__MISF_SUDO_PROMPT__";
 const LIMIT: usize = 2 * 1024 * 1024;
 pub const DETECT: &str = "uname -s; if command -v apt-get >/dev/null 2>&1 && command -v apt >/dev/null 2>&1; then printf '__MISF_APT__\\n'; fi";
-const UPDATE: &str = "LC_ALL=C apt-get -q=1 -o APT::Update::Error-Mode=any update";
-const SUDO_UPDATE: &str = "LC_ALL=C sudo -S -p '__MISF_SUDO_PROMPT__' -- apt-get -q=1 -o APT::Update::Error-Mode=any update";
+pub const UPDATE: &str = "LC_ALL=C apt-get -q=1 -o APT::Update::Error-Mode=any update";
+pub const SUDO_UPDATE: &str = "LC_ALL=C sudo -S -p '__MISF_SUDO_PROMPT__' -- apt-get -q=1 -o APT::Update::Error-Mode=any update";
+// Never prompt: keep locally modified config files and only list services needing restart.
+pub const UPGRADE: &str = "LC_ALL=C DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l apt-get -y -q=1 -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade";
+pub const SUDO_UPGRADE: &str = "LC_ALL=C sudo -S -p '__MISF_SUDO_PROMPT__' -- env LC_ALL=C DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l apt-get -y -q=1 -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade";
 pub const LIST: &str = "LC_ALL=C apt list --upgradable";
+const UPGRADE_SECONDS: u64 = 30 * 60;
 
 struct Verifier {
     expected: Option<String>,
@@ -45,6 +49,9 @@ async fn connect(host: &Host, probe: bool) -> Result<client::Handle<Verifier>> {
     let observed = Arc::new(Mutex::new(None));
     let config = Arc::new(client::Config {
         inactivity_timeout: Some(Duration::from_secs(360)),
+        // Long dpkg triggers can be silent; keepalive replies keep the session active.
+        keepalive_interval: Some(Duration::from_secs(30)),
+        keepalive_max: 6,
         ..Default::default()
     });
     let result = timeout(
@@ -214,18 +221,43 @@ pub async fn test_connection(host: &Host) -> Result<String> {
     Ok(os.into())
 }
 
+/// The commands an APT operation runs for this host, in order.
+pub fn apt_commands(host: &Host, upgrade: bool) -> Vec<&'static str> {
+    let root = host.username == "root";
+    let mut commands = vec![DETECT, if root { UPDATE } else { SUDO_UPDATE }, LIST];
+    if upgrade {
+        commands.extend([if root { UPGRADE } else { SUDO_UPGRADE }, LIST]);
+    }
+    commands
+}
+
 pub async fn check(host: &Host, progress: &dyn Fn(&str)) -> CheckResult {
+    run_apt(host, false, progress).await
+}
+
+pub async fn upgrade(host: &Host, progress: &dyn Fn(&str)) -> CheckResult {
+    run_apt(host, true, progress).await
+}
+
+// Generic so a batch task's no-op progress keeps the future `Send`.
+pub(crate) async fn run_apt<P: Fn(&str) + ?Sized>(
+    host: &Host,
+    upgrade: bool,
+    progress: &P,
+) -> CheckResult {
     let checked_at = Utc::now().to_rfc3339();
+    let operation = if upgrade { "upgrade" } else { "check" };
     if host.os == "BSD" {
         return CheckResult {
             checked_at,
+            operation: operation.into(),
             status: "unsupported".into(),
             error: "BSD 不支援 APT 檢查".into(),
             ..Default::default()
         };
     }
     let mut transcript = String::new();
-    let result: Result<Vec<crate::model::Package>> = async {
+    let result: Result<(Vec<Package>, Vec<Package>)> = async {
         progress("正在連線並驗證 SSH 主機指紋…");
         let session = authenticate(host).await?;
         let operation = async {
@@ -236,22 +268,36 @@ pub async fn check(host: &Host, progress: &dyn Fn(&str)) -> CheckResult {
                     && output.contains("__MISF_APT__"),
                 "此主機沒有 APT，或不是 Linux；不支援此檢查"
             );
+            let commands = apt_commands(host, upgrade);
             progress("正在執行 apt-get update，只更新套件索引…");
-            let command = if host.username == "root" {
-                UPDATE
-            } else {
-                SUDO_UPDATE
-            };
             let (code, output) =
-                execute(&session, command, host.use_pty, host.sudo_secret(), 300).await?;
+                execute(&session, commands[1], host.use_pty, host.sudo_secret(), 300).await?;
             transcript.push_str(&output);
             validate_update(code, &output)?;
             progress("正在讀取待更新套件…");
-            let (code, output) = execute(&session, LIST, false, "", 30).await?;
-            transcript.push_str("\n--- 待更新套件 ---\n");
+            let pending = list(&session, &mut transcript).await?;
+            if !upgrade || pending.is_empty() {
+                return Ok((pending, vec![]));
+            }
+            progress("正在執行 apt-get upgrade，安裝可升級套件…");
+            let (code, output) = execute(
+                &session,
+                commands[3],
+                host.use_pty,
+                host.sudo_secret(),
+                UPGRADE_SECONDS,
+            )
+            .await?;
+            transcript.push_str("\n--- apt-get upgrade ---\n");
             transcript.push_str(&output);
-            ensure!(code == 0, "無法讀取待更新套件（退出碼 {code}）");
-            parse_packages(&output)
+            validate_upgrade(code, &output)?;
+            progress("正在重新讀取剩餘待更新套件…");
+            let remaining = list(&session, &mut transcript).await?;
+            let upgraded = pending
+                .into_iter()
+                .filter(|package| !remaining.iter().any(|left| left.name == package.name))
+                .collect();
+            Ok((remaining, upgraded))
         }
         .await;
         session
@@ -263,13 +309,15 @@ pub async fn check(host: &Host, progress: &dyn Fn(&str)) -> CheckResult {
     .await;
     let mut check = CheckResult {
         checked_at,
+        operation: operation.into(),
         output: host.redact(&transcript),
         ..Default::default()
     };
     match result {
-        Ok(packages) => {
+        Ok((packages, upgraded)) => {
             check.status = "success".into();
             check.packages = packages;
+            check.upgraded = upgraded;
         }
         Err(error) => {
             check.status = "failed".into();
@@ -277,6 +325,25 @@ pub async fn check(host: &Host, progress: &dyn Fn(&str)) -> CheckResult {
         }
     }
     check
+}
+
+async fn list(session: &client::Handle<Verifier>, transcript: &mut String) -> Result<Vec<Package>> {
+    let (code, output) = execute(session, LIST, false, "", 30).await?;
+    transcript.push_str("\n--- 待更新套件 ---\n");
+    transcript.push_str(&output);
+    ensure!(code == 0, "無法讀取待更新套件（退出碼 {code}）");
+    parse_packages(&output)
+}
+
+fn validate_upgrade(code: u32, output: &str) -> Result<()> {
+    ensure!(
+        code == 0
+            && !output
+                .lines()
+                .any(|line| line.trim_start().starts_with("E:")),
+        "apt-get upgrade 失敗（退出碼 {code}）；請查看執行輸出，遠端可能已部分升級"
+    );
+    Ok(())
 }
 
 fn validate_update(code: u32, output: &str) -> Result<()> {
@@ -296,11 +363,20 @@ fn validate_update(code: u32, output: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_update;
+    use super::{validate_update, validate_upgrade};
     #[test]
     fn partial_repository_failure_with_zero_exit_is_not_a_fresh_result() {
         assert!(validate_update(0, "W: Failed to fetch https://repo.invalid/Packages\nW: Some index files failed to download.").is_err());
         assert!(validate_update(100, "Reading package lists...").is_err());
         assert!(validate_update(0, "Hit:1 repository\nReading package lists... Done").is_ok());
+    }
+
+    #[test]
+    fn upgrade_errors_are_failures_even_with_zero_exit() {
+        assert!(
+            validate_upgrade(0, "E: Sub-process /usr/bin/dpkg returned an error code (1)").is_err()
+        );
+        assert!(validate_upgrade(100, "Setting up libc6").is_err());
+        assert!(validate_upgrade(0, "Setting up libc6 (2.36-9) ...").is_ok());
     }
 }

@@ -97,8 +97,13 @@ pub struct Package {
 #[serde(default)]
 pub struct CheckResult {
     pub checked_at: String,
+    /// "check" or "upgrade"; empty in records saved before upgrades existed.
+    pub operation: String,
     pub status: String,
+    /// Packages still pending after this operation.
     pub packages: Vec<Package>,
+    /// Packages installed by a successful upgrade.
+    pub upgraded: Vec<Package>,
     pub output: String,
     pub error: String,
 }

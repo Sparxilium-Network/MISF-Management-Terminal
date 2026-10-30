@@ -32,30 +32,53 @@ impl Session {
     }
     pub async fn handle(&mut self, request: Value, progress: &dyn Fn(&str)) -> Result<Value> {
         let name = request["action"].as_str().unwrap_or_default().to_owned();
-        let Some(action) = Action::request(&name) else {
+        let Some(action) = Action::request(&name, request["operation"].as_str()) else {
             self.audit
                 .record(Action::Unsupported, Outcome::Blocked, None, None)?;
             anyhow::bail!("Unsupported action");
         };
-        let host = if name == "save" {
-            serde_json::from_value::<Host>(request["host"].clone()).ok()
+        let batch = name == "batch";
+        let batch_ids = if batch {
+            crate::batch_ids(&request).unwrap_or_default()
+        } else {
+            vec![]
+        };
+        // Every host the request reaches: audit names each one, debug checks each address.
+        let targets: Vec<Host> = if name == "save" {
+            serde_json::from_value::<Host>(request["host"].clone())
+                .ok()
+                .into_iter()
+                .collect()
+        } else if batch {
+            batch_ids
+                .iter()
+                .filter_map(|id| self.storage.host_for_audit(id).ok())
+                .collect()
         } else {
             request["id"]
                 .as_str()
                 .and_then(|id| self.storage.host_for_audit(id).ok())
+                .into_iter()
+                .collect()
         };
         let slot = request["slot"]
             .as_u64()
             .and_then(|s| usize::try_from(s).ok());
         if self.debug {
+            let remote = matches!(
+                name.as_str(),
+                "probe" | "test" | "check" | "upgrade" | "batch"
+            );
             let blocked = (matches!(name.as_str(), "vault_add_passkey" | "vault_unlock_passkey")
                 && !self.allow_passkey)
-                || (matches!(name.as_str(), "probe" | "test" | "check")
-                    && !host.as_ref().is_some_and(|h| {
-                        h.address
-                            .parse::<std::net::IpAddr>()
-                            .is_ok_and(|ip| ip.is_loopback())
-                    }))
+                || (remote
+                    && (targets.is_empty()
+                        || targets.len() < batch_ids.len()
+                        || !targets.iter().all(|h| {
+                            h.address
+                                .parse::<std::net::IpAddr>()
+                                .is_ok_and(|ip| ip.is_loopback())
+                        })))
                 || (name == "vault_backup"
                     && !request["path"].as_str().is_some_and(|path| {
                         std::path::Path::new(path)
@@ -64,41 +87,74 @@ impl Session {
                             .is_some_and(|parent| parent.starts_with(&self.directory))
                     }));
             if blocked {
-                self.audit
-                    .record(action, Outcome::Blocked, host.as_ref(), slot)?;
+                self.record_each(action, Outcome::Blocked, &targets, slot)?;
                 anyhow::bail!(
                     "Debug mode blocks this operation: remote SSH and external backups are prohibited; Passkey requires --debug.allow-passkey"
                 );
             }
         }
-        self.audit
-            .record(action, Outcome::Started, host.as_ref(), slot)?;
+        self.record_each(action, Outcome::Started, &targets, slot)?;
         let result = self.storage.handle(request, progress).await;
-        let succeeded = result
-            .as_ref()
-            .is_ok_and(|value| name != "check" || value["status"] == "success");
         // Failure to persist the outcome is visible; do not silently claim complete auditing.
-        let logged = self.audit.record(
-            action,
-            if succeeded {
-                Outcome::Succeeded
-            } else {
-                Outcome::Failed
-            },
-            host.as_ref(),
-            slot.or_else(|| {
-                result
-                    .as_ref()
-                    .ok()
-                    .and_then(|value| value["slot"].as_u64())
-                    .and_then(|index| usize::try_from(index).ok())
-            }),
-        );
+        let logged = if batch {
+            targets.iter().try_for_each(|host| {
+                let succeeded = result.as_ref().is_ok_and(|value| {
+                    value["results"].as_array().is_some_and(|results| {
+                        results.iter().any(|entry| {
+                            entry["id"] == host.id.as_str()
+                                && entry["result"]["status"] == "success"
+                        })
+                    })
+                });
+                self.audit
+                    .record(action, outcome(succeeded), Some(host), None)
+            })
+        } else {
+            let succeeded = result.as_ref().is_ok_and(|value| {
+                !matches!(name.as_str(), "check" | "upgrade") || value["status"] == "success"
+            });
+            self.audit.record(
+                action,
+                outcome(succeeded),
+                targets.first(),
+                slot.or_else(|| {
+                    result
+                        .as_ref()
+                        .ok()
+                        .and_then(|value| value["slot"].as_u64())
+                        .and_then(|index| usize::try_from(index).ok())
+                }),
+            )
+        };
         ensure!(
             logged.is_ok(),
             "Action finished, but audit outcome could not be saved; inspect state before retrying"
         );
         result
+    }
+
+    fn record_each(
+        &self,
+        action: Action,
+        outcome: Outcome,
+        targets: &[Host],
+        slot: Option<usize>,
+    ) -> Result<()> {
+        if targets.is_empty() {
+            return self.audit.record(action, outcome, None, slot);
+        }
+        for host in targets {
+            self.audit.record(action, outcome, Some(host), slot)?;
+        }
+        Ok(())
+    }
+}
+
+fn outcome(succeeded: bool) -> Outcome {
+    if succeeded {
+        Outcome::Succeeded
+    } else {
+        Outcome::Failed
     }
 }
 
@@ -209,5 +265,66 @@ mod tests {
                     .contains("Debug mode")
             );
         }
+    }
+
+    #[tokio::test]
+    async fn debug_blocks_upgrades_and_batches_reaching_any_remote_or_unknown_host() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = RuntimePaths {
+            store: dir.path().join("hosts.json"),
+            debug: true,
+            debug_allow_passkey: false,
+        };
+        let mut session = Session::new(&paths, AuditLog::new(dir.path()).unwrap());
+        for (id, name, address) in [
+            ("local", "loopback", "127.0.0.1"),
+            ("remote", "external", "192.0.2.10"),
+        ] {
+            let host = Host {
+                id: id.into(),
+                name: name.into(),
+                address: address.into(),
+                port: 22,
+                username: "operator".into(),
+                password: "secret-sentinel".into(),
+                auth_type: "password".into(),
+                os: "Linux".into(),
+                ..Default::default()
+            };
+            session
+                .handle(json!({"action":"save","host":host}), &|_| {})
+                .await
+                .unwrap();
+        }
+        for request in [
+            json!({"action":"upgrade","id":"remote"}),
+            json!({"action":"batch","operation":"upgrade","ids":["local","remote"]}),
+            json!({"action":"batch","operation":"check","ids":["local","missing"]}),
+            json!({"action":"batch","operation":"check","ids":[]}),
+        ] {
+            assert!(
+                session
+                    .handle(request, &|_| {})
+                    .await
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Debug mode")
+            );
+        }
+        let path = std::fs::read_dir(dir.path().join("logs"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let text = std::fs::read_to_string(path).unwrap();
+        // Each reached host is named in its own blocked record.
+        assert!(
+            text.contains(r#""action":"batch_upgrade","outcome":"blocked","host_name":"loopback""#)
+        );
+        assert!(
+            text.contains(r#""action":"batch_upgrade","outcome":"blocked","host_name":"external""#)
+        );
+        assert!(!text.contains("192.0.2.10") && !text.contains("secret-sentinel"));
     }
 }

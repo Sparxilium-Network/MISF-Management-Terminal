@@ -77,6 +77,9 @@ impl Translator {
     }
 
     pub fn progress(self, message: &str) -> String {
+        if let Some(count) = message.strip_prefix("批次作業進度 ") {
+            return self.format("progress.batch", &[("count", count.into())]);
+        }
         let key = match message {
             "正在建立 LUKSbox，並驗證資料可重新解鎖…" => "progress.vault_create",
             "正在解鎖 LUKSbox…" => "progress.vault_unlock",
@@ -90,6 +93,8 @@ impl Translator {
             "正在連線並驗證 SSH 主機指紋…" => "progress.ssh",
             "正在執行 apt-get update，只更新套件索引…" => "progress.apt_update",
             "正在讀取待更新套件…" => "progress.apt_list",
+            "正在執行 apt-get upgrade，安裝可升級套件…" => "progress.apt_upgrade",
+            "正在重新讀取剩餘待更新套件…" => "progress.apt_relist",
             _ => return message.into(),
         };
         self.get(key).into()

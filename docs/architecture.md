@@ -19,7 +19,11 @@ flowchart LR
 
 首次連線先取得 SHA-256 指紋，使用者確認後才提交認證。指紋變更即阻擋連線，可明確重新核對。變更目標位址或埠時，會清除既存信任及檢查結果。
 
-Linux APT 檢查先偵測 Linux 與 APT，root 直接執行 apt-get update，一般帳號透過 sudo 執行。可要求 PTY，sudo 密碼透過 channel 的 stdin 傳送，不放在命令列。APT 更新使用 `-q=1` 紀錄模式，停用會持續重畫的下載進度並保留來源、摘要與錯誤。SSH 收到的 CRLF 統一為換行，單獨 CR 也另起一行以保留診斷訊息；ANSI 顏色／游標及終端控制字串不進入儲存結果。執行輸出以可選取的等寬文字呈現，保留換行並支援水平與垂直捲動，顯示舊紀錄時也清理控制碼。已被舊版串接的歷史進度無法還原，需重新執行檢查。索引更新成功後以固定英文 locale 列出待更新套件；只列清單，不安裝或升級。索引更新失敗不讀取舊套件清單。BSD 支援主機保存與 SSH 連線測試，此版不提供 BSD 套件檢查。
+Linux APT 檢查先偵測 Linux 與 APT，root 直接執行 apt-get update，一般帳號透過 sudo 執行。可要求 PTY，sudo 密碼透過 channel 的 stdin 傳送，不放在命令列。APT 更新使用 `-q=1` 紀錄模式，停用會持續重畫的下載進度並保留來源、摘要與錯誤。SSH 收到的 CRLF 統一為換行，單獨 CR 也另起一行以保留診斷訊息；ANSI 顏色／游標及終端控制字串不進入儲存結果。執行輸出以可選取的等寬文字呈現，保留換行並支援水平與垂直捲動，顯示舊紀錄時也清理控制碼。已被舊版串接的歷史進度無法還原，需重新執行檢查。索引更新成功後以固定英文 locale 列出待更新套件；檢查只列清單。索引更新失敗不讀取舊套件清單。
+
+APT 升級在相同流程後追加 `apt-get -y upgrade`：一般帳號以 `sudo -S -- env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l …` 執行，避免 sudo 重設環境變數；dpkg 使用 `--force-confdef --force-confold` 保留既有設定檔。每個 channel 各自偵測 sudo 提示並最多送出一次密碼。升級前後各讀一次待更新清單，`CheckResult.upgraded` 保存升級前有、升級後消失的套件，`packages` 保存剩餘（被保留）的套件，`operation` 區分 check／upgrade；舊紀錄缺少這些欄位時視為檢查。索引更新失敗不會開始升級；升級輸出含 `E:` 或非零退出碼即為失敗，並提示遠端可能已部分升級。連線每 30 秒送 keepalive，避免長時間沉默的 dpkg trigger 觸發閒置斷線。
+
+批次作業 `{"action":"batch","operation":"check"|"upgrade","ids":[…]}` 去除重複 ID 後讀取主機快照，以 Tokio JoinSet 與 Semaphore 最多 8 台並行執行同一流程，每台完成回報 `批次作業進度 n/total`；全部結束後一次寫回各主機結果。任何 ID 不存在則整批拒絕；單台連線、指紋或 sudo 失敗只記在該主機結果。Session 對批次中每台主機各寫一筆開始與結果日誌；debug 模式要求所有主機皆為 loopback IP。介面只允許勾選已確認指紋的 Linux 主機，升級前一律顯示主機清單、實際命令與風險並要求勾選確認。BSD 支援主機保存與 SSH 連線測試，此版不提供 BSD 套件檢查。
 
 ## 本機儲存與背景工作
 
@@ -47,4 +51,4 @@ UI 經工作佇列交給背景執行緒與 Tokio runtime 執行 SSH／磁碟操�
 
 測試 SSH 伺服器在 loopback 驗證密碼／私鑰、指紋變更阻擋、PTY、拆包 sudo 提示、APT 失敗、BSD 及儲存流程。原生 UI 以開發用擷取功能驗證排版與中文顯示。
 
-目前只保存最近一次檢查，不支援任意命令、互動終端、排程或 Ansible。Windows 已建置驗證，其他作業系統需在對應環境建置及驗證。Passkey 已通過模擬驗證器測試，仍需實體裝置驗證。尚未支援主金鑰輪替、TPM 或閒置自動鎖定；詳細取捨見 [LUKSbox 整合評估](luksbox-evaluation.md)。FIDO2 依賴的本機相容性修改、版本與仍存在的 RSA 公告見 [依賴更新](dependency-updates.md)。
+目前只保存最近一次檢查或升級，不支援 full-upgrade、任意命令、互動終端、排程、滾動升級順序或 Ansible。Windows 已建置驗證，其他作業系統需在對應環境建置及驗證。Passkey 已通過模擬驗證器測試，仍需實體裝置驗證。尚未支援主金鑰輪替、TPM 或閒置自動鎖定；詳細取捨見 [LUKSbox 整合評估](luksbox-evaluation.md)。FIDO2 依賴的本機相容性修改、版本與仍存在的 RSA 公告見 [依賴更新](dependency-updates.md)。

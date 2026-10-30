@@ -14,7 +14,7 @@ use std::{
     collections::HashSet,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -26,12 +26,15 @@ struct State {
     pty_count: AtomicUsize,
     fail_update: bool,
     wrong_sudo: bool,
+    /// Set once an upgrade ran: later listings report only the held-back package.
+    upgraded: AtomicBool,
 }
 
 #[derive(Clone)]
 struct Mock {
     state: Arc<State>,
     waiting: HashSet<ChannelId>,
+    upgrading: HashSet<ChannelId>,
 }
 impl server::Server for Mock {
     type Handler = Self;
@@ -39,6 +42,7 @@ impl server::Server for Mock {
         Self {
             state: self.state.clone(),
             waiting: HashSet::new(),
+            upgrading: HashSet::new(),
         }
     }
 }
@@ -121,14 +125,23 @@ impl server::Handler for Mock {
         } else if command == ssh::DETECT {
             finish(session, channel, "Linux\n__MISF_APT__\n", 0)
         } else if command == ssh::LIST {
-            finish(
-                session,
-                channel,
-                "Listing...\nopenssl/stable-security 3.0.17 amd64 [upgradable from: 3.0.16]\nlibc6/stable 2.36-9 amd64 [upgradable from: 2.36-8]\n",
-                0,
-            )
+            let held = "libc6/stable 2.36-9 amd64 [upgradable from: 2.36-8]\n";
+            let listing = if self.state.upgraded.load(Ordering::SeqCst) {
+                format!("Listing...\n{held}")
+            } else {
+                format!(
+                    "Listing...\nopenssl/stable-security 3.0.17 amd64 [upgradable from: 3.0.16]\n{held}"
+                )
+            };
+            finish(session, channel, &listing, 0)
+        } else if command == ssh::UPGRADE {
+            self.state.upgraded.store(true, Ordering::SeqCst);
+            finish(session, channel, "Setting up openssl (3.0.17) ...\n", 0)
         } else if command.starts_with("LC_ALL=C sudo -S") {
             self.waiting.insert(channel);
+            if command == ssh::SUDO_UPGRADE {
+                self.upgrading.insert(channel);
+            }
             // Deliberately split the sudo marker across SSH packets.
             session.data(channel, b"__MISF_SUDO_".to_vec())?;
             session.data(channel, b"PROMPT__".to_vec())
@@ -150,6 +163,9 @@ impl server::Handler for Mock {
                 session.data(channel, b"Sorry, try again.\n__MISF_SUDO_PROMPT__".to_vec())
             } else if self.state.fail_update {
                 finish(session, channel, "E: repository unavailable\n", 100)
+            } else if self.upgrading.remove(&channel) {
+                self.state.upgraded.store(true, Ordering::SeqCst);
+                finish(session, channel, "Setting up openssl (3.0.17) ...\r\n", 0)
             } else {
                 finish(
                     session,
@@ -196,6 +212,7 @@ async fn fixture(fail_update: bool, wrong_sudo: bool) -> Fixture {
     let mut server = Mock {
         state: state.clone(),
         waiting: HashSet::new(),
+        upgrading: HashSet::new(),
     };
     let task = tokio::spawn(async move {
         server.run_on_socket(config, &listener).await.unwrap();
@@ -251,6 +268,110 @@ async fn password_pty_sudo_and_packages_work_end_to_end() {
             .iter()
             .any(|c| c.contains(" upgrade") || c.contains(" install"))
     );
+}
+
+#[tokio::test]
+async fn sudo_upgrade_reports_installed_and_held_back_packages() {
+    let fixture = fixture(false, false).await;
+    let result = ssh::upgrade(&fixture.host, &|_| {}).await;
+    assert_eq!(result.status, "success", "{}", result.error);
+    assert_eq!(result.operation, "upgrade");
+    assert_eq!(result.upgraded.len(), 1);
+    assert_eq!(result.upgraded[0].name, "openssl");
+    assert_eq!(result.packages.len(), 1);
+    assert_eq!(result.packages[0].name, "libc6");
+    assert!(result.output.contains("Setting up openssl"));
+    assert!(!result.output.contains("sudo-secret"));
+    assert_eq!(fixture.state.pty_count.load(Ordering::SeqCst), 2);
+    let commands = fixture.state.commands.lock().unwrap();
+    assert_eq!(*commands, ssh::apt_commands(&fixture.host, true));
+    assert!(
+        commands
+            .iter()
+            .all(|c| !c.contains("ssh-secret") && !c.contains("sudo-secret"))
+    );
+}
+
+#[tokio::test]
+async fn root_upgrade_runs_without_sudo() {
+    let mut fixture = fixture(false, false).await;
+    fixture.host.username = "root".into();
+    let result = ssh::upgrade(&fixture.host, &|_| {}).await;
+    assert_eq!(result.status, "success", "{}", result.error);
+    assert_eq!(result.upgraded.len(), 1);
+    let commands = fixture.state.commands.lock().unwrap();
+    assert!(commands.iter().any(|c| c == ssh::UPGRADE));
+    assert!(!commands.iter().any(|c| c.contains("sudo")));
+}
+
+#[tokio::test]
+async fn failed_index_update_never_starts_an_upgrade() {
+    let fixture = fixture(true, false).await;
+    let result = ssh::upgrade(&fixture.host, &|_| {}).await;
+    assert_eq!(result.status, "failed");
+    assert!(result.upgraded.is_empty());
+    let commands = fixture.state.commands.lock().unwrap();
+    assert!(!commands.iter().any(|c| c.contains(" upgrade")));
+}
+
+#[tokio::test]
+async fn batch_runs_each_host_and_saves_per_host_results() {
+    let fixture = fixture(false, false).await;
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::new(dir.path().join("hosts.json"));
+    let mut ids = vec![];
+    for name in ["first", "second", "untrusted"] {
+        let mut host = fixture.host.clone();
+        host.id.clear();
+        host.name = name.into();
+        let saved = dispatch(json!({"action":"save","host":host}), &store, &|_| {})
+            .await
+            .unwrap();
+        let id = saved["id"].as_str().unwrap().to_owned();
+        if name != "untrusted" {
+            dispatch(
+                json!({"action":"trust","id":id,"fingerprint":fixture.host.fingerprint}),
+                &store,
+                &|_| {},
+            )
+            .await
+            .unwrap();
+        }
+        ids.push(id);
+    }
+    let progress = Mutex::new(vec![]);
+    let response = dispatch(
+        json!({"action":"batch","operation":"check","ids":[ids[0], ids[1], ids[2], ids[0]]}),
+        &store,
+        &|message| progress.lock().unwrap().push(message.to_owned()),
+    )
+    .await
+    .unwrap();
+    let results = response["results"].as_array().unwrap();
+    assert_eq!(results.len(), 3);
+    for (index, id) in ids.iter().enumerate() {
+        let saved = store.host(id).unwrap().last_check.unwrap();
+        assert_eq!(saved.operation, "check");
+        assert_eq!(saved.status, if index < 2 { "success" } else { "failed" });
+        assert!(results.iter().any(|entry| entry["id"] == id.as_str()));
+    }
+    assert_eq!(progress.lock().unwrap().last().unwrap(), "批次作業進度 3/3");
+    assert!(
+        !fixture
+            .state
+            .commands
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|c| c.contains(" upgrade"))
+    );
+    for request in [
+        json!({"action":"batch","operation":"install","ids":[ids[0]]}),
+        json!({"action":"batch","operation":"check","ids":[]}),
+        json!({"action":"batch","operation":"check","ids":["missing"]}),
+    ] {
+        assert!(dispatch(request, &store, &|_| {}).await.is_err());
+    }
 }
 
 #[tokio::test]

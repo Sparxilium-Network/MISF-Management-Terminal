@@ -10,19 +10,32 @@ use misf_core::model::{CheckResult, Host};
 use misf_core::{
     audit::{Action, AuditLog, Outcome},
     runtime::RuntimePaths,
+    ssh,
 };
 use serde_json::{Value, json};
-use std::path::PathBuf;
+use std::{collections::BTreeSet, path::PathBuf};
 use zeroize::Zeroize;
 
 const NAVY: Color32 = Color32::from_rgb(19, 36, 59);
 const BLUE: Color32 = Color32::from_rgb(33, 117, 195);
+const RED: Color32 = Color32::from_rgb(178, 58, 58);
 
 struct Editor {
     host: Host,
     port: String,
     show_secrets: bool,
     error: String,
+}
+#[derive(Clone, Copy, PartialEq)]
+enum View {
+    Host,
+    Batch,
+}
+/// An upgrade awaiting explicit confirmation; `batch` sends one request for all hosts.
+struct UpgradeConfirm {
+    ids: Vec<String>,
+    batch: bool,
+    acknowledged: bool,
 }
 struct TrustDialog {
     host_id: String,
@@ -77,6 +90,9 @@ pub struct ManagementApp {
     trust: Option<TrustDialog>,
     after_trust: Option<String>,
     tab: usize,
+    view: View,
+    batch_selected: BTreeSet<String>,
+    upgrade_confirm: Option<UpgradeConfirm>,
     encrypted: bool,
     locked: bool,
     plaintext_exists: bool,
@@ -131,6 +147,9 @@ impl ManagementApp {
             trust: None,
             after_trust: None,
             tab: 0,
+            view: View::Host,
+            batch_selected: BTreeSet::new(),
+            upgrade_confirm: None,
             encrypted: false,
             locked: false,
             plaintext_exists: false,
@@ -161,6 +180,11 @@ impl ManagementApp {
         if std::env::var("MISF_OPEN_SETTINGS").as_deref() == Ok("1") {
             app.settings_open = true;
             app.log(Action::SettingsOpen, Outcome::Succeeded);
+        }
+        #[cfg(feature = "capture")]
+        if std::env::var("MISF_OPEN_BATCH").as_deref() == Ok("1") {
+            app.view = View::Batch;
+            app.log(Action::MainTab, Outcome::Succeeded);
         }
         app
     }
@@ -372,6 +396,9 @@ impl ManagementApp {
                 }
                 self.path = data["path"].as_str().unwrap_or_default().into();
                 self.encrypted = data["encrypted"].as_bool().unwrap_or(false);
+                let hosts = &self.hosts;
+                self.batch_selected
+                    .retain(|id| hosts.iter().any(|h| h.id == *id && batch_ready(h)));
                 if !self.hosts.iter().any(|h| h.id == self.selected) {
                     self.selected = self.hosts.first().map(|h| h.id.clone()).unwrap_or_default();
                 }
@@ -427,12 +454,13 @@ impl ManagementApp {
                     &[("os", data["os"].as_str().unwrap_or_default().into())],
                 )
             }
-            "check" => match serde_json::from_value::<CheckResult>(data) {
+            "check" | "upgrade" => match serde_json::from_value::<CheckResult>(data) {
                 Ok(result) => {
-                    self.status = if result.status == "success" {
-                        t.get("status.apt_done")
-                    } else {
-                        t.get("status.apt_failed")
+                    self.status = match (action, result.status == "success") {
+                        ("check", true) => t.get("status.apt_done"),
+                        ("check", false) => t.get("status.apt_failed"),
+                        (_, true) => t.get("status.upgrade_done"),
+                        (_, false) => t.get("status.upgrade_failed"),
                     }
                     .into();
                     if let Some(host) = self.hosts.iter_mut().find(|h| h.id == self.selected) {
@@ -441,6 +469,32 @@ impl ManagementApp {
                 }
                 Err(error) => self.error = Some(error.to_string()),
             },
+            "batch" => {
+                let (mut succeeded, mut failed) = (0, 0);
+                for entry in data["results"].as_array().into_iter().flatten() {
+                    let Ok(result) = serde_json::from_value::<CheckResult>(entry["result"].clone())
+                    else {
+                        failed += 1;
+                        continue;
+                    };
+                    if result.status == "success" {
+                        succeeded += 1;
+                    } else {
+                        failed += 1;
+                    }
+                    if let Some(host) = self.hosts.iter_mut().find(|h| entry["id"] == h.id.as_str())
+                    {
+                        host.last_check = Some(result);
+                    }
+                }
+                self.status = t.format(
+                    "status.batch_done",
+                    &[
+                        ("succeeded", succeeded.to_string()),
+                        ("failed", failed.to_string()),
+                    ],
+                );
+            }
             _ => {}
         }
     }
@@ -640,6 +694,27 @@ impl ManagementApp {
             self.storage_notice(ui);
             return;
         }
+        ui.horizontal(|ui| {
+            let before = self.view;
+            ui.selectable_value(&mut self.view, View::Host, t.get("view.host"));
+            ui.selectable_value(
+                &mut self.view,
+                View::Batch,
+                t.format(
+                    "view.batch",
+                    &[("count", self.batch_selected.len().to_string())],
+                ),
+            );
+            if before != self.view {
+                self.log(Action::MainTab, Outcome::Succeeded);
+            }
+        });
+        ui.add_space(8.0);
+        if self.view == View::Batch {
+            self.batch_view(ui, viewport_height);
+            self.storage_notice(ui);
+            return;
+        }
         let host = self.current().cloned();
         ui.label(
             RichText::new(t.get("app.host_overview"))
@@ -659,14 +734,19 @@ impl ManagementApp {
                 .strong(),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .add_enabled(
-                        host.is_some(),
-                        egui::Button::new(
-                            RichText::new(t.get("common.delete")).color(palette.error),
-                        ),
-                    )
-                    .clicked()
+                let delete = ui.add_enabled(
+                    host.is_some(),
+                    egui::Button::new(RichText::new(t.get("common.delete")).color(palette.error)),
+                );
+                if hint(
+                    delete,
+                    t,
+                    t.get("hint.delete_title"),
+                    &[],
+                    t.get("hint.delete_effect"),
+                    t.get("hint.delete_risk"),
+                )
+                .clicked()
                 {
                     self.delete_id = Some(self.selected.clone());
                     self.log(Action::DeletePrompt, Outcome::Succeeded);
@@ -713,19 +793,59 @@ impl ManagementApp {
             .color(palette.muted),
         );
         ui.add_space(12.0);
-        ui.horizontal(|ui| {
-            if ui.button(t.get("host.test")).clicked() {
+        ui.horizontal_wrapped(|ui| {
+            let test = ui.button(t.get("host.test"));
+            if hint(
+                test,
+                t,
+                t.get("hint.test_title"),
+                &["uname -s"],
+                t.get("hint.test_effect"),
+                t.get("hint.test_risk"),
+            )
+            .clicked()
+            {
                 self.start_connection_action("test");
             }
-            if ui.button(t.get("host.fingerprint")).clicked() {
+            let probe = ui.button(t.get("host.fingerprint"));
+            if hint(
+                probe,
+                t,
+                t.get("hint.probe_title"),
+                &[],
+                t.get("hint.probe_effect"),
+                t.get("hint.probe_risk"),
+            )
+            .clicked()
+            {
                 self.after_trust = None;
                 self.send(json!({"action":"probe","id":self.selected}));
             }
-            if ui
-                .add_enabled(host.os != "BSD", primary(t.get("apt.check")))
-                .clicked()
+            let check = ui.add_enabled(host.os != "BSD", primary(t.get("apt.check")));
+            if hint(
+                check,
+                t,
+                t.get("hint.check_title"),
+                &ssh::apt_commands(&host, false),
+                t.get("hint.check_effect"),
+                t.get("hint.check_risk"),
+            )
+            .clicked()
             {
                 self.start_connection_action("check");
+            }
+            let upgrade = ui.add_enabled(host.os != "BSD", danger(t.get("apt.upgrade")));
+            if hint(
+                upgrade,
+                t,
+                t.get("hint.upgrade_title"),
+                &ssh::apt_commands(&host, true),
+                t.get("hint.upgrade_effect"),
+                t.get("hint.upgrade_risk"),
+            )
+            .clicked()
+            {
+                self.prompt_upgrade(vec![host.id.clone()], false);
             }
             if ui.button(t.get("common.reload")).clicked() {
                 self.send(json!({"action":"list"}));
@@ -757,21 +877,7 @@ impl ManagementApp {
                     "—".into()
                 },
             );
-            stat(
-                &mut columns[1],
-                t.get("apt.status"),
-                result
-                    .map(|r| match r.status.as_str() {
-                        "success" => t.get("apt.complete"),
-                        "unsupported" => t.get("apt.unsupported"),
-                        _ => t.get("apt.failed"),
-                    })
-                    .unwrap_or(if host.os == "BSD" {
-                        t.get("apt.unsupported")
-                    } else {
-                        t.get("apt.not_checked")
-                    }),
-            );
+            stat(&mut columns[1], t.get("apt.status"), status_label(t, &host));
             stat(
                 &mut columns[2],
                 t.get("apt.last_check"),
@@ -781,20 +887,31 @@ impl ManagementApp {
             );
         });
         ui.add_space(16.0);
+        self.result_panel(ui, &host, (viewport_height - 500.0).max(100.0));
+        self.storage_notice(ui);
+    }
+
+    /// Pending, upgraded and raw output for one host, shared by the host and batch views.
+    fn result_panel(&mut self, ui: &mut egui::Ui, host: &Host, available: f32) {
+        let palette = Palette::for_context(ui.ctx());
+        let t = Translator(self.preferences.language);
+        let result = host.last_check.as_ref();
+        let upgrade = result.filter(|r| r.operation == "upgrade");
         card(ui).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.horizontal(|ui| {
                 let before = self.tab;
                 ui.selectable_value(&mut self.tab, 0, t.get("apt.packages"));
-                ui.selectable_value(&mut self.tab, 1, t.get("apt.output"));
+                ui.selectable_value(&mut self.tab, 1, t.get("apt.upgraded"));
+                ui.selectable_value(&mut self.tab, 2, t.get("apt.output"));
                 if before != self.tab {
                     self.log(Action::ResultTab, Outcome::Succeeded);
                 }
             });
             ui.separator();
-            let available = (viewport_height - 500.0).max(100.0);
-            if self.tab == 1 {
+            if self.tab == 2 {
                 egui::ScrollArea::both()
+                    .id_salt("apt_output")
                     .max_height(available)
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
@@ -811,77 +928,409 @@ impl ManagementApp {
                             .selectable(true),
                         );
                     });
+                return;
+            }
+            let (message, failed, packages, headers) = if self.tab == 1 {
+                let message = match upgrade {
+                    Some(r) if r.status == "success" && r.upgraded.is_empty() => {
+                        t.get("apt.upgraded_none")
+                    }
+                    Some(r) if r.status == "success" => t.get("apt.upgraded_description"),
+                    Some(r) => r.error.as_str(),
+                    None => t.get("apt.upgrade_not_run"),
+                };
+                (
+                    message,
+                    upgrade.is_some_and(|r| r.status == "failed"),
+                    upgrade.map(|r| r.upgraded.as_slice()).unwrap_or_default(),
+                    [
+                        t.get("apt.package"),
+                        t.get("apt.previous"),
+                        t.get("apt.installed"),
+                        t.get("apt.architecture"),
+                    ],
+                )
             } else {
                 let message = match result {
                     Some(r) if r.status == "success" => {
-                        if r.packages.is_empty() {
-                            t.get("apt.up_to_date")
-                        } else {
-                            t.get("apt.available_description")
+                        match (r.operation == "upgrade", r.packages.is_empty()) {
+                            (false, true) => t.get("apt.up_to_date"),
+                            (false, false) => t.get("apt.available_description"),
+                            (true, true) => t.get("apt.upgrade_clean"),
+                            (true, false) => t.get("apt.held_back"),
                         }
                     }
-                    Some(r) => &r.error,
+                    Some(r) => r.error.as_str(),
                     None if host.os == "BSD" => t.get("apt.bsd_description"),
                     None => t.get("apt.check_hint"),
                 };
-                ui.label(RichText::new(message).color(
-                    if result.is_some_and(|r| r.status == "failed") {
-                        palette.error
-                    } else {
-                        palette.muted
-                    },
-                ));
-                if ui
-                    .add(
-                        egui::TextEdit::singleline(&mut self.package_search)
-                            .hint_text(t.get("apt.filter"))
-                            .desired_width(270.0),
-                    )
-                    .changed()
-                {
-                    self.log(Action::PackageSearch, Outcome::Succeeded);
-                }
-                ui.add_space(5.0);
-                egui::ScrollArea::both()
-                    .max_height((available - 75.0).max(70.0))
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        egui::Grid::new("packages")
-                            .striped(true)
-                            .min_col_width(130.0)
-                            .spacing([20.0, 14.0])
-                            .show(ui, |ui| {
-                                for caption in [
-                                    t.get("apt.package"),
-                                    t.get("apt.current"),
-                                    t.get("apt.candidate"),
-                                    t.get("apt.architecture"),
-                                ] {
-                                    ui.label(RichText::new(caption).strong().color(palette.muted));
-                                }
+                (
+                    message,
+                    result.is_some_and(|r| r.status == "failed"),
+                    result.map(|r| r.packages.as_slice()).unwrap_or_default(),
+                    [
+                        t.get("apt.package"),
+                        t.get("apt.current"),
+                        t.get("apt.candidate"),
+                        t.get("apt.architecture"),
+                    ],
+                )
+            };
+            ui.label(RichText::new(message).color(if failed {
+                palette.error
+            } else {
+                palette.muted
+            }));
+            if ui
+                .add(
+                    egui::TextEdit::singleline(&mut self.package_search)
+                        .hint_text(t.get("apt.filter"))
+                        .desired_width(270.0),
+                )
+                .changed()
+            {
+                self.log(Action::PackageSearch, Outcome::Succeeded);
+            }
+            ui.add_space(5.0);
+            let filter = self.package_search.to_lowercase();
+            egui::ScrollArea::both()
+                .id_salt("apt_packages")
+                .max_height((available - 75.0).max(70.0))
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    egui::Grid::new("packages")
+                        .striped(true)
+                        .min_col_width(130.0)
+                        .spacing([20.0, 14.0])
+                        .show(ui, |ui| {
+                            for caption in headers {
+                                ui.label(RichText::new(caption).strong().color(palette.muted));
+                            }
+                            ui.end_row();
+                            for package in packages
+                                .iter()
+                                .filter(|p| p.name.to_lowercase().contains(&filter))
+                            {
+                                ui.label(&package.name);
+                                ui.label(&package.current_version);
+                                ui.label(&package.candidate_version);
+                                ui.label(&package.architecture);
                                 ui.end_row();
-                                if let Some(result) = result {
-                                    for package in result.packages.iter().filter(|p| {
-                                        p.name
-                                            .to_lowercase()
-                                            .contains(&self.package_search.to_lowercase())
-                                    }) {
-                                        ui.label(&package.name);
-                                        ui.label(&package.current_version);
-                                        ui.label(&package.candidate_version);
-                                        ui.label(&package.architecture);
-                                        ui.end_row();
-                                    }
-                                }
-                            });
-                        if result.is_none_or(|r| r.packages.is_empty()) {
-                            ui.add_space(28.0);
-                            ui.label(RichText::new(t.get("apt.no_data")).color(palette.muted));
-                        }
-                    });
+                            }
+                        });
+                    if packages.is_empty() {
+                        ui.add_space(28.0);
+                        ui.label(RichText::new(t.get("apt.no_data")).color(palette.muted));
+                    }
+                });
+        });
+    }
+
+    fn batch_view(&mut self, ui: &mut egui::Ui, viewport_height: f32) {
+        let palette = Palette::for_context(ui.ctx());
+        let t = Translator(self.preferences.language);
+        ui.label(RichText::new(t.get("batch.title")).size(29.0).strong());
+        ui.label(RichText::new(t.get("batch.description")).color(palette.muted));
+        ui.add_space(10.0);
+        // Display order, never the set's order, so the request matches what the user sees.
+        let selected: Vec<String> = self
+            .hosts
+            .iter()
+            .filter(|h| self.batch_selected.contains(&h.id))
+            .map(|h| h.id.clone())
+            .collect();
+        let ready: BTreeSet<String> = self
+            .hosts
+            .iter()
+            .filter(|h| batch_ready(h))
+            .map(|h| h.id.clone())
+            .collect();
+        let count = [("count", selected.len().to_string())];
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .add_enabled(
+                    !ready.is_empty(),
+                    egui::Button::new(t.get("batch.select_all")),
+                )
+                .clicked()
+            {
+                self.batch_selected = ready.clone();
+                self.log(Action::BatchSelect, Outcome::Succeeded);
+            }
+            if ui
+                .add_enabled(
+                    !selected.is_empty(),
+                    egui::Button::new(t.get("batch.clear")),
+                )
+                .clicked()
+            {
+                self.batch_selected.clear();
+                self.log(Action::BatchSelect, Outcome::Succeeded);
+            }
+            ui.label(t.format("batch.selected", &count));
+            let check_label = t.format("batch.check", &count);
+            let check = ui.add_enabled(!selected.is_empty(), primary(&check_label));
+            if hint(
+                check,
+                t,
+                t.get("hint.batch_check_title"),
+                &[ssh::DETECT, ssh::SUDO_UPDATE, ssh::LIST],
+                t.get("hint.batch_check_effect"),
+                t.get("hint.batch_check_risk"),
+            )
+            .clicked()
+            {
+                self.send(json!({"action":"batch","operation":"check","ids":selected}));
+            }
+            let upgrade_label = t.format("batch.upgrade", &count);
+            let upgrade = ui.add_enabled(!selected.is_empty(), danger(&upgrade_label));
+            if hint(
+                upgrade,
+                t,
+                t.get("hint.batch_upgrade_title"),
+                &[
+                    ssh::DETECT,
+                    ssh::SUDO_UPDATE,
+                    ssh::LIST,
+                    ssh::SUDO_UPGRADE,
+                    ssh::LIST,
+                ],
+                t.get("hint.batch_upgrade_effect"),
+                t.get("hint.batch_upgrade_risk"),
+            )
+            .clicked()
+            {
+                self.prompt_upgrade(selected.clone(), true);
             }
         });
-        self.storage_notice(ui);
+        ui.add_space(8.0);
+        // Only display fields are copied out of the host list; credentials stay in place.
+        let rows: Vec<_> = self
+            .hosts
+            .iter()
+            .map(|h| {
+                let reason = if h.os == "BSD" {
+                    Some(t.get("batch.bsd"))
+                } else if h.fingerprint.is_empty() {
+                    Some(t.get("batch.untrusted"))
+                } else {
+                    None
+                };
+                let result = h.last_check.as_ref();
+                let success = result.filter(|r| r.status == "success");
+                (
+                    h.id.clone(),
+                    h.name.clone(),
+                    reason,
+                    result.map(|r| {
+                        if r.operation == "upgrade" {
+                            t.get("batch.operation_upgrade")
+                        } else {
+                            t.get("batch.operation_check")
+                        }
+                    }),
+                    status_label(t, h),
+                    result.is_some_and(|r| r.status == "failed"),
+                    success.map(|r| r.packages.len().to_string()),
+                    success
+                        .filter(|r| r.operation == "upgrade")
+                        .map(|r| r.upgraded.len().to_string()),
+                    result.map(|r| format_time(&r.checked_at)),
+                )
+            })
+            .collect();
+        card(ui).show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            if rows.is_empty() {
+                ui.label(RichText::new(t.get("host.empty")).color(palette.muted));
+                return;
+            }
+            egui::ScrollArea::both()
+                .id_salt("batch_hosts")
+                .max_height(240.0)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    egui::Grid::new("batch_hosts_grid")
+                        .striped(true)
+                        .spacing([18.0, 6.0])
+                        .show(ui, |ui| {
+                            ui.label("");
+                            for caption in [
+                                t.get("batch.host"),
+                                t.get("batch.last_operation"),
+                                t.get("apt.status"),
+                                t.get("apt.pending"),
+                                t.get("batch.upgraded_count"),
+                                t.get("apt.last_check"),
+                            ] {
+                                ui.label(RichText::new(caption).strong().color(palette.muted));
+                            }
+                            ui.end_row();
+                            for (
+                                id,
+                                name,
+                                reason,
+                                operation,
+                                status,
+                                failed,
+                                pending,
+                                upgraded,
+                                time,
+                            ) in rows
+                            {
+                                let mut checked = self.batch_selected.contains(&id);
+                                let mut response = ui.add_enabled(
+                                    reason.is_none(),
+                                    egui::Checkbox::without_text(&mut checked),
+                                );
+                                if let Some(reason) = reason {
+                                    response = response.on_disabled_hover_text(reason);
+                                }
+                                if response.changed() {
+                                    if checked {
+                                        self.batch_selected.insert(id.clone());
+                                    } else {
+                                        self.batch_selected.remove(&id);
+                                    }
+                                    self.log(Action::BatchSelect, Outcome::Succeeded);
+                                }
+                                if ui.selectable_label(self.selected == id, name).clicked() {
+                                    self.selected = id;
+                                    self.log(Action::HostSelect, Outcome::Succeeded);
+                                }
+                                ui.label(operation.unwrap_or("—"));
+                                ui.label(RichText::new(status).color(if failed {
+                                    palette.error
+                                } else {
+                                    palette.ink
+                                }));
+                                ui.label(pending.unwrap_or("—".into()));
+                                ui.label(upgraded.unwrap_or("—".into()));
+                                ui.label(time.unwrap_or("—".into()));
+                                ui.end_row();
+                            }
+                        });
+                });
+        });
+        ui.add_space(12.0);
+        let Some(host) = self.current().cloned() else {
+            return;
+        };
+        ui.horizontal(|ui| {
+            let index = self.hosts.iter().position(|h| h.id == host.id);
+            let previous = index.and_then(|i| i.checked_sub(1));
+            let next = index.map(|i| i + 1).filter(|i| *i < self.hosts.len());
+            if ui
+                .add_enabled(
+                    previous.is_some(),
+                    egui::Button::new(t.get("batch.previous")),
+                )
+                .clicked()
+                && let Some(i) = previous
+            {
+                self.selected = self.hosts[i].id.clone();
+                self.log(Action::HostSelect, Outcome::Succeeded);
+            }
+            if ui
+                .add_enabled(next.is_some(), egui::Button::new(t.get("batch.next")))
+                .clicked()
+                && let Some(i) = next
+            {
+                self.selected = self.hosts[i].id.clone();
+                self.log(Action::HostSelect, Outcome::Succeeded);
+            }
+            ui.label(
+                RichText::new(t.format("batch.detail", &[("name", host.name.clone())]))
+                    .size(18.0)
+                    .strong(),
+            );
+        });
+        self.result_panel(ui, &host, (viewport_height - 560.0).max(160.0));
+    }
+
+    fn prompt_upgrade(&mut self, ids: Vec<String>, batch: bool) {
+        self.upgrade_confirm = Some(UpgradeConfirm {
+            ids,
+            batch,
+            acknowledged: false,
+        });
+        self.log(Action::UpgradePrompt, Outcome::Succeeded);
+    }
+
+    fn upgrade_dialog(&mut self, ctx: &egui::Context) {
+        let Some(mut confirm) = self.upgrade_confirm.take() else {
+            return;
+        };
+        let palette = Palette::for_context(ctx);
+        let t = Translator(self.preferences.language);
+        let targets: Vec<&Host> = confirm
+            .ids
+            .iter()
+            .filter_map(|id| self.hosts.iter().find(|h| h.id == *id))
+            .collect();
+        let commands = match (confirm.batch, targets.first()) {
+            (false, Some(host)) => ssh::apt_commands(host, true),
+            _ => vec![
+                ssh::DETECT,
+                ssh::SUDO_UPDATE,
+                ssh::LIST,
+                ssh::SUDO_UPGRADE,
+                ssh::LIST,
+            ],
+        };
+        let names: Vec<String> = targets.iter().map(|h| h.name.clone()).collect();
+        let mut proceed = false;
+        let mut cancel = false;
+        egui::Modal::new(egui::Id::unique("upgrade_confirm")).show(ctx, |ui| {
+            ui.set_width(620.0);
+            ui.heading(t.format("upgrade.title", &[("count", names.len().to_string())]));
+            ui.label(t.get("upgrade.hosts"));
+            egui::ScrollArea::vertical()
+                .id_salt("upgrade_hosts")
+                .max_height(110.0)
+                .show(ui, |ui| {
+                    for name in &names {
+                        ui.label(format!("•  {name}"));
+                    }
+                });
+            ui.label(t.get("hint.upgrade_effect"));
+            ui.colored_label(palette.warning, t.get("hint.upgrade_risk"));
+            if confirm.batch {
+                ui.label(t.get("upgrade.batch_notice"));
+            }
+            ui.label(RichText::new(t.get("hint.commands")).strong());
+            for command in &commands {
+                ui.add(
+                    egui::Label::new(RichText::new(*command).monospace().size(11.0))
+                        .wrap()
+                        .selectable(true),
+                );
+            }
+            ui.checkbox(&mut confirm.acknowledged, t.get("upgrade.ack"));
+            ui.add_enabled_ui(!self.busy, |ui| {
+                ui.horizontal(|ui| {
+                    proceed = ui
+                        .add_enabled(
+                            confirm.acknowledged && !names.is_empty(),
+                            danger(t.get("upgrade.confirm")),
+                        )
+                        .clicked();
+                    cancel = ui.button(t.get("common.cancel")).clicked();
+                });
+            });
+        });
+        if proceed {
+            if confirm.batch {
+                self.send(json!({"action":"batch","operation":"upgrade","ids":confirm.ids}));
+            } else {
+                self.selected = confirm.ids[0].clone();
+                self.start_connection_action("upgrade");
+            }
+        } else if cancel {
+            self.log(Action::UpgradeCancel, Outcome::Cancelled);
+        } else {
+            self.upgrade_confirm = Some(confirm);
+        }
     }
 
     fn storage_notice(&mut self, ui: &mut egui::Ui) {
@@ -1039,6 +1488,8 @@ impl ManagementApp {
         self.trust = None;
         self.delete_id = None;
         self.after_trust = None;
+        self.batch_selected.clear();
+        self.upgrade_confirm = None;
     }
 
     fn open_vault_dialog(&mut self, mode: VaultMode) {
@@ -1592,6 +2043,7 @@ impl ManagementApp {
                 self.delete_id = None;
             }
         }
+        self.upgrade_dialog(ctx);
         self.vault_dialog(ctx);
         self.plaintext_delete_dialog(ctx);
         if let Some(error) = self.error.clone() {
@@ -1737,6 +2189,49 @@ fn wipe_host(host: &mut Host) {
 fn primary(text: &str) -> egui::Button<'_> {
     egui::Button::new(RichText::new(text).color(Color32::WHITE).strong()).fill(BLUE)
 }
+fn danger(text: &str) -> egui::Button<'_> {
+    egui::Button::new(RichText::new(text).color(Color32::WHITE).strong()).fill(RED)
+}
+/// Batch operations need a confirmed fingerprint and APT; BSD and untrusted hosts stay out.
+fn batch_ready(host: &Host) -> bool {
+    host.os != "BSD" && !host.fingerprint.is_empty()
+}
+fn status_label(t: Translator, host: &Host) -> &'static str {
+    match host.last_check.as_ref() {
+        Some(r) => match (r.status.as_str(), r.operation == "upgrade") {
+            ("success", false) => t.get("apt.complete"),
+            ("success", true) => t.get("apt.upgrade_complete"),
+            ("unsupported", _) => t.get("apt.unsupported"),
+            (_, false) => t.get("apt.failed"),
+            (_, true) => t.get("apt.upgrade_failed"),
+        },
+        None if host.os == "BSD" => t.get("apt.unsupported"),
+        None => t.get("apt.not_checked"),
+    }
+}
+/// After the style's tooltip delay, explains what a sensitive control runs and risks.
+fn hint(
+    response: egui::Response,
+    t: Translator,
+    title: &str,
+    commands: &[&str],
+    effect: &str,
+    risk: &str,
+) -> egui::Response {
+    let warning = Palette::for_context(&response.ctx).warning;
+    response.on_hover_ui(|ui| {
+        ui.set_max_width(560.0);
+        ui.label(RichText::new(title).strong());
+        if !commands.is_empty() {
+            ui.label(t.get("hint.commands"));
+            for command in commands {
+                ui.add(egui::Label::new(RichText::new(*command).monospace().size(11.0)).wrap());
+            }
+        }
+        ui.label(effect);
+        ui.colored_label(warning, risk);
+    })
+}
 fn stat(ui: &mut egui::Ui, title: &str, value: &str) {
     let palette = Palette::for_context(ui.ctx());
     card(ui).show(ui, |ui| {
@@ -1860,5 +2355,107 @@ mod tests {
         assert!(!app.plaintext_delete_prompt);
         app.received("vault_unlock", status);
         assert!(!app.plaintext_delete_prompt);
+    }
+
+    fn rendered_text(ctx: &egui::Context, mut draw: impl FnMut(&mut egui::Ui)) -> String {
+        fn collect(shape: &egui::epaint::Shape, text: &mut String) {
+            match shape {
+                egui::epaint::Shape::Text(shape) => text.push_str(&shape.galley.job.text),
+                egui::epaint::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        collect(shape, text);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut text = String::new();
+        // A newly opened modal may need a sizing pass before it paints.
+        for _ in 0..2 {
+            let mut frame = ctx.run_ui(egui::RawInput::default(), &mut draw);
+            frame.textures_delta.clear();
+            for shape in frame.shapes {
+                collect(&shape.shape, &mut text);
+            }
+        }
+        text
+    }
+
+    #[test]
+    fn batch_selection_keeps_only_eligible_hosts_and_upgrade_waits_for_confirmation() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = RuntimePaths {
+            store: directory.path().join("hosts.json"),
+            debug: true,
+            debug_allow_passkey: false,
+        };
+        let ctx = egui::Context::default();
+        let (requests, commands) = mpsc::channel();
+        let (_events, results) = mpsc::channel();
+        let mut app = ManagementApp::initialize(
+            &ctx,
+            paths,
+            AuditLog::new(directory.path()).unwrap(),
+            Worker {
+                requests,
+                events: results,
+            },
+        );
+        assert_eq!(commands.recv().unwrap()["action"], "storage_status");
+        let host = |id: &str, os: &str, fingerprint: &str| Host {
+            id: id.into(),
+            name: format!("host-{id}"),
+            address: "127.0.0.1".into(),
+            username: "operator".into(),
+            os: os.into(),
+            fingerprint: fingerprint.into(),
+            ..Default::default()
+        };
+        app.batch_selected = ["trusted", "untrusted", "bsd", "gone"]
+            .map(String::from)
+            .into();
+        app.received(
+            "list",
+            json!({"hosts":[
+                host("trusted", "Linux", "SHA256:trusted-fingerprint"),
+                host("untrusted", "Linux", ""),
+                host("bsd", "BSD", "SHA256:bsd-fingerprint"),
+            ]}),
+        );
+        assert_eq!(app.batch_selected, ["trusted".to_owned()].into());
+        app.received(
+            "batch",
+            json!({"results":[{"id":"trusted","result":{
+                "operation":"upgrade","status":"success",
+                "upgraded":[{"name":"openssl","current_version":"3.0.16","candidate_version":"3.0.17","architecture":"amd64","repository":"stable"}]
+            }}]}),
+        );
+        let saved = app.hosts[0].last_check.as_ref().unwrap();
+        assert_eq!(saved.upgraded[0].name, "openssl");
+        assert_eq!(
+            app.status,
+            Translator(app.preferences.language).format(
+                "status.batch_done",
+                &[("succeeded", "1".into()), ("failed", "0".into())]
+            )
+        );
+        app.view = View::Batch;
+        app.selected = "trusted".into();
+        app.tab = 1;
+        app.busy = false;
+        for language in [Language::ZhTw, Language::EnUs] {
+            app.preferences.language = language;
+            let text = rendered_text(&ctx, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| app.workspace(ui, 900.0));
+            });
+            assert!(text.contains(Translator(language).get("batch.title")));
+            assert!(text.contains("openssl"));
+            app.prompt_upgrade(vec!["trusted".into()], true);
+            let text = rendered_text(&ctx, |ui| app.upgrade_dialog(ui.ctx()));
+            assert!(text.contains("host-trusted"));
+            assert!(text.contains(ssh::SUDO_UPGRADE));
+            assert!(app.upgrade_confirm.is_some());
+        }
+        assert!(commands.try_recv().is_err());
     }
 }

@@ -103,6 +103,8 @@ pub fn install(ctx: &egui::Context) {
         style.spacing.item_spacing = Vec2::new(10.0, 10.0);
         style.spacing.button_padding = Vec2::new(14.0, 9.0);
         style.spacing.interact_size.y = 34.0;
+        // Command and risk hints appear only after a deliberate pause on the control.
+        style.interaction.tooltip_delay = 1.5;
         style
             .text_styles
             .insert(egui::TextStyle::Body, FontId::proportional(14.0));

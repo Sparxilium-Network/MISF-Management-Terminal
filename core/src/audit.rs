@@ -46,6 +46,13 @@ pub enum Action {
     Trust,
     Test,
     Check,
+    Upgrade,
+    BatchCheck,
+    BatchUpgrade,
+    UpgradePrompt,
+    UpgradeCancel,
+    MainTab,
+    BatchSelect,
     VaultCreate,
     VaultUnlock,
     VaultLock,
@@ -63,7 +70,7 @@ pub enum Action {
     Unsupported,
 }
 impl Action {
-    pub(crate) fn request(value: &str) -> Option<Self> {
+    pub(crate) fn request(value: &str, operation: Option<&str>) -> Option<Self> {
         Some(match value {
             "storage_status" => Self::StorageStatus,
             "list" => Self::List,
@@ -73,6 +80,12 @@ impl Action {
             "trust" => Self::Trust,
             "test" => Self::Test,
             "check" => Self::Check,
+            "upgrade" => Self::Upgrade,
+            "batch" => match operation {
+                Some("check") => Self::BatchCheck,
+                Some("upgrade") => Self::BatchUpgrade,
+                _ => return None,
+            },
             "vault_create" => Self::VaultCreate,
             "vault_unlock" => Self::VaultUnlock,
             "vault_lock" => Self::VaultLock,

@@ -13,7 +13,55 @@ mod windows_passkey;
 use anyhow::{Context, Result, ensure};
 use model::Host;
 use serde_json::{Value, json};
+use std::sync::Arc;
 use store::Store;
+
+/// Hosts contacted at once by a batch; the rest wait for a free slot.
+const BATCH_PARALLEL: usize = 8;
+const BATCH_LIMIT: usize = 256;
+
+/// Resolves a batch's distinct host IDs, in request order.
+pub(crate) fn batch_ids(request: &Value) -> Result<Vec<String>> {
+    let mut ids: Vec<String> = Vec::new();
+    for id in request["ids"].as_array().context("缺少批次主機清單")? {
+        let id = id.as_str().context("批次主機 ID 格式錯誤")?;
+        if !ids.iter().any(|known| known == id) {
+            ids.push(id.to_owned());
+        }
+    }
+    ensure!(!ids.is_empty(), "請至少選擇一台主機");
+    ensure!(
+        ids.len() <= BATCH_LIMIT,
+        "單次批次最多 {BATCH_LIMIT} 台主機"
+    );
+    Ok(ids)
+}
+
+fn batch_hosts(request: &Value, store: &Store) -> Result<Vec<Host>> {
+    let database = store.read()?;
+    batch_ids(request)?
+        .iter()
+        .map(|id| {
+            database
+                .hosts
+                .iter()
+                .find(|host| host.id == *id)
+                .cloned()
+                .context("找不到主機；可能已被刪除")
+        })
+        .collect()
+}
+
+fn save_results(store: &Store, results: Vec<(String, model::CheckResult)>) -> Result<()> {
+    store.update(|db| {
+        for (id, result) in results {
+            if let Some(current) = db.hosts.iter_mut().find(|h| h.id == id) {
+                current.last_check = Some(result);
+            }
+        }
+        Ok(())
+    })
+}
 
 pub async fn dispatch(request: Value, store: &Store, progress: &dyn Fn(&str)) -> Result<Value> {
     let action = request["action"].as_str().context("缺少 action")?;
@@ -79,16 +127,47 @@ pub async fn dispatch(request: Value, store: &Store, progress: &dyn Fn(&str)) ->
             Ok(json!({"trusted": true}))
         }
         "test" => Ok(json!({"os": ssh::test_connection(&store.host(id)?).await?})),
-        "check" => {
+        "check" | "upgrade" => {
             let host = store.host(id)?;
-            let result = ssh::check(&host, progress).await;
-            store.update(|db| {
-                if let Some(current) = db.hosts.iter_mut().find(|h| h.id == id) {
-                    current.last_check = Some(result.clone());
-                }
-                Ok(())
-            })?;
+            let result = if action == "upgrade" {
+                ssh::upgrade(&host, progress).await
+            } else {
+                ssh::check(&host, progress).await
+            };
+            save_results(store, vec![(id.to_owned(), result.clone())])?;
             Ok(json!(result))
+        }
+        "batch" => {
+            let upgrade = match request["operation"].as_str() {
+                Some("check") => false,
+                Some("upgrade") => true,
+                _ => anyhow::bail!("不支援的批次操作"),
+            };
+            let hosts = batch_hosts(&request, store)?;
+            let total = hosts.len();
+            progress(&format!("批次作業進度 0/{total}"));
+            let limit = Arc::new(tokio::sync::Semaphore::new(BATCH_PARALLEL));
+            let mut tasks = tokio::task::JoinSet::new();
+            for host in hosts {
+                let limit = limit.clone();
+                tasks.spawn(async move {
+                    let _permit = limit.acquire_owned().await;
+                    let result = ssh::run_apt(&host, upgrade, &|_: &str| {}).await;
+                    (host.id.clone(), result)
+                });
+            }
+            let mut results = Vec::with_capacity(total);
+            while let Some(finished) = tasks.join_next().await {
+                results.push(finished.context("批次工作異常結束")?);
+                progress(&format!("批次作業進度 {}/{total}", results.len()));
+            }
+            save_results(store, results.clone())?;
+            Ok(json!({
+                "results": results
+                    .into_iter()
+                    .map(|(id, result)| json!({"id": id, "result": result}))
+                    .collect::<Vec<_>>()
+            }))
         }
         _ => anyhow::bail!("不支援的操作"),
     }
