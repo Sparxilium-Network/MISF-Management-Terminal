@@ -323,8 +323,22 @@ pub(crate) fn header_version(header: &[u8]) -> Option<u32> {
         .flatten()
 }
 
+/// MISF never writes WAL databases. SQLite would replay a `-wal` file, or rewrite a
+/// WAL-mode header when switching to a rollback journal, before any check in `prepare`
+/// runs, so such files are refused before SQLite opens them and stay byte-for-byte intact.
+pub(crate) fn ensure_rollback_header(header: &[u8]) -> Result<()> {
+    let wal = header.starts_with(b"SQLite format 3\0")
+        && header.get(18..20).is_some_and(|modes| modes != [1, 1]);
+    ensure!(
+        !wal,
+        "主機資料庫為 WAL 模式，MISF 不會建立這種檔案；為避免改寫原始檔案，已拒絕開啟"
+    );
+    Ok(())
+}
+
 /// Opens a vault image in memory only, upgrading it like a file on disk.
 pub(crate) fn from_image(bytes: &[u8]) -> Result<Database> {
+    ensure_rollback_header(bytes)?;
     let mut conn = Connection::open_in_memory()?;
     conn.deserialize_read_exact(MAIN_DB, bytes, bytes.len(), false)
         .context("無法讀取加密主機資料庫")?;
@@ -408,6 +422,13 @@ mod tests {
         Zeroizing::new(conn.serialize(MAIN_DB).unwrap().to_vec())
     }
 
+    /// The same image with the header's write/read format bytes set to WAL mode.
+    pub(crate) fn wal_header(image: &[u8]) -> Vec<u8> {
+        let mut wal = image.to_vec();
+        wal[18..20].copy_from_slice(&[2, 2]);
+        wal
+    }
+
     #[test]
     fn foreign_newer_damaged_and_altered_databases_are_refused() {
         let foreign = {
@@ -434,6 +455,7 @@ mod tests {
             (&trigger[..], "結構"),
             (&view[..], "結構"),
             (&index[..], "結構"),
+            (&wal_header(&trigger)[..], "WAL"),
             (&b"damaged-data, not a database"[..], ""),
         ] {
             let error = format!("{:#}", from_image(image).err().unwrap());

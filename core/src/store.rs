@@ -46,6 +46,16 @@ impl Store {
         if !self.path.exists() {
             self.create(dir)?;
         }
+        // SQLite would apply these before any check could refuse the file.
+        for suffix in ["-wal", "-shm"] {
+            let mut sidecar = self.path.clone().into_os_string();
+            sidecar.push(suffix);
+            ensure!(
+                !Path::new(&sidecar).exists(),
+                "主機資料庫旁有 hosts.db{suffix} 檔案，MISF 不使用 WAL；為避免改寫原始檔案，已拒絕開啟"
+            );
+        }
+        crate::sqlite::ensure_rollback_header(&read_header(&self.path)?)?;
         let mut conn = Connection::open_with_flags(
             &self.path,
             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -163,12 +173,10 @@ impl Store {
             let legacy = self.path.with_extension("json").exists();
             return Ok((if legacy { "json" } else { "sqlite" }, None));
         }
-        let mut header = Vec::with_capacity(100);
-        std::io::Read::read_to_end(
-            &mut std::io::Read::take(fs::File::open(&self.path)?, 100),
-            &mut header,
-        )?;
-        Ok(("sqlite", crate::sqlite::header_version(&header)))
+        Ok((
+            "sqlite",
+            crate::sqlite::header_version(&read_header(&self.path)?),
+        ))
     }
 
     pub fn host(&self, id: &str) -> Result<Host> {
@@ -181,6 +189,16 @@ impl Store {
 }
 
 /// Reads the JSON format used before SQLite; the file itself is never modified.
+/// The 100-byte SQLite file header, or less for a shorter file.
+fn read_header(path: &Path) -> Result<Vec<u8>> {
+    let mut header = Vec::with_capacity(100);
+    std::io::Read::read_to_end(
+        &mut std::io::Read::take(fs::File::open(path)?, 100),
+        &mut header,
+    )?;
+    Ok(header)
+}
+
 pub(crate) fn parse_legacy(bytes: &[u8]) -> Result<Database> {
     let db: Database =
         serde_json::from_slice(bytes).context("舊版主機資料格式錯誤；原始檔案已保留")?;
@@ -276,5 +294,52 @@ mod tests {
         let store = Store::new(dir.path().join("hosts.db"));
         assert!(store.read().is_err());
         assert!(!dir.path().join("hosts.db").exists());
+    }
+
+    #[test]
+    fn wal_databases_are_refused_before_sqlite_replays_or_rewrites_them() {
+        let source = tempfile::tempdir().unwrap();
+        let path = source.path().join("hosts.db");
+        Store::new(path.clone()).read().unwrap();
+        // Like DayBrake's A7 POC: the WAL adds a trigger that the main file lacks.
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "PRAGMA journal_mode = WAL;
+             PRAGMA wal_autocheckpoint = 0;
+             CREATE TABLE loot (secret TEXT);
+             CREATE TRIGGER steal AFTER INSERT ON hosts BEGIN
+                 INSERT INTO loot VALUES (new.password);
+             END;",
+        )
+        .unwrap();
+        let with_sidecar = tempfile::tempdir().unwrap();
+        for name in ["hosts.db", "hosts.db-wal"] {
+            fs::copy(source.path().join(name), with_sidecar.path().join(name)).unwrap();
+        }
+        drop(conn);
+        // Closing checkpoints the WAL; the main file keeps its WAL-mode header.
+        assert!(!source.path().join("hosts.db-wal").exists());
+        for (dir, message) in [(&with_sidecar, "-wal"), (&source, "WAL 模式")] {
+            let files = |dir: &Path| {
+                let mut names: Vec<_> = fs::read_dir(dir)
+                    .unwrap()
+                    .map(|entry| entry.unwrap().path())
+                    .filter(|path| path.extension().is_none_or(|ext| ext != "lock"))
+                    .map(|path| (path.clone(), fs::read(path).unwrap()))
+                    .collect();
+                names.sort();
+                names
+            };
+            let before = files(dir.path());
+            let error = format!(
+                "{:#}",
+                Store::new(dir.path().join("hosts.db"))
+                    .read()
+                    .err()
+                    .unwrap()
+            );
+            assert!(files(dir.path()) == before, "refused files were rewritten");
+            assert!(error.contains(message), "{error}");
+        }
     }
 }
