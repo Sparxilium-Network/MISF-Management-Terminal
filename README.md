@@ -39,7 +39,8 @@ Linux／macOS 可使用 `cargo run --locked -p misf`，須在對應平台建置�
 
 - Windows：`MISF-Management-Terminal-windows-x86_64.zip`，解壓後執行 `misf.exe`。
 - Linux：`MISF-Management-Terminal-linux-x86_64.tar.gz`，解壓後執行 `./misf`。這是原生動態連結套件，需要圖形桌面及相容的 glibc、OpenGL、X11／Wayland、fontconfig 等系統函式庫；不是 AppImage，也不保證支援較舊發行版。
-- 每個套件內附 README、架構／加密評估文件及第三方授權；另附 SHA-256 校驗檔。
+- 每個套件內附 README、架構／加密評估文件、本專案 AGPL-3.0 授權全文 `LICENSE`，以及第三方授權（`THIRD_PARTY_NOTICES.md`、`licenses/`：所有編入執行檔的 Rust 相依套件授權全文、egui 內嵌字型與 LUKSbox 授權）；另附 SHA-256 校驗檔。
+- 相依套件授權清單 `licenses/THIRD_PARTY_LICENSES.html` 由 `./licenses.ps1` 以 cargo-about 依 `Cargo.lock` 產生，並先以 `cargo deny check licenses` 依 `deny.toml` 確認沒有與 AGPL 不相容的授權；更新相依後須重新執行並提交。清單與 `Cargo.lock` 不一致時，`package.ps1` 會拒絕打包。
 
 `main`／手動執行（選 `main`）使用 `dev-<run_number>.<run_attempt>-<短 commit>` 作為版本標籤；推送 `v*` 標籤時沿用該標籤。即使標籤為 `v1.0.0`，本流程仍只發布 Pre-release。已公開的同名版本不會被重跑覆寫；上傳未完成的草稿可重跑補齊。GitHub 的 Pre-release 仍顯示在 Releases 頁面，只是標記為預發行版，不是正式發行。
 

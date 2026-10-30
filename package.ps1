@@ -2,6 +2,8 @@ param([switch]$SkipBuild, [switch]$Archive)
 $ErrorActionPreference = 'Stop'
 Push-Location -LiteralPath $PSScriptRoot
 try {
+    # Fail before building if the dependency license list does not match Cargo.lock.
+    & "$PSScriptRoot/licenses.ps1" -Check
     if (-not $SkipBuild) { & "$PSScriptRoot/build.ps1" -Release }
     $onWindows = $env:OS -eq 'Windows_NT'
     if (-not $onWindows -and -not $IsLinux) { throw 'Packaging supports Windows and Linux only' }
@@ -14,8 +16,12 @@ try {
     New-Item -ItemType Directory -Path $outputPath -Force | Out-Null
     Copy-Item -LiteralPath "target/release/$binaryName" -Destination "$outputPath/$binaryName"
     Copy-Item -LiteralPath 'README.md' -Destination $outputPath
-    New-Item -ItemType Directory -Path "$outputPath/licenses/LUKSbox" -Force | Out-Null
+    # AGPL-3.0 full text for MISF itself, and every notice for code compiled into the binary.
+    Copy-Item -LiteralPath 'LICENSE' -Destination $outputPath
+    New-Item -ItemType Directory -Path "$outputPath/licenses/LUKSbox", "$outputPath/licenses/egui-fonts" -Force | Out-Null
     Get-ChildItem -LiteralPath 'third_party/LUKSbox' -File | Copy-Item -Destination "$outputPath/licenses/LUKSbox"
+    Get-ChildItem -LiteralPath 'licenses/egui-fonts' -File | Copy-Item -Destination "$outputPath/licenses/egui-fonts"
+    Copy-Item -LiteralPath 'licenses/THIRD_PARTY_LICENSES.html' -Destination "$outputPath/licenses"
     Copy-Item -LiteralPath 'THIRD_PARTY_NOTICES.md' -Destination $outputPath
     New-Item -ItemType Directory -Path "$outputPath/docs" -Force | Out-Null
     Get-ChildItem -LiteralPath 'docs' -Filter '*.md' -File | Copy-Item -Destination "$outputPath/docs"
@@ -39,7 +45,7 @@ try {
     if ($Archive) {
         $archiveBase = Join-Path $PSScriptRoot "dist/MISF-Management-Terminal-$platformName"
         # Only package the explicit application files, never other contents of dist/MISF.
-        $packageFiles = @($binaryName, 'README.md', 'THIRD_PARTY_NOTICES.md', 'docs', 'licenses', 'assets')
+        $packageFiles = @($binaryName, 'LICENSE', 'README.md', 'THIRD_PARTY_NOTICES.md', 'docs', 'licenses', 'assets')
         if (-not $onWindows) { $packageFiles += 'share' }
         if ($onWindows) {
             $archivePath = "$archiveBase.zip"

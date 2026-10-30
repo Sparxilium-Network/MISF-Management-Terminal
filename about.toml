@@ -1,0 +1,25 @@
+# cargo-about configuration for licenses/THIRD_PARTY_LICENSES.html.
+# Regenerate with ./licenses.ps1 after any Cargo.lock change.
+# Order is preference: for "A OR B" crates the first listed license is used.
+# MIT carries each crate's own copyright line and has no NOTICE requirement.
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "BSL-1.0",
+    "0BSD",
+    "Unlicense",
+    "Unicode-3.0",
+    "OFL-1.1",
+    "Ubuntu-font-1.0",
+]
+# Only the shipped platforms; other targets' dependencies are not in the binary.
+targets = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"]
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+# MISF's own crates are AGPL-3.0 (root LICENSE); the LUKSbox FIDO2 copy is in licenses/LUKSbox.
+private = { ignore = true }

@@ -71,6 +71,14 @@ jobs:
       - name: Test workspace
         run: cargo test --locked --workspace
 
+      - name: Check dependency licenses
+        if: runner.os == 'Linux'
+        run: |
+          cargo install --locked cargo-deny@0.20.2
+          if ($LASTEXITCODE -ne 0) { throw 'cargo-deny installation failed' }
+          cargo deny --locked check licenses
+          if ($LASTEXITCODE -ne 0) { throw 'A dependency license is not allowed by deny.toml' }
+
       - name: Build release binaries
         run: cargo build --locked --release --workspace
 

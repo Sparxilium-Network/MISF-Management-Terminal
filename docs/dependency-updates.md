@@ -74,3 +74,13 @@ LUKSbox 容器仍需要它原本的 AES／Argon2 等 API 世代，上游容器�
 維護檢查可執行 `cargo update --verbose`、`cargo tree --locked -i crypto-bigint`
 及 `cargo audit`。更新相容性副本時，應保留協定測試向量與舊容器解鎖測試，
 避免只以安全掃描結果判斷相容性。
+
+## 授權清單
+
+更新 `Cargo.lock` 後須執行 `./licenses.ps1`：先以 `cargo deny check licenses`
+依 `deny.toml` 確認所有相依授權與 AGPL-3.0 相容，再以 cargo-about 重新產生
+`licenses/THIRD_PARTY_LICENSES.html`，並提交產生的檔案。清單記錄所依據的
+`Cargo.lock` 雜湊；不一致時 `package.ps1`（含 CI）拒絕打包。雙授權套件依
+`about.toml` 的順序優先採用 MIT（附各套件版權行、無 NOTICE 義務）；目前只採
+Apache-2.0 的套件皆無 NOTICE 檔，LUKSbox 的 NOTICE 另附於 `licenses/LUKSbox/`。
+eframe 升級時，須對照 `licenses/egui-fonts/README.md` 確認內嵌字型及授權。

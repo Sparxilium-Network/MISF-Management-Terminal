@@ -1,0 +1,24 @@
+# cargo-deny license policy: every dependency must have a licence compatible
+# with distributing MISF under the GNU AGPL v3. Run: cargo deny check licenses
+[graph]
+targets = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"]
+
+[licenses]
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "BSL-1.0",
+    "0BSD",
+    "Unlicense",
+    "Unicode-3.0",
+    "OFL-1.1",
+    "Ubuntu-font-1.0",
+]
+confidence-threshold = 0.9
+# MISF's own crates (AGPL-3.0, root LICENSE) and the local LUKSbox FIDO2 copy.
+private = { ignore = true }
