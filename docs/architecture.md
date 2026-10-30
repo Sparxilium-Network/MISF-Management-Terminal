@@ -35,7 +35,7 @@ APT 升級在相同流程後追加 `apt-get -y upgrade`：一般帳號以 `sudo 
 
 預設儲存於使用者目錄 `.misf-management/hosts.db`，以 MISF_DATA_DIR 可更改位置。主機資料使用 SQLite（靜態連結 bundled SQLite 3.54.1，`core/src/sqlite.rs`），資料表為 `hosts`、`check_results`、`packages`（STRICT，以 position 保留順序）。檔頭 `application_id` 固定為 `0x4D495346`（"MISF"），`user_version` 是結構版本槽；`MIGRATIONS[n]` 把 vN 升到 vN+1，只能追加、不得修改已發佈的版本。
 
-開檔前先拒絕 WAL：資料庫旁有 `-wal`／`-shm`，或檔頭讀寫格式位元組不是 rollback journal，就不交給 SQLite，避免 SQLite 在任何檢查之前重放 WAL 或改寫檔頭（DayBrake A7）。每次開啟先強化連線：DEFENSIVE、關閉 trusted_schema、停用 trigger／view、ATTACH 上限 0、rollback journal（不用 WAL）、secure_delete、temp_store=MEMORY、mmap_size=0、cell_size_check；未編入 load_extension。接著執行 quick_check，核對 application_id 與版本，再把 sqlite_schema 與同版本遷移在記憶體重建的參考結構逐列比對；多出的 trigger、view、index 或改過的欄位定義都會拒絕。版本較新時拒絕開啟，不降級寫入；版本較舊時明文檔先複製為 `hosts.v<N>.bak.db`，再於單一交易執行遷移並更新 user_version。所有 SQL 為固定語句與綁定參數。
+開檔前先拒絕 WAL：資料庫旁有 `-wal`／`-shm`，或檔頭讀寫格式位元組不是 rollback journal，就不交給 SQLite，避免 SQLite 在任何檢查之前重放 WAL 或改寫檔頭。每次開啟先強化連線：DEFENSIVE、關閉 trusted_schema、停用 trigger／view、ATTACH 上限 0、rollback journal（不用 WAL）、secure_delete、temp_store=MEMORY、mmap_size=0、cell_size_check；未編入 load_extension。接著執行 quick_check，核對 application_id 與版本，再把 sqlite_schema 與同版本遷移在記憶體重建的參考結構逐列比對；多出的 trigger、view、index 或改過的欄位定義都會拒絕。版本較新時拒絕開啟，不降級寫入；版本較舊時明文檔先複製為 `hosts.v<N>.bak.db`，再於單一交易執行遷移並更新 user_version。所有 SQL 為固定語句與綁定參數。
 
 明文模式仍以 `hosts.lock` 跨程序互斥，讀取時整份載入、寫入時於單一交易取代全部列；SQLite busy_timeout 為 5 秒。新資料庫先在同目錄暫存檔建立，必要時匯入同目錄舊版 `hosts.json`（原檔不變），再以不覆寫方式移入定位；損壞的 JSON 不會產生資料庫。損壞或不支援版本的既存檔案不會被自動覆寫。
 

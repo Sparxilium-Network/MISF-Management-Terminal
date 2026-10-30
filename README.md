@@ -8,7 +8,7 @@
 
 全 Rust 原生桌面客戶端，以 eframe／egui 繪製畫面，內建 Rust SSH 核心。畫面與核心編譯成同一個執行檔，不需要 Java、瀏覽器或管理伺服器。
 
-預設將主機與憑證存於使用者目錄 `.misf-management/hosts.db`（SQLite 資料庫，檔頭 `user_version` 記錄結構版本，目前為 v1）。開啟較舊版本的資料庫會先在同目錄備份 `hosts.v<N>.bak.db`，再於單一交易內自動升級；較新版本、非 MISF、損壞或結構遭改動的資料庫一律拒絕開啟並保留原檔。安全評估見 [SQLite 儲存安全評估](docs/sqlite-security.md)。可選擇啟用 **LUKSbox 加密主機庫**，之後日常資料改存同目錄的 `hosts.lbx`，每次啟動先解鎖。用 `MISF_DATA_DIR` 可指定資料資料夾。
+預設將主機與憑證存於使用者目錄 `.misf-management/hosts.db`（SQLite 資料庫，檔頭 `user_version` 記錄結構版本，目前為 v1）。開啟較舊版本的資料庫會先在同目錄備份 `hosts.v<N>.bak.db`，再於單一交易內自動升級；較新版本、非 MISF、損壞或結構遭改動的資料庫一律拒絕開啟並保留原檔。可選擇啟用 **LUKSbox 加密主機庫**，之後日常資料改存同目錄的 `hosts.lbx`，每次啟動先解鎖。用 `MISF_DATA_DIR` 可指定資料資料夾。
 
 從 JSON 版本升級時，第一次讀取會把同目錄的 `hosts.json` 匯入新的 `hosts.db`，原 JSON 保持不變（之後的修改只寫入 SQLite）；確認無誤後可自行刪除該明文副本。首次啟動也會自動複製更早的 `.msif-management/hosts.json` 至新資料目錄再匯入，保留原檔，且不覆寫已存在的新資料。
 

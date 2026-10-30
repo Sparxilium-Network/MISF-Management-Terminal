@@ -301,7 +301,7 @@ mod tests {
         let source = tempfile::tempdir().unwrap();
         let path = source.path().join("hosts.db");
         Store::new(path.clone()).read().unwrap();
-        // Like DayBrake's A7 POC: the WAL adds a trigger that the main file lacks.
+        // The WAL adds a trigger that the main file lacks.
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
             "PRAGMA journal_mode = WAL;
