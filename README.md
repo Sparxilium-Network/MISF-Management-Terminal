@@ -151,3 +151,5 @@ LUKSbox 測試使用暫存資料，涵蓋明文保留、確認刪除與路徑限
 - `docs/architecture.md`：目前實作架構。
 
 開發用畫面擷取可使用 `cargo build -p misf --features capture`，以 `MISF_SCREENSHOT_TO` 指定 PNG 路徑，並以 `--debug.dir` 指定測試資料。`MISF_OPEN_EDITOR=1`／`MISF_OPEN_SETTINGS=1`／`MISF_OPEN_PASSKEY=1`／`MISF_OPEN_BATCH=1` 可預先開啟對應畫面；旗標只有明確設為 `1` 才啟用。debug 模式的 Passkey 按鈕停用，擷取不操作硬體。正式 release 預設不啟用擷取功能。
+
+`.daybrake` 不是 daybreak 拼錯，是故意的。
