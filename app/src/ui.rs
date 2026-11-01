@@ -934,8 +934,6 @@ impl ManagementApp {
     fn workspace(&mut self, ui: &mut egui::Ui, viewport_height: f32) {
         let palette = Palette::for_context(ui.ctx());
         let t = Translator(self.preferences.language);
-        self.storage_notice(ui);
-        ui.add_space(18.0);
         if self.locked {
             ui.label(
                 RichText::new(t.get("app.vault_heading"))
@@ -1676,25 +1674,37 @@ impl ManagementApp {
         }
     }
 
-    fn storage_notice(&mut self, ui: &mut egui::Ui) {
+    /// Storage mode and path, right-aligned in the top bar.
+    fn storage_location(&self, ui: &mut egui::Ui) {
         let palette = Palette::for_context(ui.ctx());
         let t = Translator(self.preferences.language);
-        ui.label(
-            RichText::new(t.get("app.development_warning"))
-                .strong()
+        ui.with_layout(egui::Layout::top_down(egui::Align::RIGHT), |ui| {
+            ui.label(
+                RichText::new(if self.encrypted {
+                    t.get("storage.encrypted")
+                } else {
+                    t.get("storage.plaintext")
+                })
+                .size(11.0)
                 .color(palette.warning),
-        );
-        ui.label(t.get("app.development_detail"));
-        ui.label(
-            RichText::new(if self.encrypted {
-                t.get("storage.encrypted")
-            } else {
-                t.get("storage.plaintext")
-            })
-            .size(11.0)
-            .color(palette.warning),
-        );
-        ui.label(RichText::new(&self.path).size(10.0).color(palette.muted));
+            );
+            ui.label(RichText::new(&self.path).size(10.0).color(palette.muted));
+        });
+    }
+
+    /// The development warning and storage problems, under the top bar's buttons.
+    fn storage_notes(&mut self, ui: &mut egui::Ui) {
+        let palette = Palette::for_context(ui.ctx());
+        let t = Translator(self.preferences.language);
+        ui.horizontal_wrapped(|ui| {
+            ui.label(
+                RichText::new(t.get("app.development_warning"))
+                    .strong()
+                    .size(12.0)
+                    .color(palette.warning),
+            );
+            ui.label(RichText::new(t.get("app.development_detail")).size(12.0));
+        });
         if !self.storage_warning.is_empty() {
             ui.colored_label(palette.error, &self.storage_warning);
         }
@@ -1710,7 +1720,12 @@ impl ManagementApp {
                 self.check_plaintext_copy();
             }
         }
-        ui.horizontal_wrapped(|ui| {
+    }
+
+    /// Vault and SSH key buttons, on the same row as Settings.
+    fn storage_buttons(&mut self, ui: &mut egui::Ui) {
+        let t = Translator(self.preferences.language);
+        ui.add_enabled_ui(!self.busy, |ui| {
             if self.encrypted {
                 if self.locked {
                     if ui.button(t.get("vault.unlock_host")).clicked() {
@@ -2738,17 +2753,23 @@ impl eframe::App for ManagementApp {
             )
             .show(ui, |ui| {
                 let t = Translator(self.preferences.language);
-                if ui.button(t.get("settings.title")).clicked() {
-                    self.settings_open = !self.settings_open;
-                    self.log(
-                        if self.settings_open {
-                            Action::SettingsOpen
-                        } else {
-                            Action::SettingsClose
-                        },
-                        Outcome::Succeeded,
-                    );
-                }
+                ui.horizontal(|ui| {
+                    if ui.button(t.get("settings.title")).clicked() {
+                        self.settings_open = !self.settings_open;
+                        self.log(
+                            if self.settings_open {
+                                Action::SettingsOpen
+                            } else {
+                                Action::SettingsClose
+                            },
+                            Outcome::Succeeded,
+                        );
+                    }
+                    ui.separator();
+                    self.storage_buttons(ui);
+                    self.storage_location(ui);
+                });
+                self.storage_notes(ui);
                 if self.debug {
                     ui.colored_label(
                         Palette::for_context(&ctx).warning,
