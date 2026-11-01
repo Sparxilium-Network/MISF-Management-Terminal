@@ -56,6 +56,14 @@ impl Drop for KeyDialog {
         self.passphrase.zeroize();
     }
 }
+/// A page of the settings window, picked from its side list.
+#[derive(Clone, Copy, PartialEq)]
+enum SettingsPage {
+    Vault,
+    Preferences,
+    Language,
+    About,
+}
 #[derive(Clone, Copy, PartialEq)]
 enum View {
     Host,
@@ -118,6 +126,7 @@ pub struct ManagementApp {
     passkey_allowed: bool,
     preferences: Preferences,
     settings_open: bool,
+    settings_page: SettingsPage,
     worker: Worker,
     hosts: Vec<Host>,
     selected: String,
@@ -185,6 +194,7 @@ impl ManagementApp {
             passkey_allowed: paths.passkey_allowed(),
             preferences,
             settings_open: false,
+            settings_page: SettingsPage::Vault,
             worker,
             hosts: vec![],
             selected: String::new(),
@@ -284,24 +294,63 @@ impl ManagementApp {
         let t = Translator(self.preferences.language);
         let mut open = self.settings_open;
         let mut close = false;
+        let pages = [
+            (SettingsPage::Vault, t.get("settings.nav_vault")),
+            (SettingsPage::Preferences, t.get("settings.nav_preferences")),
+            (SettingsPage::Language, t.get("settings.nav_language")),
+            (SettingsPage::About, t.get("settings.about")),
+        ];
         egui::Window::new(t.get("settings.title"))
             .id(egui::Id::unique("settings_window"))
             .open(&mut open)
             .default_pos([16.0, 70.0])
-            .default_width(420.0)
-            .resizable(false)
+            .fixed_size([660.0, 340.0])
             .collapsible(false)
             .show(ctx, |ui| {
-                self.preferences_form(ui);
-                ui.add_space(12.0);
-                ui.separator();
-                if self.about_section(ui) {
-                    self.send(json!({"action":"convert_storage"}));
-                }
-                ui.separator();
-                ui.label(t.get("settings.plaintext_notice"));
-                ui.add_space(12.0);
-                close = ui.button(t.get("common.close")).clicked();
+                ui.horizontal_top(|ui| {
+                    ui.allocate_ui_with_layout(
+                        [170.0, 340.0].into(),
+                        egui::Layout::top_down_justified(egui::Align::LEFT),
+                        |ui| {
+                            for (page, label) in pages {
+                                if ui
+                                    .selectable_label(self.settings_page == page, label)
+                                    .clicked()
+                                {
+                                    self.settings_page = page;
+                                }
+                            }
+                        },
+                    );
+                    ui.separator();
+                    ui.vertical(|ui| {
+                        let title = pages
+                            .iter()
+                            .find(|(page, _)| *page == self.settings_page)
+                            .map_or("", |(_, label)| label);
+                        ui.heading(title);
+                        ui.add_space(10.0);
+                        match self.settings_page {
+                            SettingsPage::Vault => self.vault_settings(ui),
+                            SettingsPage::Preferences | SettingsPage::Language => {
+                                self.preferences_form(ui);
+                                ui.add_space(12.0);
+                                ui.label(
+                                    RichText::new(t.get("settings.plaintext_notice"))
+                                        .size(12.0)
+                                        .color(Palette::for_context(ui.ctx()).muted),
+                                );
+                            }
+                            SettingsPage::About => {
+                                if self.about_section(ui) {
+                                    self.send(json!({"action":"convert_storage"}));
+                                }
+                            }
+                        }
+                        ui.add_space(16.0);
+                        close = ui.button(t.get("common.close")).clicked();
+                    });
+                });
             });
         self.settings_open = open && !close;
         if !self.settings_open {
@@ -309,11 +358,51 @@ impl ManagementApp {
         }
     }
 
+    /// LUKSbox status with the key slot and backup actions that used to sit in the top bar.
+    fn vault_settings(&mut self, ui: &mut egui::Ui) {
+        let palette = Palette::for_context(ui.ctx());
+        let t = Translator(self.preferences.language);
+        ui.label(
+            RichText::new(if self.encrypted {
+                t.get("storage.encrypted")
+            } else {
+                t.get("storage.plaintext")
+            })
+            .color(palette.warning),
+        );
+        ui.add(egui::Label::new(RichText::new(&self.path).size(11.0).color(palette.muted)).wrap());
+        ui.add_space(10.0);
+        ui.add_enabled_ui(!self.busy, |ui| {
+            if !self.encrypted {
+                ui.label(t.get("settings.vault_plaintext"));
+                ui.add_space(6.0);
+                if ui.button(t.get("vault.enable_button")).clicked() {
+                    self.open_vault_dialog(VaultMode::Create);
+                }
+            } else if self.locked {
+                ui.label(t.get("settings.vault_locked"));
+                ui.add_space(6.0);
+                if ui.button(t.get("vault.unlock_host")).clicked() {
+                    self.open_vault_dialog(VaultMode::Unlock);
+                }
+            } else {
+                ui.label(t.get("settings.vault_description"));
+                ui.add_space(6.0);
+                ui.horizontal_wrapped(|ui| {
+                    if ui.button(t.get("vault.manage")).clicked() {
+                        self.open_vault_dialog(VaultMode::Manage);
+                    }
+                    if ui.button(t.get("vault.export")).clicked() {
+                        self.choose_backup();
+                    }
+                });
+            }
+        });
+    }
+
     /// Returns true when the user asked to convert a legacy JSON store.
     fn about_section(&self, ui: &mut egui::Ui) -> bool {
         let t = Translator(self.preferences.language);
-        ui.label(RichText::new(t.get("settings.about")).strong());
-        ui.add_space(4.0);
         let mut format = match self.storage_format.as_str() {
             "sqlite" => t.get("settings.format_sqlite").to_owned(),
             "json" => t.get("settings.format_json").to_owned(),
@@ -352,12 +441,31 @@ impl ManagementApp {
         convert
     }
 
+    /// The language row on the Language page, the appearance row on Preferences.
     fn preferences_form(&mut self, ui: &mut egui::Ui) {
         let before = self.preferences;
         let t = Translator(before.language);
+        let language_page = self.settings_page == SettingsPage::Language;
         egui::Grid::new("preferences_form")
             .spacing([24.0, 16.0])
             .show(ui, |ui| {
+                if !language_page {
+                    ui.label(t.get("settings.appearance"));
+                    egui::ComboBox::from_id_salt("appearance")
+                        .selected_text(self.preferences.appearance.label(t))
+                        .width(165.0)
+                        .show_ui(ui, |ui| {
+                            for appearance in Appearance::ALL {
+                                ui.selectable_value(
+                                    &mut self.preferences.appearance,
+                                    appearance,
+                                    appearance.label(t),
+                                );
+                            }
+                        });
+                    ui.end_row();
+                    return;
+                }
                 ui.label(t.get("settings.language"));
                 egui::ComboBox::from_id_salt("language")
                     .selected_text(self.preferences.language.name())
@@ -368,20 +476,6 @@ impl ManagementApp {
                                 &mut self.preferences.language,
                                 language,
                                 language.name(),
-                            );
-                        }
-                    });
-                ui.end_row();
-                ui.label(t.get("settings.appearance"));
-                egui::ComboBox::from_id_salt("appearance")
-                    .selected_text(self.preferences.appearance.label(t))
-                    .width(165.0)
-                    .show_ui(ui, |ui| {
-                        for appearance in Appearance::ALL {
-                            ui.selectable_value(
-                                &mut self.preferences.appearance,
-                                appearance,
-                                appearance.label(t),
                             );
                         }
                     });
@@ -1734,12 +1828,6 @@ impl ManagementApp {
                 } else {
                     if ui.button(t.get("vault.lock")).clicked() {
                         self.send(json!({"action":"vault_lock"}));
-                    }
-                    if ui.button(t.get("vault.manage")).clicked() {
-                        self.open_vault_dialog(VaultMode::Manage);
-                    }
-                    if ui.button(t.get("vault.export")).clicked() {
-                        self.choose_backup();
                     }
                 }
             } else if ui.button(t.get("vault.enable_button")).clicked() {
