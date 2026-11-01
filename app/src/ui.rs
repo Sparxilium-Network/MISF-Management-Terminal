@@ -1,6 +1,6 @@
 use crate::{
     i18n::{Language, Translator},
-    preferences::{Preferences, WindowSize},
+    preferences::{Preferences, SETTINGS_DEFAULT, SETTINGS_MIN, WindowSize},
     theme::{self, Appearance, Palette},
     worker::{Event, Worker},
 };
@@ -121,7 +121,8 @@ pub struct ManagementApp {
     settings_path: PathBuf,
     /// False when ui-settings.json could not be read, so closing never overwrites it.
     window_loaded: bool,
-    saved_window: Option<WindowSize>,
+    /// Main and settings window sizes as loaded, so closing saves only a change.
+    saved_window: (Option<WindowSize>, Option<[f32; 2]>),
     debug: bool,
     passkey_allowed: bool,
     preferences: Preferences,
@@ -189,7 +190,7 @@ impl ManagementApp {
             audit,
             settings_path,
             window_loaded,
-            saved_window: preferences.window,
+            saved_window: (preferences.window, preferences.settings_window),
             debug: paths.debug,
             passkey_allowed: paths.passkey_allowed(),
             preferences,
@@ -293,23 +294,24 @@ impl ManagementApp {
         }
         let t = Translator(self.preferences.language);
         let mut open = self.settings_open;
-        let mut close = false;
         let pages = [
             (SettingsPage::Vault, t.get("settings.nav_vault")),
             (SettingsPage::Preferences, t.get("settings.nav_preferences")),
             (SettingsPage::Language, t.get("settings.nav_language")),
             (SettingsPage::About, t.get("settings.about")),
         ];
-        egui::Window::new(t.get("settings.title"))
+        let shown = egui::Window::new(t.get("settings.title"))
             .id(egui::Id::unique("settings_window"))
             .open(&mut open)
             .default_pos([16.0, 70.0])
-            .fixed_size([660.0, 340.0])
+            .default_size(self.preferences.settings_window.unwrap_or(SETTINGS_DEFAULT))
+            .min_size(SETTINGS_MIN)
+            .resizable(true)
             .collapsible(false)
             .show(ctx, |ui| {
                 ui.horizontal_top(|ui| {
                     ui.allocate_ui_with_layout(
-                        [170.0, 340.0].into(),
+                        [170.0, ui.available_height()].into(),
                         egui::Layout::top_down_justified(egui::Align::LEFT),
                         |ui| {
                             for (page, label) in pages {
@@ -347,12 +349,14 @@ impl ManagementApp {
                                 }
                             }
                         }
-                        ui.add_space(16.0);
-                        close = ui.button(t.get("common.close")).clicked();
                     });
                 });
             });
-        self.settings_open = open && !close;
+        if let Some(shown) = shown {
+            let size = shown.response.rect.size();
+            self.preferences.settings_window = Some([size.x.round(), size.y.round()]);
+        }
+        self.settings_open = open;
         if !self.settings_open {
             self.log(Action::SettingsClose, Outcome::Succeeded);
         }
@@ -2818,7 +2822,8 @@ impl ManagementApp {
 impl Drop for ManagementApp {
     fn drop(&mut self) {
         // Settings that failed to load are left as they are rather than overwritten.
-        if self.window_loaded && self.preferences.window != self.saved_window {
+        let windows = (self.preferences.window, self.preferences.settings_window);
+        if self.window_loaded && windows != self.saved_window {
             let _ = self.preferences.save(&self.settings_path);
         }
         let _ = self

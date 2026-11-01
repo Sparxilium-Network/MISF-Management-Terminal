@@ -21,16 +21,26 @@ impl WindowSize {
     }
 
     fn from_json(value: &serde_json::Value) -> Option<Self> {
-        let size = |key: &str, min: f32| {
-            let size = value[key].as_f64()? as f32;
-            (size.is_finite() && size <= Self::MAX).then(|| size.max(min))
-        };
+        let [width, height] = size_from_json(value, Self::MIN)?;
         Some(Self {
-            width: size("width", Self::MIN[0])?,
-            height: size("height", Self::MIN[1])?,
+            width,
+            height,
             maximized: value["maximized"].as_bool().unwrap_or(false),
         })
     }
+}
+
+/// The settings window's content size, in logical points.
+pub const SETTINGS_DEFAULT: [f32; 2] = [660.0, 340.0];
+pub const SETTINGS_MIN: [f32; 2] = [560.0, 280.0];
+
+/// Reads `width` and `height`, growing them to `min`; `None` when either is unusable.
+fn size_from_json(value: &serde_json::Value, min: [f32; 2]) -> Option<[f32; 2]> {
+    let size = |key: &str, min: f32| {
+        let size = value[key].as_f64()? as f32;
+        (size.is_finite() && size <= WindowSize::MAX).then(|| size.max(min))
+    };
+    Some([size("width", min[0])?, size("height", min[1])?])
 }
 
 #[derive(Clone, Copy, Default, PartialEq)]
@@ -38,6 +48,7 @@ pub struct Preferences {
     pub language: Language,
     pub appearance: Appearance,
     pub window: Option<WindowSize>,
+    pub settings_window: Option<[f32; 2]>,
 }
 
 impl Preferences {
@@ -63,6 +74,7 @@ impl Preferences {
                 .and_then(Appearance::from_code)
                 .unwrap_or_default(),
             window: WindowSize::from_json(&value["window"]),
+            settings_window: size_from_json(&value["settings_window"], SETTINGS_MIN),
         })
     }
 
@@ -81,6 +93,9 @@ impl Preferences {
                 "height": window.height,
                 "maximized": window.maximized,
             });
+        }
+        if let Some([width, height]) = self.settings_window {
+            value["settings_window"] = json!({"width": width, "height": height});
         }
         let bytes = serde_json::to_vec_pretty(&value).map_err(|e| e.to_string())?;
         file.write_all(&bytes).map_err(|e| e.to_string())?;
@@ -126,5 +141,31 @@ mod tests {
         assert_eq!(load(json!({"width": 1e9, "height": 800})), None);
         assert_eq!(load(json!({"width": "wide", "height": 800})), None);
         assert_eq!(load(json!(null)), None);
+    }
+
+    #[test]
+    fn settings_window_size_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ui-settings.json");
+        Preferences {
+            settings_window: Some([700.0, 420.5]),
+            ..Default::default()
+        }
+        .save(&path)
+        .unwrap();
+        assert_eq!(
+            Preferences::load(&path).unwrap().settings_window,
+            Some([700.0, 420.5])
+        );
+        let load = |size: serde_json::Value| {
+            std::fs::write(
+                &path,
+                json!({"version": 1, "settings_window": size}).to_string(),
+            )
+            .unwrap();
+            Preferences::load(&path).unwrap().settings_window
+        };
+        assert_eq!(load(json!({"width": 10, "height": 20})), Some(SETTINGS_MIN));
+        assert_eq!(load(json!({"width": "wide", "height": 300})), None);
     }
 }
