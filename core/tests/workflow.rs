@@ -842,3 +842,82 @@ async fn ssh_apt_results_roundtrip_inside_luksbox_and_remain_cli_compatible() {
         .unwrap();
     assert_eq!(pending, 2);
 }
+
+#[tokio::test]
+async fn hosts_share_a_stored_key_that_cannot_be_deleted_while_in_use() {
+    let fixture = fixture(false, false).await;
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::new(dir.path().join("hosts.db"));
+    let key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
+    let pem = key
+        .to_openssh(russh::keys::ssh_key::LineEnding::LF)
+        .unwrap()
+        .to_string();
+    let added = dispatch(
+        json!({"action":"key_add","name":"deploy","private_key":pem,"passphrase":""}),
+        &store,
+        &|_| {},
+    )
+    .await
+    .unwrap();
+    let key_id = added["key"]["id"].as_str().unwrap().to_owned();
+    assert_eq!(added["key"]["algorithm"], "ssh-ed25519");
+    // The same key twice is refused; a broken one never gets stored.
+    for request in [
+        json!({"action":"key_add","name":"again","private_key":pem}),
+        json!({"action":"key_add","name":"bad","private_key":"not a key"}),
+        json!({"action":"key_add","name":"","private_key":pem}),
+    ] {
+        assert!(dispatch(request, &store, &|_| {}).await.is_err());
+    }
+    let mut host = fixture.host.clone();
+    host.id.clear();
+    host.auth_type = "key".into();
+    host.key_id = "missing".into();
+    assert!(
+        dispatch(json!({"action":"save","host":host}), &store, &|_| {})
+            .await
+            .is_err()
+    );
+    host.key_id = key_id.clone();
+    host.private_key = "inline copy that must be dropped".into();
+    let saved = dispatch(json!({"action":"save","host":host}), &store, &|_| {})
+        .await
+        .unwrap();
+    let id = saved["id"].as_str().unwrap().to_owned();
+    dispatch(
+        json!({"action":"trust","id":id,"fingerprint":fixture.host.fingerprint}),
+        &store,
+        &|_| {},
+    )
+    .await
+    .unwrap();
+    // The list carries names and fingerprints only, never the key itself.
+    let list = dispatch(json!({"action":"list"}), &store, &|_| {})
+        .await
+        .unwrap()
+        .to_string();
+    assert!(!list.contains("OPENSSH PRIVATE KEY") && !list.contains("inline copy"));
+    assert!(list.contains("deploy"));
+    dispatch(json!({"action":"test","id":id}), &store, &|_| {})
+        .await
+        .unwrap();
+    let error = dispatch(json!({"action":"key_delete","id":key_id}), &store, &|_| {})
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{error:#}").contains(&fixture.host.name),
+        "{error:#}"
+    );
+    let mut host = store.read().unwrap().hosts[0].clone();
+    host.auth_type = "password".into();
+    host.password = "pw".into();
+    dispatch(json!({"action":"save","host":host}), &store, &|_| {})
+        .await
+        .unwrap();
+    assert!(store.read().unwrap().hosts[0].key_id.is_empty());
+    dispatch(json!({"action":"key_delete","id":key_id}), &store, &|_| {})
+        .await
+        .unwrap();
+    assert!(store.read().unwrap().keys.is_empty());
+}

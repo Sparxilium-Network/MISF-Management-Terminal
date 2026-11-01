@@ -8,7 +8,7 @@
 
 全 Rust 原生桌面客戶端，以 eframe／egui 繪製畫面，內建 Rust SSH 核心。畫面與核心編譯成同一個執行檔，不需要 Java、瀏覽器或管理伺服器。
 
-預設將主機與憑證存於使用者目錄 `.misf-management/hosts.db`（SQLite 資料庫，檔頭 `user_version` 記錄結構版本，目前為 v2）。開啟較舊版本的資料庫會先在同目錄備份 `hosts.v<N>.bak.db`，再於單一交易內自動升級；較新版本、非 MISF、損壞或結構遭改動的資料庫一律拒絕開啟並保留原檔。可選擇啟用 **LUKSbox 加密主機庫**，之後日常資料改存同目錄的 `hosts.lbx`，每次啟動先解鎖。用 `MISF_DATA_DIR` 可指定資料資料夾。
+預設將主機與憑證存於使用者目錄 `.misf-management/hosts.db`（SQLite 資料庫，檔頭 `user_version` 記錄結構版本，目前為 v3）。開啟較舊版本的資料庫會先在同目錄備份 `hosts.v<N>.bak.db`，再於單一交易內自動升級；較新版本、非 MISF、損壞或結構遭改動的資料庫一律拒絕開啟並保留原檔。可選擇啟用 **LUKSbox 加密主機庫**，之後日常資料改存同目錄的 `hosts.lbx`，每次啟動先解鎖。用 `MISF_DATA_DIR` 可指定資料資料夾。
 
 從 JSON 版本升級時，第一次讀取會把同目錄的 `hosts.json` 匯入新的 `hosts.db`，原 JSON 保持不變（之後的修改只寫入 SQLite）；確認無誤後可自行刪除該明文副本。
 
@@ -56,6 +56,7 @@ Linux／macOS 可使用 `cargo run --locked -p misf`，須在對應平台建置�
 
 - 保存多台 Linux／BSD 主機，支援新增、編輯、刪除與搜尋。
 - SSH 帳密登入，或匯入 OpenSSH／PEM 私鑰；加密私鑰可填密語。
+- 「SSH 金鑰管理」可新增／刪除共用金鑰，主機認證方式選「已儲存的 SSH 金鑰」即可共用同一把；畫面只顯示名稱、演算法與指紋，仍有主機使用的金鑰不能刪除。
 - 首次連線先核對並保存 SHA-256 主機指紋，確認前不提交帳密；指紋變更立即阻擋認證。
 - 使用 russh 自帶 SSH，不呼叫系統 ssh，也不讀取電腦的 SSH config、known_hosts、SSH agent 或系統私鑰。
 - 自動偵測發行版本與套件管理器：測試連線或檢查時讀取 `uname` 與 `/etc/os-release`，主機清單與詳情顯示如「Ubuntu 26.04 · APT」「Rocky Linux 9.5 · DNF」「FreeBSD 14.2 · pkg」。支援 APT（Debian／Ubuntu）、DNF（Fedora／RHEL 8+）、YUM（CentOS 7 等）與 FreeBSD pkg；OpenBSD／NetBSD 只支援連線測試。偵測結果只來自主機本身，編輯主機不能改寫；位址或埠變更時清除。編輯主機的「套件管理員」預設為 **自動偵測**，也可手動指定（Linux：APT／DNF／YUM；BSD：pkg），例如同時裝有 DNF 與 YUM 時改用 YUM；指定的管理器必須確實存在於主機上，否則操作會在執行任何套件指令前停止。
@@ -150,6 +151,6 @@ LUKSbox 測試使用暫存資料，涵蓋明文保留、確認刪除與路徑限
 - CLI 的加密工作階段只存在同一程序內；可透過 stdin 傳入 JSON 請求陣列，依序執行解鎖、操作與鎖定。不要把解鎖密碼放進命令列參數。
 - `docs/architecture.md`：目前實作架構。
 
-開發用畫面擷取可使用 `cargo build -p misf --features capture`，以 `MISF_SCREENSHOT_TO` 指定 PNG 路徑，並以 `--debug.dir` 指定測試資料。`MISF_OPEN_EDITOR=1`／`MISF_OPEN_SETTINGS=1`／`MISF_OPEN_PASSKEY=1`／`MISF_OPEN_BATCH=1` 可預先開啟對應畫面；旗標只有明確設為 `1` 才啟用。debug 模式的 Passkey 按鈕停用，擷取不操作硬體。正式 release 預設不啟用擷取功能。
+開發用畫面擷取可使用 `cargo build -p misf --features capture`，以 `MISF_SCREENSHOT_TO` 指定 PNG 路徑，並以 `--debug.dir` 指定測試資料。`MISF_OPEN_EDITOR=1`／`MISF_OPEN_SETTINGS=1`／`MISF_OPEN_PASSKEY=1`／`MISF_OPEN_BATCH=1`／`MISF_OPEN_KEYS=1` 可預先開啟對應畫面；旗標只有明確設為 `1` 才啟用。debug 模式的 Passkey 按鈕停用，擷取不操作硬體。正式 release 預設不啟用擷取功能。
 
 `.daybrake` 不是 daybreak 拼錯，是故意的。

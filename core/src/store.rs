@@ -1,4 +1,4 @@
-use crate::model::Host;
+use crate::model::{Host, SshKey};
 use crate::vault::VaultFile;
 use anyhow::{Context, Result, ensure};
 use fs2::FileExt;
@@ -16,9 +16,34 @@ use std::{
 pub struct Database {
     pub version: u32,
     pub hosts: Vec<Host>,
+    /// SSH keys hosts share by `key_id`; never in the legacy JSON.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keys: Vec<SshKey>,
     /// Names the user gave LUKSbox key slots, by slot index; never in the legacy JSON.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub slot_names: BTreeMap<u32, String>,
+}
+
+impl Database {
+    /// The host with its stored SSH key filled in, ready to connect.
+    pub fn host(&self, id: &str) -> Result<Host> {
+        let mut host = self
+            .hosts
+            .iter()
+            .find(|h| h.id == id)
+            .cloned()
+            .context("找不到主機；可能已被刪除")?;
+        if host.auth_type == "key" && !host.key_id.is_empty() {
+            let key = self
+                .keys
+                .iter()
+                .find(|k| k.id == host.key_id)
+                .context("此主機使用的 SSH 金鑰已不存在；請編輯主機重新選擇")?;
+            host.private_key = key.private_key.clone();
+            host.key_passphrase = key.passphrase.clone();
+        }
+        Ok(host)
+    }
 }
 
 pub struct Store {
@@ -117,6 +142,7 @@ impl Store {
                 Ok(Database {
                     version: db.version,
                     hosts: db.hosts.clone(),
+                    keys: db.keys.clone(),
                     slot_names: db.slot_names.clone(),
                 })
             },
@@ -185,11 +211,7 @@ impl Store {
     }
 
     pub fn host(&self, id: &str) -> Result<Host> {
-        self.read()?
-            .hosts
-            .into_iter()
-            .find(|h| h.id == id)
-            .context("找不到主機；可能已被刪除")
+        self.read()?.host(id)
     }
 }
 

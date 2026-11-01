@@ -65,6 +65,9 @@ pub enum Action {
     VaultUpgradeCancel,
     VaultBackup,
     ConvertStorage,
+    SshKeyDialog,
+    SshKeyAdd,
+    SshKeyDelete,
     PlaintextDeletePrompt,
     PlaintextDeleteCancel,
     VaultDeletePlaintext,
@@ -102,6 +105,8 @@ impl Action {
             "vault_upgrade_cancel" => Self::VaultUpgradeCancel,
             "vault_backup" => Self::VaultBackup,
             "convert_storage" => Self::ConvertStorage,
+            "key_add" => Self::SshKeyAdd,
+            "key_delete" => Self::SshKeyDelete,
             "vault_delete_plaintext" => Self::VaultDeletePlaintext,
             _ => return None,
         })

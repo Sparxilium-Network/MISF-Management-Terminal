@@ -17,7 +17,7 @@ pub mod vault;
 mod windows_passkey;
 
 use anyhow::{Context, Result, ensure};
-use model::Host;
+use model::{Host, SshKey};
 use serde_json::{Value, json};
 use std::sync::Arc;
 use store::Store;
@@ -47,14 +47,7 @@ fn batch_hosts(request: &Value, store: &Store) -> Result<Vec<Host>> {
     let database = store.read()?;
     batch_ids(request)?
         .iter()
-        .map(|id| {
-            database
-                .hosts
-                .iter()
-                .find(|host| host.id == *id)
-                .cloned()
-                .context("找不到主機；可能已被刪除")
-        })
+        .map(|id| database.host(id))
         .collect()
 }
 
@@ -78,10 +71,11 @@ pub async fn dispatch(request: Value, store: &Store, progress: &dyn Fn(&str)) ->
     let id = request["id"].as_str().unwrap_or_default();
     match action {
         "list" => {
-            let hosts = store.read()?.hosts;
+            let database = store.read()?;
             let (format, schema_version) = store.format()?;
             Ok(json!({
-                "hosts": hosts,
+                "hosts": database.hosts,
+                "keys": database.keys.iter().map(SshKey::summary).collect::<Vec<_>>(),
                 "path": store.path,
                 "encrypted": store.is_encrypted(),
                 "format": format,
@@ -103,6 +97,10 @@ pub async fn dispatch(request: Value, store: &Store, progress: &dyn Fn(&str)) ->
                 host.id = uuid::Uuid::new_v4().to_string();
             }
             store.update(|db| {
+                ensure!(
+                    host.key_id.is_empty() || db.keys.iter().any(|k| k.id == host.key_id),
+                    "找不到所選的 SSH 金鑰；可能已被刪除"
+                );
                 if let Some(old) = db.hosts.iter_mut().find(|h| h.id == host.id) {
                     if old.address != host.address || old.port != host.port {
                         host.fingerprint.clear();
@@ -137,6 +135,43 @@ pub async fn dispatch(request: Value, store: &Store, progress: &dyn Fn(&str)) ->
                 let before = db.hosts.len();
                 db.hosts.retain(|h| h.id != id);
                 ensure!(db.hosts.len() < before, "找不到主機");
+                Ok(())
+            })?;
+            Ok(json!({"deleted": id}))
+        }
+        "key_add" => {
+            let text = |field: &str| request[field].as_str().unwrap_or_default();
+            let key = SshKey::new(
+                text("name"),
+                text("private_key").to_owned(),
+                text("passphrase").to_owned(),
+            )?;
+            let summary = key.summary();
+            store.update(|db| {
+                if let Some(same) = db.keys.iter().find(|k| k.fingerprint == key.fingerprint) {
+                    anyhow::bail!("此 SSH 金鑰已儲存為「{}」", same.name);
+                }
+                db.keys.push(key);
+                Ok(())
+            })?;
+            Ok(json!({"key": summary}))
+        }
+        "key_delete" => {
+            store.update(|db| {
+                let users: Vec<&str> = db
+                    .hosts
+                    .iter()
+                    .filter(|h| h.key_id == id)
+                    .map(|h| h.name.as_str())
+                    .collect();
+                ensure!(
+                    users.is_empty(),
+                    "仍有主機使用此 SSH 金鑰：{}；請先改用其他認證方式",
+                    users.join("、")
+                );
+                let before = db.keys.len();
+                db.keys.retain(|k| k.id != id);
+                ensure!(db.keys.len() < before, "找不到 SSH 金鑰");
                 Ok(())
             })?;
             Ok(json!({"deleted": id}))

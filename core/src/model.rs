@@ -14,6 +14,8 @@ pub struct Host {
     pub password: String,
     pub private_key: String,
     pub key_passphrase: String,
+    /// A stored [`SshKey`] used instead of `private_key`; empty for an inline key.
+    pub key_id: String,
     pub sudo_password: String,
     pub use_pty: bool,
     pub fingerprint: String,
@@ -51,7 +53,12 @@ impl Host {
             manager_choices(&self.os).contains(&self.manager_choice.as_str()),
             "此目標系統不支援所選的套件管理器"
         );
-        if self.auth_type == "key" {
+        if self.auth_type == "key" && !self.key_id.is_empty() {
+            // The stored key is filled in when connecting; keep no second copy here.
+            self.private_key.clear();
+            self.key_passphrase.clear();
+            self.password.clear();
+        } else if self.auth_type == "key" {
             ensure!(!self.private_key.trim().is_empty(), "請匯入 SSH 私鑰");
             russh::keys::decode_secret_key(&self.private_key, self.passphrase())
                 .map_err(|_| anyhow::anyhow!("SSH 私鑰格式或私鑰密語不正確"))?;
@@ -60,6 +67,7 @@ impl Host {
             ensure!(!self.password.is_empty(), "請填寫 SSH 密碼");
             self.private_key.clear();
             self.key_passphrase.clear();
+            self.key_id.clear();
         }
         Ok(())
     }
@@ -109,6 +117,60 @@ impl Host {
             }
         }
         result
+    }
+}
+
+/// A private key saved once and shared by every host whose `key_id` names it.
+#[derive(Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct SshKey {
+    pub id: String,
+    pub name: String,
+    /// e.g. "ssh-ed25519", read from the key when it was added.
+    pub algorithm: String,
+    /// "SHA256:…" of the public key, for telling keys apart without the secret.
+    pub fingerprint: String,
+    pub private_key: String,
+    pub passphrase: String,
+}
+
+impl SshKey {
+    /// Checks that the key decodes with this passphrase and records what it is.
+    pub fn new(name: &str, private_key: String, passphrase: String) -> Result<Self> {
+        let name = name.trim();
+        ensure!(!name.is_empty(), "請填寫 SSH 金鑰名稱");
+        ensure!(name.chars().count() <= 64, "SSH 金鑰名稱最多 64 個字");
+        ensure!(
+            !name.chars().any(char::is_control),
+            "SSH 金鑰名稱不可包含控制字元"
+        );
+        ensure!(!private_key.trim().is_empty(), "請匯入 SSH 私鑰");
+        let key = russh::keys::decode_secret_key(
+            &private_key,
+            (!passphrase.is_empty()).then_some(passphrase.as_str()),
+        )
+        .map_err(|_| anyhow::anyhow!("SSH 私鑰格式或私鑰密語不正確"))?;
+        Ok(Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: name.into(),
+            algorithm: key.algorithm().as_str().into(),
+            fingerprint: key
+                .public_key()
+                .fingerprint(russh::keys::HashAlg::Sha256)
+                .to_string(),
+            private_key,
+            passphrase,
+        })
+    }
+
+    /// Everything the UI may show; the key material stays in the worker.
+    pub fn summary(&self) -> serde_json::Value {
+        serde_json::json!({
+            "id": self.id,
+            "name": self.name,
+            "algorithm": self.algorithm,
+            "fingerprint": self.fingerprint,
+        })
     }
 }
 

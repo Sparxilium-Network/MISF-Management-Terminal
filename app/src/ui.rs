@@ -23,8 +23,38 @@ const RED: Color32 = Color32::from_rgb(178, 58, 58);
 struct Editor {
     host: Host,
     port: String,
+    /// Key authentication through a stored key (`host.key_id`) rather than an inline one.
+    saved_key: bool,
     show_secrets: bool,
     error: String,
+}
+/// A stored SSH key as the worker describes it: never the key material.
+struct KeyRow {
+    id: String,
+    name: String,
+    algorithm: String,
+    fingerprint: String,
+}
+impl KeyRow {
+    fn label(&self) -> String {
+        format!("{} · {}", self.name, self.algorithm)
+    }
+}
+#[derive(Default)]
+struct KeyDialog {
+    name: String,
+    private_key: String,
+    passphrase: String,
+    show_secrets: bool,
+    error: String,
+    /// The key awaiting delete confirmation.
+    delete: Option<String>,
+}
+impl Drop for KeyDialog {
+    fn drop(&mut self) {
+        self.private_key.zeroize();
+        self.passphrase.zeroize();
+    }
 }
 #[derive(Clone, Copy, PartialEq)]
 enum View {
@@ -120,6 +150,8 @@ pub struct ManagementApp {
     slots: Vec<SlotRow>,
     storage_warning: String,
     vault_dialog: Option<VaultDialog>,
+    ssh_keys: Vec<KeyRow>,
+    key_dialog: Option<KeyDialog>,
     #[cfg(feature = "capture")]
     capture_started: std::time::Instant,
     #[cfg(feature = "capture")]
@@ -184,6 +216,8 @@ impl ManagementApp {
             slots: vec![],
             storage_warning: String::new(),
             vault_dialog: None,
+            ssh_keys: vec![],
+            key_dialog: None,
             #[cfg(feature = "capture")]
             capture_started: std::time::Instant::now(),
             #[cfg(feature = "capture")]
@@ -206,6 +240,10 @@ impl ManagementApp {
         if std::env::var("MISF_OPEN_SETTINGS").as_deref() == Ok("1") {
             app.settings_open = true;
             app.log(Action::SettingsOpen, Outcome::Succeeded);
+        }
+        #[cfg(feature = "capture")]
+        if std::env::var("MISF_OPEN_KEYS").as_deref() == Ok("1") {
+            app.open_key_dialog();
         }
         #[cfg(feature = "capture")]
         if std::env::var("MISF_OPEN_BATCH").as_deref() == Ok("1") {
@@ -523,6 +561,20 @@ impl ManagementApp {
                         return;
                     }
                 }
+                self.ssh_keys = data["keys"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|key| {
+                        let text = |field: &str| key[field].as_str().unwrap_or_default().to_owned();
+                        KeyRow {
+                            id: text("id"),
+                            name: text("name"),
+                            algorithm: text("algorithm"),
+                            fingerprint: text("fingerprint"),
+                        }
+                    })
+                    .collect();
                 self.path = data["path"].as_str().unwrap_or_default().into();
                 self.encrypted = data["encrypted"].as_bool().unwrap_or(false);
                 self.storage_format = data["format"].as_str().unwrap_or_default().into();
@@ -545,6 +597,24 @@ impl ManagementApp {
                 self.delete_id = None;
                 self.selected.clear();
                 self.send(json!({"action":"list"}));
+            }
+            "key_add" => {
+                if let Some(dialog) = &mut self.key_dialog {
+                    dialog.name.clear();
+                    dialog.private_key.zeroize();
+                    dialog.passphrase.zeroize();
+                    dialog.error.clear();
+                }
+                let name = data["key"]["name"].as_str().unwrap_or_default().to_owned();
+                self.send(json!({"action":"list"}));
+                self.status = t.format("status.key_added", &[("name", name)]);
+            }
+            "key_delete" => {
+                if let Some(dialog) = &mut self.key_dialog {
+                    dialog.delete = None;
+                }
+                self.send(json!({"action":"list"}));
+                self.status = t.get("status.key_deleted").into();
             }
             "probe" => {
                 if let Some(host) = self.current() {
@@ -670,10 +740,51 @@ impl ManagementApp {
         });
         self.editor = Some(Editor {
             port: host.port.to_string(),
+            saved_key: host.auth_type == "key" && !host.key_id.is_empty(),
             host,
             show_secrets: false,
             error: String::new(),
         });
+    }
+
+    fn open_key_dialog(&mut self) {
+        if self.locked {
+            return;
+        }
+        self.log(Action::SshKeyDialog, Outcome::Succeeded);
+        self.key_dialog = Some(KeyDialog::default());
+    }
+
+    /// Asks for a private key file; None when the user cancels.
+    fn pick_key_file(&mut self) -> Option<Result<String, String>> {
+        let t = Translator(self.preferences.language);
+        self.log(Action::ImportKey, Outcome::Started);
+        let Some(path) = rfd::FileDialog::new()
+            .set_title(t.get("auth.import_title"))
+            .pick_file()
+        else {
+            self.log(Action::ImportKey, Outcome::Cancelled);
+            return None;
+        };
+        let result = std::fs::metadata(&path).and_then(|m| {
+            if m.len() <= 1024 * 1024 {
+                std::fs::read_to_string(&path)
+            } else {
+                Err(std::io::Error::other(t.get("auth.key_too_large")))
+            }
+        });
+        self.log(
+            Action::ImportKey,
+            if result.is_ok() {
+                Outcome::Succeeded
+            } else {
+                Outcome::Failed
+            },
+        );
+        Some(
+            result
+                .map_err(|error| t.format("auth.key_read_error", &[("error", error.to_string())])),
+        )
     }
 
     fn sidebar(&mut self, ui: &mut egui::Ui) {
@@ -823,6 +934,8 @@ impl ManagementApp {
     fn workspace(&mut self, ui: &mut egui::Ui, viewport_height: f32) {
         let palette = Palette::for_context(ui.ctx());
         let t = Translator(self.preferences.language);
+        self.storage_notice(ui);
+        ui.add_space(18.0);
         if self.locked {
             ui.label(
                 RichText::new(t.get("app.vault_heading"))
@@ -844,7 +957,6 @@ impl ManagementApp {
                 }
                 ui.add_space(15.0);
             });
-            self.storage_notice(ui);
             return;
         }
         ui.horizontal(|ui| {
@@ -865,7 +977,6 @@ impl ManagementApp {
         ui.add_space(8.0);
         if self.view == View::Batch {
             self.batch_view(ui, viewport_height);
-            self.storage_notice(ui);
             return;
         }
         let host = self.current().cloned();
@@ -927,7 +1038,6 @@ impl ManagementApp {
                 }
                 ui.add_space(24.0);
             });
-            self.storage_notice(ui);
             return;
         };
         ui.label(
@@ -1060,7 +1170,6 @@ impl ManagementApp {
         });
         ui.add_space(16.0);
         self.result_panel(ui, &host, (viewport_height - 500.0).max(100.0));
-        self.storage_notice(ui);
     }
 
     /// Pending, upgraded and raw output for one host, shared by the host and batch views.
@@ -1570,7 +1679,6 @@ impl ManagementApp {
     fn storage_notice(&mut self, ui: &mut egui::Ui) {
         let palette = Palette::for_context(ui.ctx());
         let t = Translator(self.preferences.language);
-        ui.add_space(15.0);
         ui.label(
             RichText::new(t.get("app.development_warning"))
                 .strong()
@@ -1622,7 +1730,142 @@ impl ManagementApp {
             } else if ui.button(t.get("vault.enable_button")).clicked() {
                 self.open_vault_dialog(VaultMode::Create);
             }
+            if !self.locked && ui.button(t.get("keys.manage")).clicked() {
+                self.open_key_dialog();
+            }
         });
+    }
+
+    fn key_dialog(&mut self, ctx: &egui::Context) {
+        let Some(mut dialog) = self.key_dialog.take() else {
+            return;
+        };
+        if self.locked {
+            return;
+        }
+        let palette = Palette::for_context(ctx);
+        let t = Translator(self.preferences.language);
+        let (mut add, mut close, mut confirm_delete) = (false, false, false);
+        egui::Modal::new(egui::Id::unique("ssh_keys")).show(ctx, |ui| {
+            ui.set_width(620.0);
+            ui.heading(t.get("keys.title"));
+            ui.label(t.get("keys.description"));
+            ui.add_space(8.0);
+            ui.add_enabled_ui(!self.busy, |ui| {
+                if let Some(id) = dialog.delete.clone() {
+                    let name = self
+                        .ssh_keys
+                        .iter()
+                        .find(|key| key.id == id)
+                        .map(|key| key.name.clone())
+                        .unwrap_or_default();
+                    ui.label(t.format("keys.delete_prompt", &[("name", name)]));
+                    ui.horizontal(|ui| {
+                        confirm_delete = ui.add(danger(t.get("keys.confirm_delete"))).clicked();
+                        if ui.button(t.get("common.cancel")).clicked() {
+                            dialog.delete = None;
+                        }
+                    });
+                    return;
+                }
+                if self.ssh_keys.is_empty() {
+                    ui.label(RichText::new(t.get("keys.none")).color(palette.muted));
+                }
+                for key in &self.ssh_keys {
+                    let users = self.hosts.iter().filter(|h| h.key_id == key.id).count();
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(&key.name).strong());
+                        ui.label(RichText::new(&key.algorithm).color(palette.muted));
+                        ui.label(t.format("keys.used_by", &[("count", users.to_string())]));
+                        let delete = ui
+                            .add_enabled(
+                                users == 0,
+                                egui::Button::new(
+                                    RichText::new(t.get("common.delete")).color(palette.error),
+                                ),
+                            )
+                            .on_disabled_hover_text(t.get("keys.in_use"));
+                        if delete.clicked() {
+                            dialog.delete = Some(key.id.clone());
+                        }
+                    });
+                    ui.label(
+                        RichText::new(&key.fingerprint)
+                            .monospace()
+                            .size(11.0)
+                            .color(palette.muted),
+                    );
+                }
+                ui.separator();
+                ui.label(RichText::new(t.get("keys.add_title")).strong());
+                field(
+                    ui,
+                    t.get("keys.name"),
+                    &mut dialog.name,
+                    t.get("keys.name_hint"),
+                    false,
+                );
+                ui.label(t.get("auth.key_format"));
+                ui.add(
+                    egui::TextEdit::multiline(&mut dialog.private_key)
+                        .password(!dialog.show_secrets)
+                        .desired_rows(3)
+                        .desired_width(f32::INFINITY)
+                        .hint_text(t.get("auth.key_hint")),
+                );
+                if ui.button(t.get("auth.import_key")).clicked() {
+                    match self.pick_key_file() {
+                        Some(Ok(key)) => {
+                            dialog.private_key = key;
+                            dialog.error.clear();
+                        }
+                        Some(Err(error)) => dialog.error = error,
+                        None => {}
+                    }
+                }
+                field(
+                    ui,
+                    t.get("auth.key_passphrase"),
+                    &mut dialog.passphrase,
+                    t.get("auth.key_passphrase_hint"),
+                    !dialog.show_secrets,
+                );
+                if ui
+                    .checkbox(&mut dialog.show_secrets, t.get("auth.show_secrets"))
+                    .changed()
+                {
+                    self.log(Action::RevealSecrets, Outcome::Succeeded);
+                }
+                if !dialog.error.is_empty() {
+                    ui.colored_label(palette.error, &dialog.error);
+                }
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    add = ui.add(primary(t.get("keys.add"))).clicked();
+                    close = ui.button(t.get("common.close")).clicked();
+                });
+            });
+        });
+        if add {
+            if dialog.name.trim().is_empty() || dialog.private_key.trim().is_empty() {
+                dialog.error = t.get("keys.incomplete").into();
+                self.log(Action::ValidationRejected, Outcome::Failed);
+            } else {
+                dialog.error.clear();
+                self.send(json!({
+                    "action": "key_add",
+                    "name": dialog.name,
+                    "private_key": dialog.private_key,
+                    "passphrase": dialog.passphrase,
+                }));
+            }
+        }
+        if confirm_delete && let Some(id) = &dialog.delete {
+            self.send(json!({"action":"key_delete","id":id}));
+        }
+        if !close {
+            self.key_dialog = Some(dialog);
+        }
     }
 
     fn apply_storage(&mut self, data: &Value) {
@@ -1761,6 +2004,8 @@ impl ManagementApp {
         self.after_trust = None;
         self.batch_selected.clear();
         self.upgrade_confirm = None;
+        self.ssh_keys.clear();
+        self.key_dialog = None;
     }
 
     fn open_vault_dialog(&mut self, mode: VaultMode) {
@@ -2142,8 +2387,11 @@ impl ManagementApp {
                                 t.get("auth.username_hint"),
                                 false,
                             );
-                            let choices_before =
-                                (editor.host.os.clone(), editor.host.auth_type.clone());
+                            let choices_before = (
+                                editor.host.os.clone(),
+                                editor.host.auth_type.clone(),
+                                editor.saved_key,
+                            );
                             ui.horizontal(|ui| {
                                 egui::ComboBox::from_label(t.get("host.os"))
                                     .selected_text(&editor.host.os)
@@ -2159,27 +2407,34 @@ impl ManagementApp {
                                             "BSD",
                                         );
                                     });
+                                let saved = editor.host.auth_type == "key" && editor.saved_key;
                                 egui::ComboBox::from_label(t.get("auth.method"))
-                                    .selected_text(if editor.host.auth_type == "key" {
-                                        t.get("auth.private_key")
-                                    } else {
-                                        t.get("auth.password")
+                                    .selected_text(match (editor.host.auth_type.as_str(), saved) {
+                                        ("key", true) => t.get("auth.saved_key"),
+                                        ("key", false) => t.get("auth.private_key"),
+                                        _ => t.get("auth.password"),
                                     })
                                     .show_ui(ui, |ui| {
-                                        ui.selectable_value(
-                                            &mut editor.host.auth_type,
-                                            "password".into(),
-                                            t.get("auth.password"),
-                                        );
-                                        ui.selectable_value(
-                                            &mut editor.host.auth_type,
-                                            "key".into(),
-                                            t.get("auth.private_key"),
-                                        );
+                                        for (auth, stored, label) in [
+                                            ("password", false, t.get("auth.password")),
+                                            ("key", false, t.get("auth.private_key")),
+                                            ("key", true, t.get("auth.saved_key")),
+                                        ] {
+                                            let current =
+                                                editor.host.auth_type == auth && saved == stored;
+                                            if ui.selectable_label(current, label).clicked() {
+                                                editor.host.auth_type = auth.into();
+                                                editor.saved_key = stored;
+                                            }
+                                        }
                                     });
                             });
                             editor_changed |= choices_before
-                                != (editor.host.os.clone(), editor.host.auth_type.clone());
+                                != (
+                                    editor.host.os.clone(),
+                                    editor.host.auth_type.clone(),
+                                    editor.saved_key,
+                                );
                             let managers = misf_core::model::manager_choices(&editor.host.os);
                             // Switching between Linux and BSD drops a choice the new OS lacks.
                             if !managers.contains(&editor.host.manager_choice.as_str()) {
@@ -2231,6 +2486,44 @@ impl ManagementApp {
                                     t.get("auth.ssh_password_hint"),
                                     !editor.show_secrets,
                                 );
+                            } else if editor.saved_key {
+                                let chosen =
+                                    self.ssh_keys.iter().find(|k| k.id == editor.host.key_id);
+                                if self.ssh_keys.is_empty() {
+                                    ui.label(
+                                        RichText::new(t.get("keys.none")).color(palette.muted),
+                                    );
+                                } else {
+                                    let before = editor.host.key_id.clone();
+                                    egui::ComboBox::from_label(t.get("keys.choose_label"))
+                                        .selected_text(
+                                            chosen
+                                                .map(KeyRow::label)
+                                                .unwrap_or(t.get("keys.choose").into()),
+                                        )
+                                        .width(300.0)
+                                        .show_ui(ui, |ui| {
+                                            for key in &self.ssh_keys {
+                                                ui.selectable_value(
+                                                    &mut editor.host.key_id,
+                                                    key.id.clone(),
+                                                    key.label(),
+                                                );
+                                            }
+                                        });
+                                    editor_changed |= before != editor.host.key_id;
+                                }
+                                if let Some(key) = chosen {
+                                    ui.label(
+                                        RichText::new(&key.fingerprint)
+                                            .monospace()
+                                            .size(11.0)
+                                            .color(palette.muted),
+                                    );
+                                }
+                                if ui.button(t.get("keys.manage")).clicked() {
+                                    self.open_key_dialog();
+                                }
                             } else {
                                 ui.label(t.get("auth.key_format"));
                                 editor_changed |= ui
@@ -2243,42 +2536,13 @@ impl ManagementApp {
                                     )
                                     .changed();
                                 if ui.button(t.get("auth.import_key")).clicked() {
-                                    self.log(Action::ImportKey, Outcome::Started);
-                                    if let Some(path) = rfd::FileDialog::new()
-                                        .set_title(t.get("auth.import_title"))
-                                        .pick_file()
-                                    {
-                                        let result = std::fs::metadata(&path).and_then(|m| {
-                                            if m.len() <= 1024 * 1024 {
-                                                std::fs::read_to_string(&path)
-                                            } else {
-                                                Err(std::io::Error::other(
-                                                    t.get("auth.key_too_large"),
-                                                ))
-                                            }
-                                        });
-                                        self.log(
-                                            Action::ImportKey,
-                                            if result.is_ok() {
-                                                Outcome::Succeeded
-                                            } else {
-                                                Outcome::Failed
-                                            },
-                                        );
-                                        match result {
-                                            Ok(key) => {
-                                                editor.host.private_key = key;
-                                                editor.error.clear();
-                                            }
-                                            Err(error) => {
-                                                editor.error = t.format(
-                                                    "auth.key_read_error",
-                                                    &[("error", error.to_string())],
-                                                )
-                                            }
+                                    match self.pick_key_file() {
+                                        Some(Ok(key)) => {
+                                            editor.host.private_key = key;
+                                            editor.error.clear();
                                         }
-                                    } else {
-                                        self.log(Action::ImportKey, Outcome::Cancelled);
+                                        Some(Err(error)) => editor.error = error,
+                                        None => {}
                                     }
                                 }
                                 editor_changed |= field(
@@ -2337,7 +2601,15 @@ impl ManagementApp {
                 self.log(Action::FormEdit, Outcome::Succeeded);
             }
             if save {
+                let saved = editor.host.auth_type == "key" && editor.saved_key;
+                if !saved {
+                    editor.host.key_id.clear();
+                }
                 match editor.port.trim().parse::<u16>() {
+                    _ if saved && editor.host.key_id.is_empty() => {
+                        editor.error = t.get("keys.choose_error").into();
+                        self.log(Action::ValidationRejected, Outcome::Failed);
+                    }
                     Ok(port) if port > 0 => {
                         editor.host.port = port;
                         self.send(json!({"action":"save","host":editor.host}));
@@ -2422,6 +2694,8 @@ impl ManagementApp {
         self.vault_dialog(ctx);
         self.schema_upgrade_dialog(ctx);
         self.plaintext_delete_dialog(ctx);
+        // After the editor, so it opens on top when chosen from there.
+        self.key_dialog(ctx);
         if let Some(error) = self.error.clone() {
             let mut close = false;
             egui::Modal::new(egui::Id::unique("error")).show(ctx, |ui| {

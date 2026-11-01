@@ -2,7 +2,7 @@
 //! slot and `application_id` marks the file as MISF's, so opening or importing an older
 //! database detects its version and upgrades it, while foreign or newer files are refused.
 use crate::db_upgrade::{MIGRATIONS, Migration};
-use crate::model::{CheckResult, Host, Package};
+use crate::model::{CheckResult, Host, Package, SshKey};
 use crate::store::Database;
 use anyhow::{Context, Result, ensure};
 use rusqlite::{Connection, MAIN_DB, config::DbConfig, limits::Limit, params};
@@ -154,7 +154,7 @@ pub(crate) fn load(conn: &Connection) -> Result<Database> {
     let mut statement = conn.prepare(
         "SELECT id, name, address, port, username, os, auth_type, password, private_key,
                 key_passphrase, sudo_password, use_pty, fingerprint, notes, distro, package_manager,
-                manager_choice
+                manager_choice, key_id
          FROM hosts ORDER BY position",
     )?;
     let mut rows = statement.query([])?;
@@ -180,8 +180,25 @@ pub(crate) fn load(conn: &Connection) -> Result<Database> {
             distro: row.get(14)?,
             package_manager: row.get(15)?,
             manager_choice: row.get(16)?,
+            key_id: row.get(17)?,
         });
     }
+    let mut statement = conn.prepare(
+        "SELECT id, name, algorithm, fingerprint, private_key, passphrase
+         FROM ssh_keys ORDER BY position",
+    )?;
+    let keys = statement
+        .query_map([], |row| {
+            Ok(SshKey {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                algorithm: row.get(2)?,
+                fingerprint: row.get(3)?,
+                private_key: row.get(4)?,
+                passphrase: row.get(5)?,
+            })
+        })?
+        .collect::<rusqlite::Result<_>>()?;
     let mut statement = conn.prepare("SELECT slot, name FROM key_slots")?;
     let slot_names = statement
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
@@ -189,6 +206,7 @@ pub(crate) fn load(conn: &Connection) -> Result<Database> {
     Ok(Database {
         version: 1,
         hosts,
+        keys,
         slot_names,
     })
 }
@@ -198,16 +216,32 @@ pub(crate) fn save(conn: &mut Connection, db: &Database) -> Result<()> {
     let tx = conn.transaction()?;
     tx.execute_batch(
         "DELETE FROM packages; DELETE FROM check_results; DELETE FROM hosts;
-         DELETE FROM key_slots;",
+         DELETE FROM key_slots; DELETE FROM ssh_keys;",
     )?;
     {
         let mut host_row = tx.prepare(
             "INSERT INTO hosts (id, position, name, address, port, username, os, auth_type,
                  password, private_key, key_passphrase, sudo_password, use_pty, fingerprint,
-                 notes, distro, package_manager, manager_choice)
+                 notes, distro, package_manager, manager_choice, key_id)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
-                 ?18)",
+                 ?18, ?19)",
         )?;
+        let mut key_row = tx.prepare(
+            "INSERT INTO ssh_keys (id, position, name, algorithm, fingerprint, private_key,
+                 passphrase)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        )?;
+        for (position, key) in db.keys.iter().enumerate() {
+            key_row.execute(params![
+                key.id,
+                position as i64,
+                key.name,
+                key.algorithm,
+                key.fingerprint,
+                key.private_key,
+                key.passphrase,
+            ])?;
+        }
         let mut result_row = tx.prepare(
             "INSERT INTO check_results (host_id, checked_at, operation, status, distro,
                  package_manager, output, error)
@@ -243,6 +277,7 @@ pub(crate) fn save(conn: &mut Connection, db: &Database) -> Result<()> {
                     host.distro,
                     host.package_manager,
                     host.manager_choice,
+                    host.key_id,
                 ])
                 .with_context(|| format!("無法寫入主機 {}；主機 ID 可能重複", host.name))?;
             let Some(result) = &host.last_check else {
@@ -357,9 +392,19 @@ pub(crate) mod tests {
                     id: "a".into(),
                     name: "plain".into(),
                     manager_choice: "dnf".into(),
+                    auth_type: "key".into(),
+                    key_id: "k".into(),
                     ..Default::default()
                 },
             ],
+            keys: vec![SshKey {
+                id: "k".into(),
+                name: "deploy".into(),
+                algorithm: "ssh-ed25519".into(),
+                fingerprint: "SHA256:test".into(),
+                private_key: "key-body".into(),
+                passphrase: "key-pass".into(),
+            }],
             slot_names: BTreeMap::from([(0, "管理密碼 1".into()), (3, "YubiKey".into())]),
         }
     }
@@ -476,32 +521,33 @@ pub(crate) mod tests {
             ),
             ("web", "apt", 0)
         );
-        // Already current: no second upgrade. A stand-in v3 shows the next upgrade,
-        // and this build then refuses the newer file.
+        // Already current: no second upgrade. A stand-in next version shows the next
+        // upgrade, and this build then refuses the newer file.
         prepare(&mut conn, |_| panic!("upgraded twice")).unwrap();
-        fn v3(conn: &Connection) -> Result<()> {
+        fn next(conn: &Connection) -> Result<()> {
             conn.execute_batch("ALTER TABLE hosts ADD COLUMN tags TEXT NOT NULL DEFAULT ''")?;
             Ok(())
         }
-        prepare_with(&mut conn, &[MIGRATIONS[0], MIGRATIONS[1], v3], |version| {
-            assert_eq!(version, 2);
+        let with_next = [MIGRATIONS, &[next]].concat();
+        prepare_with(&mut conn, &with_next, |version| {
+            assert_eq!(version, SCHEMA_VERSION);
             Ok(())
         })
         .unwrap();
         assert!(prepare(&mut conn, |_| Ok(())).is_err());
-        // A v1 file skips no step on its way to v3.
+        // A v1 file skips no step on its way there.
         let mut conn = Connection::open_in_memory().unwrap();
         conn.deserialize_read_exact(MAIN_DB, &image[..], image.len(), false)
             .unwrap();
-        prepare_with(&mut conn, &[MIGRATIONS[0], MIGRATIONS[1], v3], |_| Ok(())).unwrap();
+        prepare_with(&mut conn, &with_next, |_| Ok(())).unwrap();
         let columns: Vec<String> = conn
-            .prepare("SELECT name FROM pragma_table_info('hosts') ORDER BY cid DESC LIMIT 2")
+            .prepare("SELECT name FROM pragma_table_info('hosts') ORDER BY cid DESC LIMIT 3")
             .unwrap()
             .query_map([], |row| row.get(0))
             .unwrap()
             .collect::<rusqlite::Result<_>>()
             .unwrap();
-        assert_eq!(columns, ["tags", "manager_choice"]);
+        assert_eq!(columns, ["tags", "key_id", "manager_choice"]);
         // A failed backup leaves the file at its old version.
         let mut conn = Connection::open_in_memory().unwrap();
         conn.deserialize_read_exact(MAIN_DB, &image[..], image.len(), false)
@@ -533,8 +579,11 @@ pub(crate) mod tests {
         let mut db = sample();
         let before = to_image(&db).unwrap();
         assert!(before.windows(6).any(|w| w == b"secret"));
+        assert!(before.windows(8).any(|w| w == b"key-body"));
         db.hosts.remove(0);
+        db.keys.clear();
         let after = to_image(&db).unwrap();
         assert!(!after.windows(6).any(|w| w == b"secret"));
+        assert!(!after.windows(8).any(|w| w == b"key-body"));
     }
 }
