@@ -1,5 +1,6 @@
 use crate::model::{
-    CheckResult, Host, Package, parse_packages, parse_pkg_packages, parse_rpm_packages,
+    CheckResult, Host, Package, parse_packages, parse_phased, parse_pkg_packages,
+    parse_rpm_packages,
 };
 use anyhow::{Context, Result, bail, ensure};
 use chrono::Utc;
@@ -396,7 +397,7 @@ pub(crate) async fn run_apt<P: Fn(&str) + ?Sized>(
     let operation = if upgrade { "upgrade" } else { "check" };
     let mut transcript = String::new();
     let mut platform = None;
-    let result: Result<(Vec<Package>, Vec<Package>)> = async {
+    let result: Result<(Vec<Package>, Vec<Package>, Vec<String>)> = async {
         progress("正在連線並驗證 SSH 主機指紋…");
         let session = authenticate(host).await?;
         let operation = async {
@@ -434,7 +435,7 @@ pub(crate) async fn run_apt<P: Fn(&str) + ?Sized>(
             progress("正在讀取待更新套件…");
             let pending = list(&session, host, manager, list_command, &mut transcript).await?;
             if !upgrade || pending.is_empty() {
-                return Ok((pending, vec![]));
+                return Ok((pending, vec![], vec![]));
             }
             progress("正在升級可升級套件…");
             let (code, output) = execute(
@@ -448,13 +449,17 @@ pub(crate) async fn run_apt<P: Fn(&str) + ?Sized>(
             transcript.push_str(&format!("\n--- {} upgrade ---\n", manager.label()));
             transcript.push_str(&output);
             validate_upgrade(code, &output)?;
+            let phased = match manager {
+                Manager::Apt => parse_phased(&output),
+                _ => vec![],
+            };
             progress("正在重新讀取剩餘待更新套件…");
             let remaining = list(&session, host, manager, list_command, &mut transcript).await?;
             let upgraded = pending
                 .into_iter()
                 .filter(|package| !remaining.iter().any(|left| left.name == package.name))
                 .collect();
-            Ok((remaining, upgraded))
+            Ok((remaining, upgraded, phased))
         }
         .await;
         session
@@ -478,10 +483,11 @@ pub(crate) async fn run_apt<P: Fn(&str) + ?Sized>(
         }
     }
     match result {
-        Ok((packages, upgraded)) => {
+        Ok((packages, upgraded, phased)) => {
             check.status = "success".into();
             check.packages = packages;
             check.upgraded = upgraded;
+            check.phased = phased;
         }
         Err(error) => {
             if check.status.is_empty() {

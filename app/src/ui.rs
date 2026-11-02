@@ -1,8 +1,8 @@
 use crate::{
     i18n::{Language, Translator},
     preferences::{
-        BatchOrder, Density, HostDetail, Preferences, SETTINGS_DEFAULT, SETTINGS_MIN, UnlockMethod,
-        WindowSize,
+        BatchColumn, BatchOrder, Density, HostDetail, Preferences, SETTINGS_DEFAULT, SETTINGS_MIN,
+        UnlockMethod, WindowSize,
     },
     theme::{self, Appearance, Palette},
     worker::{Event, Worker},
@@ -459,13 +459,18 @@ impl ManagementApp {
                         match self.settings_page {
                             SettingsPage::Vault => self.vault_settings(ui),
                             SettingsPage::Preferences | SettingsPage::Language => {
-                                self.preferences_form(ui);
-                                ui.add_space(12.0);
-                                ui.label(
-                                    RichText::new(t.get("settings.plaintext_notice"))
-                                        .size(12.0)
-                                        .color(Palette::for_context(ui.ctx()).muted),
-                                );
+                                egui::ScrollArea::vertical()
+                                    .id_salt("preferences_page")
+                                    .auto_shrink([false, true])
+                                    .show(ui, |ui| {
+                                        self.preferences_form(ui);
+                                        ui.add_space(12.0);
+                                        ui.label(
+                                            RichText::new(t.get("settings.plaintext_notice"))
+                                                .size(12.0)
+                                                .color(Palette::for_context(ui.ctx()).muted),
+                                        );
+                                    });
                             }
                             SettingsPage::About => {
                                 if self.about_section(ui) {
@@ -668,6 +673,35 @@ impl ManagementApp {
                     });
                 ui.end_row();
             });
+        if !language_page {
+            // Below the grid, so its label stays at the top of this tall block.
+            ui.add_space(16.0);
+            ui.label(t.get("batch_columns.title"));
+            ui.add_space(6.0);
+            egui::Grid::new("batch_columns_grid")
+                .spacing([24.0, 8.0])
+                .show(ui, |ui| {
+                    let columns = &mut self.preferences.batch_columns;
+                    for (i, column) in BatchColumn::ALL.into_iter().enumerate() {
+                        if column == BatchColumn::Host {
+                            ui.add_enabled(false, egui::Checkbox::new(&mut true, column.label(t)));
+                        } else {
+                            ui.checkbox(&mut columns.shown[i], column.label(t));
+                        }
+                        if i % 4 == 3 {
+                            ui.end_row();
+                        }
+                    }
+                });
+            ui.add_space(6.0);
+            if ui
+                .button(t.get("batch_columns.reset_widths"))
+                .on_hover_text(t.get("batch_columns.drag_hint"))
+                .clicked()
+            {
+                self.preferences.batch_columns.reset_widths();
+            }
+        }
         if self.preferences != before {
             self.preferences.appearance.apply(ui.ctx());
             let t = Translator(self.preferences.language);
@@ -2164,7 +2198,7 @@ impl ManagementApp {
         });
         ui.add_space(8.0);
         // Only display fields are copied out of the host list; credentials stay in place.
-        let rows: Vec<_> = order
+        let rows: Vec<BatchRow> = order
             .iter()
             .map(|&i| &self.hosts[i])
             .map(|h| {
@@ -2182,30 +2216,44 @@ impl ManagementApp {
                 };
                 let result = h.last_check.as_ref();
                 let success = result.filter(|r| r.status == "success");
-                (
-                    h.id.clone(),
-                    h.name.clone(),
-                    reason,
-                    if h.distro.is_empty() {
-                        "—".to_owned()
-                    } else {
-                        system_label(t, h)
-                    },
-                    result.map(|r| {
+                let upgrade = success.filter(|r| r.operation == "upgrade");
+                let dash = || "—".to_owned();
+                let cells = BatchColumn::ALL.map(|column| match column {
+                    BatchColumn::Host => h.name.clone(),
+                    BatchColumn::User => h.username.clone(),
+                    BatchColumn::Address => format!("{}:{}", h.address, h.port),
+                    BatchColumn::System if h.distro.is_empty() => dash(),
+                    BatchColumn::System => system_label(t, h),
+                    BatchColumn::Operation => result.map_or_else(dash, |r| {
                         if r.operation == "upgrade" {
-                            t.get("batch.operation_upgrade")
+                            t.get("batch.operation_upgrade").to_owned()
                         } else {
-                            t.get("batch.operation_check")
+                            t.get("batch.operation_check").to_owned()
                         }
                     }),
-                    status_label(t, h),
-                    result.is_some_and(|r| r.status == "failed"),
-                    success.map(|r| r.packages.len().to_string()),
-                    success
-                        .filter(|r| r.operation == "upgrade")
-                        .map(|r| r.upgraded.len().to_string()),
-                    result.map(|r| format_time(&r.checked_at)),
-                )
+                    BatchColumn::Status => status_label(t, h).to_owned(),
+                    BatchColumn::Pending => {
+                        success.map_or_else(dash, |r| r.packages.len().to_string())
+                    }
+                    BatchColumn::Phased => {
+                        upgrade.map_or_else(dash, |r| r.phased.len().to_string())
+                    }
+                    BatchColumn::Upgraded => {
+                        upgrade.map_or_else(dash, |r| r.upgraded.len().to_string())
+                    }
+                    BatchColumn::Checked => {
+                        result.map_or_else(dash, |r| format_time(&r.checked_at))
+                    }
+                });
+                BatchRow {
+                    id: h.id.clone(),
+                    reason,
+                    cells,
+                    failed: result.is_some_and(|r| r.status == "failed"),
+                    phased: upgrade
+                        .map(|r| r.phased.join(", "))
+                        .filter(|names| !names.is_empty()),
+                }
             })
             .collect();
         card(ui).show(ui, |ui| {
@@ -2218,79 +2266,7 @@ impl ManagementApp {
                 .id_salt("batch_hosts")
                 .max_height(240.0)
                 .auto_shrink([false, true])
-                .show(ui, |ui| {
-                    egui::Grid::new("batch_hosts_grid")
-                        .striped(true)
-                        .spacing([18.0, 6.0])
-                        .show(ui, |ui| {
-                            self.batch_order_menu(ui, t);
-                            for caption in [
-                                t.get("batch.host"),
-                                t.get("batch.system"),
-                                t.get("batch.last_operation"),
-                                t.get("apt.status"),
-                                t.get("apt.pending"),
-                                t.get("batch.upgraded_count"),
-                                t.get("apt.last_check"),
-                            ] {
-                                ui.label(RichText::new(caption).strong().color(palette.muted));
-                            }
-                            ui.end_row();
-                            for (
-                                row,
-                                (
-                                    id,
-                                    name,
-                                    reason,
-                                    system,
-                                    operation,
-                                    status,
-                                    failed,
-                                    pending,
-                                    upgraded,
-                                    time,
-                                ),
-                            ) in rows.into_iter().enumerate()
-                            {
-                                if let Some((_, heading, ids)) =
-                                    headings.iter().find(|(at, ..)| *at == row)
-                                {
-                                    self.batch_heading(ui, t, heading, ids, &ready);
-                                }
-                                let mut checked = self.batch_selected.contains(&id);
-                                let mut response = ui.add_enabled(
-                                    reason.is_none(),
-                                    egui::Checkbox::without_text(&mut checked),
-                                );
-                                if let Some(reason) = reason {
-                                    response = response.on_disabled_hover_text(reason);
-                                }
-                                if response.changed() {
-                                    if checked {
-                                        self.batch_selected.insert(id.clone());
-                                    } else {
-                                        self.batch_selected.remove(&id);
-                                    }
-                                    self.log(Action::BatchSelect, Outcome::Succeeded);
-                                }
-                                if ui.selectable_label(self.selected == id, name).clicked() {
-                                    self.selected = id;
-                                    self.log(Action::HostSelect, Outcome::Succeeded);
-                                }
-                                ui.label(system);
-                                ui.label(operation.unwrap_or("—"));
-                                ui.label(RichText::new(status).color(if failed {
-                                    palette.error
-                                } else {
-                                    palette.ink
-                                }));
-                                ui.label(pending.unwrap_or("—".into()));
-                                ui.label(upgraded.unwrap_or("—".into()));
-                                ui.label(time.unwrap_or("—".into()));
-                                ui.end_row();
-                            }
-                        });
-                });
+                .show(ui, |ui| self.batch_table(ui, t, rows, &headings, &ready));
         });
         ui.add_space(12.0);
         let Some(host) = self.current().cloned() else {
@@ -2394,15 +2370,179 @@ impl ManagementApp {
         }
     }
 
+    /// The batch table: the columns share its whole width in the ratios the user dragged.
+    fn batch_table(
+        &mut self,
+        ui: &mut egui::Ui,
+        t: Translator,
+        rows: Vec<BatchRow>,
+        headings: &[(usize, String, Vec<String>)],
+        ready: &BTreeSet<String>,
+    ) {
+        const CHECK: f32 = 40.0;
+        const ROW: f32 = 34.0;
+        const MIN: f32 = 52.0;
+        let palette = Palette::for_context(ui.ctx());
+        let columns = self.preferences.batch_columns.visible();
+        let width = ui.available_width().max(CHECK + MIN * columns.len() as f32);
+        let spare = width - CHECK;
+        let weights = self.preferences.batch_columns.weights;
+        let total: f32 = columns.iter().map(|(i, _)| weights[*i]).sum();
+        // Each column's left edge from the table's left, then the table's right edge.
+        let mut edges = vec![CHECK];
+        for (i, _) in &columns {
+            edges.push(edges[edges.len() - 1] + spare * weights[*i] / total);
+        }
+        let next_row = |ui: &mut egui::Ui| {
+            ui.allocate_exact_size(egui::vec2(width, ROW), egui::Sense::hover())
+                .0
+        };
+        let span = |row: egui::Rect, from: f32, to: f32| {
+            egui::Rect::from_x_y_ranges(row.left() + from..=row.left() + to, row.y_range())
+        };
+        let stripe = ui.visuals().faint_bg_color;
+
+        let header = next_row(ui);
+        self.batch_order_menu(&mut table_cell(ui, span(header, 0.0, CHECK), "order"), t);
+        for (k, (_, column)) in columns.iter().enumerate() {
+            table_cell(ui, span(header, edges[k], edges[k + 1]), ("caption", k)).add(
+                egui::Label::new(RichText::new(column.label(t)).strong().color(palette.muted))
+                    .truncate(),
+            );
+        }
+        let mut save = false;
+        for k in 1..columns.len() {
+            let x = header.left() + edges[k];
+            let handle = egui::Rect::from_center_size(
+                egui::pos2(x, header.center().y),
+                egui::vec2(8.0, ROW),
+            );
+            let response = ui
+                .interact(
+                    handle,
+                    ui.scope_id().with(("batch_column_edge", k)),
+                    egui::Sense::click_and_drag(),
+                )
+                .on_hover_text(t.get("batch_columns.drag_hint"));
+            let active = response.hovered() || response.dragged();
+            if active {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+            }
+            let stroke = if active {
+                ui.visuals().selection.stroke
+            } else {
+                ui.visuals().widgets.noninteractive.bg_stroke
+            };
+            ui.painter().vline(x, header.y_range().shrink(8.0), stroke);
+            let dx = response.drag_delta().x;
+            if dx != 0.0 {
+                // Width moves between the two neighbours; the others keep theirs.
+                let per_point = total / spare;
+                let floor = MIN * per_point;
+                let (left, right) = (columns[k - 1].0, columns[k].0);
+                let w = &mut self.preferences.batch_columns.weights;
+                let shift =
+                    (dx * per_point).clamp((floor - w[left]).min(0.0), (w[right] - floor).max(0.0));
+                w[left] += shift;
+                w[right] -= shift;
+            }
+            if response.double_clicked() {
+                self.preferences.batch_columns.reset_widths();
+            }
+            save |= response.drag_stopped() || response.double_clicked();
+        }
+        if save && let Err(error) = self.preferences.save(&self.settings_path) {
+            self.error = Some(t.format("settings.save_error", &[("error", error)]));
+        }
+
+        let mut line = 0;
+        for (row, mut data) in rows.into_iter().enumerate() {
+            if let Some((_, heading, ids)) = headings.iter().find(|(at, ..)| *at == row) {
+                let rect = next_row(ui);
+                ui.painter().rect_filled(rect, 0.0, stripe);
+                line = 0;
+                self.batch_heading(ui, t, rect, CHECK, heading, ids, ready);
+            }
+            let rect = next_row(ui);
+            if line % 2 == 1 {
+                ui.painter().rect_filled(rect, 0.0, stripe);
+            }
+            line += 1;
+            let mut checked = self.batch_selected.contains(&data.id);
+            let mut response = table_cell(ui, span(rect, 0.0, CHECK), ("check", row)).add_enabled(
+                data.reason.is_none(),
+                egui::Checkbox::without_text(&mut checked),
+            );
+            if let Some(reason) = &data.reason {
+                response = response.on_disabled_hover_text(reason);
+            }
+            if response.changed() {
+                if checked {
+                    self.batch_selected.insert(data.id.clone());
+                } else {
+                    self.batch_selected.remove(&data.id);
+                }
+                self.log(Action::BatchSelect, Outcome::Succeeded);
+            }
+            for (k, (i, column)) in columns.iter().enumerate() {
+                let mut cell = table_cell(ui, span(rect, edges[k], edges[k + 1]), (row, k));
+                let text = std::mem::take(&mut data.cells[*i]);
+                match column {
+                    BatchColumn::Host => {
+                        let button = egui::Button::selectable(self.selected == data.id, text);
+                        if cell.add(button.truncate()).clicked() {
+                            self.selected = data.id.clone();
+                            self.log(Action::HostSelect, Outcome::Succeeded);
+                        }
+                    }
+                    BatchColumn::Status => {
+                        let color = if data.failed {
+                            palette.error
+                        } else {
+                            palette.ink
+                        };
+                        cell.add(egui::Label::new(RichText::new(text).color(color)).truncate());
+                    }
+                    BatchColumn::Phased => {
+                        let response = cell.add(egui::Label::new(text).truncate());
+                        if let Some(names) = &data.phased {
+                            response.on_hover_text(
+                                t.format("batch.phased_hint", &[("packages", names.clone())]),
+                            );
+                        }
+                    }
+                    _ => {
+                        cell.add(egui::Label::new(text).truncate());
+                    }
+                }
+            }
+        }
+    }
+
     /// A group's row in the batch table; its checkbox picks every host there that can run.
+    #[allow(clippy::too_many_arguments)]
     fn batch_heading(
         &mut self,
         ui: &mut egui::Ui,
         t: Translator,
+        rect: egui::Rect,
+        check: f32,
         name: &str,
         ids: &[String],
         ready: &BTreeSet<String>,
     ) {
+        let split = rect.left() + check;
+        let mut boxes = table_cell(
+            ui,
+            egui::Rect::from_x_y_ranges(rect.left()..=split, rect.y_range()),
+            ("heading_check", name),
+        );
+        let mut label = table_cell(
+            ui,
+            egui::Rect::from_x_y_ranges(split..=rect.right(), rect.y_range()),
+            ("heading", name),
+        );
+        let ui = &mut boxes;
         let eligible: Vec<&String> = ids.iter().filter(|id| ready.contains(*id)).collect();
         let chosen = eligible
             .iter()
@@ -2426,12 +2566,11 @@ impl ManagementApp {
             }
             self.log(Action::BatchSelect, Outcome::Succeeded);
         }
-        ui.label(
+        label.label(
             RichText::new(format!("{name} · {}", ids.len()))
                 .strong()
                 .color(Color32::from_rgb(147, 174, 208)),
         );
-        ui.end_row();
     }
 
     fn prompt_upgrade(&mut self, ids: Vec<String>, batch: bool) {
@@ -3838,6 +3977,30 @@ fn field(ui: &mut egui::Ui, label: &str, value: &mut String, hint: &str, secret:
     )
     .changed()
 }
+/// One host's row in the batch table, as display text only.
+struct BatchRow {
+    id: String,
+    /// Why the host cannot be selected, when it cannot.
+    reason: Option<String>,
+    /// Indexed like [`BatchColumn::ALL`].
+    cells: [String; 10],
+    failed: bool,
+    /// The phased package names, for the phased count's tooltip.
+    phased: Option<String>,
+}
+
+/// A left-to-right ui inside one table cell, clipped to it.
+fn table_cell(ui: &mut egui::Ui, rect: egui::Rect, salt: impl egui::AsIdSalt) -> egui::Ui {
+    let mut cell = ui.new_child(
+        egui::UiBuilder::new()
+            .id_salt(salt)
+            .max_rect(rect.shrink2(egui::vec2(6.0, 0.0)))
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+    cell.set_clip_rect(rect.intersect(ui.clip_rect()));
+    cell
+}
+
 fn format_time(value: &str) -> String {
     DateTime::parse_from_rfc3339(value)
         .map(|time| time.with_timezone(&Local).format("%m/%d %H:%M").to_string())
@@ -4364,5 +4527,72 @@ mod tests {
         assert_eq!(headings, [(0, "First"), (2, "Second"), (3, "Ungrouped")]);
         app.preferences.ungrouped_at = Some(0);
         assert_eq!(names(&app), ["delta", "bravo", "alpha", "charlie"]);
+
+        // The table fills the width, shows apt's phased count, and a dragged border is saved.
+        app.preferences.language = Language::EnUs;
+        app.hosts[0].last_check = Some(misf_core::model::CheckResult {
+            checked_at: "2026-11-02T00:00:00Z".into(),
+            operation: "upgrade".into(),
+            status: "success".into(),
+            phased: vec!["libfoo".into(), "zed".into()],
+            ..Default::default()
+        });
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0));
+        let frame = |app: &mut ManagementApp, events: Vec<egui::Event>| {
+            let input = egui::RawInput {
+                screen_rect: Some(screen),
+                events,
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| app.batch_view(ui, 800.0));
+            output.textures_delta.clear();
+            let mut labels = Vec::new();
+            for clipped in output.shapes {
+                if let egui::epaint::Shape::Text(text) = clipped.shape {
+                    labels.push((text.galley.job.text.clone(), text.visual_bounding_rect()));
+                }
+            }
+            labels
+        };
+        let find = |labels: &[(String, egui::Rect)], text: &str| {
+            labels
+                .iter()
+                .find(|(drawn, _)| drawn == text)
+                .unwrap_or_else(|| panic!("{text} not drawn"))
+                .1
+        };
+        frame(&mut app, vec![]);
+        let labels = frame(&mut app, vec![]);
+        let t = Translator(Language::EnUs);
+        let checked = find(&labels, t.get("apt.last_check"));
+        assert!(checked.left() > 900.0, "last column at {checked:?}");
+        let phased = find(&labels, t.get("batch.phased"));
+        assert!(
+            labels
+                .iter()
+                .any(|(text, rect)| text == "2"
+                    && (rect.center().x - phased.center().x).abs() < 80.0)
+        );
+        let system = find(&labels, t.get("batch.system"));
+        let edge = egui::pos2(system.left() - 6.0, system.center().y);
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        let to = edge + egui::vec2(120.0, 0.0);
+        frame(&mut app, vec![egui::Event::PointerMoved(edge)]);
+        frame(&mut app, vec![button(edge, true)]);
+        frame(
+            &mut app,
+            vec![egui::Event::PointerMoved(edge + egui::vec2(60.0, 0.0))],
+        );
+        frame(&mut app, vec![egui::Event::PointerMoved(to)]);
+        frame(&mut app, vec![button(to, false)]);
+        let labels = frame(&mut app, vec![]);
+        assert!(find(&labels, t.get("batch.system")).left() > system.left() + 100.0);
+        let saved = crate::preferences::Preferences::load(&app.settings_path).unwrap();
+        assert!(saved.batch_columns.weights[0] > 2.5);
     }
 }

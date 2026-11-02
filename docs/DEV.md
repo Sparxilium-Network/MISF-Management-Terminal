@@ -53,7 +53,7 @@ Linux／macOS 可使用 `cargo run --locked -p misf`，須在對應平台建置�
 
 - 主機與憑證存於 `hosts.db`（SQLite，檔頭 `user_version` 記錄結構版本，目前為 v4）。開啟較舊版本會先在同目錄備份 `hosts.v<N>.bak.db`，再於單一交易內自動升級；較新版本、非 MISF、損壞或結構遭改動的資料庫一律拒絕開啟並保留原檔。每個版本的升級各自在 `core/src/db_upgrade/` 一個檔案。
 - 從 JSON 版本升級時，第一次讀取會把同目錄的 `hosts.json` 匯入新的 `hosts.db`，原 JSON 保持不變（之後的修改只寫入 SQLite）。
-- 非敏感偏好存於未加密的 `ui-settings.json`（`version: 1`）：語言、外觀、主視窗大小與是否最大化、設定視窗大小，以及主機清單顯示 `host_list`（等級 `detail`、自訂 `fields`、密集度 `density`：`comfortable`／`compact`，以及「未分類」在分類間的位置 `ungrouped_at`，省略時排在最後；`ungrouped_collapsed` 為其收合狀態）、批次作業排序 `batch_order`（`sidebar`／`pending`／`recent`／`name`），以及預設解鎖方式 `unlock_method`（`password`／`windows_hello`／`security_key`；只在啟動時第一次遇到鎖定才自動開始）。不保存憑證，主機庫鎖定時也能讀寫。
+- 非敏感偏好存於未加密的 `ui-settings.json`（`version: 1`）：語言、外觀、主視窗大小與是否最大化、設定視窗大小，以及主機清單顯示 `host_list`（等級 `detail`、自訂 `fields`、密集度 `density`：`comfortable`／`compact`，以及「未分類」在分類間的位置 `ungrouped_at`，省略時排在最後；`ungrouped_collapsed` 為其收合狀態）、批次作業排序 `batch_order`（`sidebar`／`pending`／`recent`／`name`）、批次表格欄位 `batch_columns`（`shown` 為顯示的欄位代碼，主機欄一律顯示；`weights` 為各欄寬度比例，限制在 0.2–10），以及預設解鎖方式 `unlock_method`（`password`／`windows_hello`／`security_key`；只在啟動時第一次遇到鎖定才自動開始）。不保存憑證，主機庫鎖定時也能讀寫。
 - 主機清單的分類、順序與收合狀態存於主機庫（`host_groups` 資料表與 `hosts.group_id`）。
 - 主機資料序列化內容上限 64 MiB。
 
@@ -67,6 +67,7 @@ Linux／macOS 可使用 `cargo run --locked -p misf`，須在對應平台建置�
 - 系統偵測讀取 `uname` 與 `/etc/os-release`。偵測結果只來自主機本身，編輯主機不能改寫；位址或埠變更時清除。手動指定的套件管理器必須確實存在於主機上，否則在執行任何套件指令前停止。
 - 檢查先更新索引（`apt-get update`／`dnf makecache --refresh`／`yum makecache`／`pkg update`），停用動態下載進度。
 - 升級：APT 執行 `apt-get -y upgrade`（`DEBIAN_FRONTEND=noninteractive`、`--force-confold`、`NEEDRESTART_MODE=l`），只升級既有套件；DNF／YUM 執行 `-y upgrade`（可能依相依關係安裝或移除套件，新設定檔另存為 `.rpmnew`）；pkg 執行 `pkg upgrade -y`。索引更新上限 5 分鐘、升級上限 30 分鐘。
+- APT 升級輸出中「Not upgrading yet due to phasing:」或舊版「The following upgrades have been deferred due to phasing:」之下縮排列出的套件，記為該次結果的 `phased`。它不另存欄位，載入時從保存的升級輸出重新解析，因此資料庫結構不變。
 - FreeBSD／DragonFly 的偵測命令以 `sh -c` 包裝，`pkg` 命令以 `env` 設定環境變數，csh 登入 shell 也能執行。
 - sudo 密碼以 SSH channel 標準輸入傳送，不放在命令列。PTY 預設開啟（類似 `ssh -t`）。
 - 批次作業最多 8 台並行、單次最多 256 台；核心拒絕混合套件管理器的批次，執行時偵測到的套件管理器若與紀錄不同，該主機失敗而不執行。

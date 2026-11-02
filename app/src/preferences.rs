@@ -173,6 +173,150 @@ impl BatchOrder {
     }
 }
 
+/// A column of the batch table, besides the checkbox.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum BatchColumn {
+    Host,
+    User,
+    Address,
+    System,
+    Operation,
+    Status,
+    Pending,
+    /// Updates apt held back for a phased rollout.
+    Phased,
+    Upgraded,
+    Checked,
+}
+
+impl BatchColumn {
+    pub const ALL: [Self; 10] = [
+        Self::Host,
+        Self::User,
+        Self::Address,
+        Self::System,
+        Self::Operation,
+        Self::Status,
+        Self::Pending,
+        Self::Phased,
+        Self::Upgraded,
+        Self::Checked,
+    ];
+
+    fn code(self) -> &'static str {
+        match self {
+            Self::Host => "host",
+            Self::User => "user",
+            Self::Address => "address",
+            Self::System => "system",
+            Self::Operation => "operation",
+            Self::Status => "status",
+            Self::Pending => "pending",
+            Self::Phased => "phased",
+            Self::Upgraded => "upgraded",
+            Self::Checked => "checked",
+        }
+    }
+
+    pub fn label(self, t: Translator) -> &'static str {
+        match self {
+            Self::Host => t.get("batch.host"),
+            Self::User => t.get("batch.user"),
+            Self::Address => t.get("batch.address"),
+            Self::System => t.get("batch.system"),
+            Self::Operation => t.get("batch.last_operation"),
+            Self::Status => t.get("apt.status"),
+            Self::Pending => t.get("apt.pending"),
+            Self::Phased => t.get("batch.phased"),
+            Self::Upgraded => t.get("batch.upgraded_count"),
+            Self::Checked => t.get("apt.last_check"),
+        }
+    }
+
+    /// The column's share of the table width until the user drags a border.
+    fn weight(self) -> f32 {
+        match self {
+            Self::Host => 1.6,
+            Self::Address => 1.4,
+            Self::System => 1.4,
+            Self::Checked => 1.1,
+            Self::Status | Self::User => 1.0,
+            Self::Pending | Self::Phased => 0.9,
+            Self::Operation | Self::Upgraded => 0.8,
+        }
+    }
+}
+
+/// Which batch table columns are shown and how the width is shared between them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BatchColumns {
+    /// Indexed like [`BatchColumn::ALL`]; the host column is always shown.
+    pub shown: [bool; 10],
+    pub weights: [f32; 10],
+}
+
+impl BatchColumns {
+    /// Bounds a dragged or loaded weight so no column vanishes or swallows the table.
+    pub const WEIGHT_RANGE: std::ops::RangeInclusive<f32> = 0.2..=10.0;
+
+    pub fn visible(&self) -> Vec<(usize, BatchColumn)> {
+        BatchColumn::ALL
+            .into_iter()
+            .enumerate()
+            .filter(|(i, column)| *column == BatchColumn::Host || self.shown[*i])
+            .collect()
+    }
+
+    pub fn reset_widths(&mut self) {
+        self.weights = Self::default().weights;
+    }
+
+    fn from_json(value: &serde_json::Value) -> Self {
+        let mut columns = Self::default();
+        if let Some(shown) = value["shown"].as_array() {
+            for (i, column) in BatchColumn::ALL.into_iter().enumerate() {
+                columns.shown[i] = shown.iter().any(|code| code == column.code());
+            }
+        }
+        for (i, column) in BatchColumn::ALL.into_iter().enumerate() {
+            if let Some(weight) = value["weights"][column.code()].as_f64() {
+                let weight = weight as f32;
+                if weight.is_finite() {
+                    columns.weights[i] =
+                        weight.clamp(*Self::WEIGHT_RANGE.start(), *Self::WEIGHT_RANGE.end());
+                }
+            }
+        }
+        columns
+    }
+
+    fn to_json(self) -> serde_json::Value {
+        let codes = BatchColumn::ALL.map(BatchColumn::code);
+        json!({
+            "shown": codes
+                .into_iter()
+                .zip(self.shown)
+                .filter_map(|(code, shown)| shown.then_some(code))
+                .collect::<Vec<_>>(),
+            "weights": codes
+                .into_iter()
+                .zip(self.weights)
+                .map(|(code, weight)| (code.to_owned(), json!(weight)))
+                .collect::<serde_json::Map<_, _>>(),
+        })
+    }
+}
+
+impl Default for BatchColumns {
+    /// What the table showed before columns could be chosen, plus the phased count.
+    fn default() -> Self {
+        Self {
+            shown: BatchColumn::ALL.map(|c| !matches!(c, BatchColumn::User | BatchColumn::Address)),
+            weights: BatchColumn::ALL.map(BatchColumn::weight),
+        }
+    }
+}
+
 /// The lines a host card can show under its name.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct HostFields {
@@ -251,6 +395,7 @@ pub struct Preferences {
     /// The fields kept for [`HostDetail::Custom`], even while another level is chosen.
     pub host_fields: HostFields,
     pub batch_order: BatchOrder,
+    pub batch_columns: BatchColumns,
     pub density: Density,
     /// Where the ungrouped hosts sit among the groups; `None` puts them last.
     pub ungrouped_at: Option<usize>,
@@ -310,6 +455,7 @@ impl Preferences {
                 .as_str()
                 .and_then(|code| BatchOrder::ALL.into_iter().find(|o| o.code() == code))
                 .unwrap_or_default(),
+            batch_columns: BatchColumns::from_json(&value["batch_columns"]),
             unlock_method: value["unlock_method"]
                 .as_str()
                 .and_then(|code| UnlockMethod::ALL.iter().copied().find(|m| m.code() == code))
@@ -337,6 +483,7 @@ impl Preferences {
                 "ungrouped_collapsed": self.ungrouped_collapsed,
             },
             "batch_order": self.batch_order.code(),
+            "batch_columns": self.batch_columns.to_json(),
             "unlock_method": self.unlock_method.code(),
         });
         if let Some(window) = self.window {
@@ -431,6 +578,10 @@ mod tests {
             system: false,
             notes: true,
         };
+        let mut columns = BatchColumns::default();
+        columns.shown[1] = true;
+        columns.shown[3] = false;
+        columns.weights[0] = 3.5;
         let preferences = Preferences {
             host_detail: HostDetail::Custom,
             host_fields: fields,
@@ -439,6 +590,7 @@ mod tests {
             ungrouped_at: Some(1),
             ungrouped_collapsed: true,
             unlock_method: UnlockMethod::SecurityKey,
+            batch_columns: columns,
             ..Default::default()
         };
         preferences.save(&path).unwrap();
@@ -450,6 +602,12 @@ mod tests {
         assert_eq!(loaded.ungrouped_at, Some(1));
         assert!(loaded.ungrouped_collapsed);
         assert_eq!(loaded.unlock_method, UnlockMethod::SecurityKey);
+        assert_eq!(loaded.batch_columns, columns);
+        let shown: Vec<_> = columns.visible().into_iter().map(|(_, c)| c).collect();
+        assert_eq!(
+            shown[..3],
+            [BatchColumn::Host, BatchColumn::User, BatchColumn::Operation]
+        );
         // The custom choice is kept while another level is shown.
         let name_only = Preferences {
             host_detail: HostDetail::NameOnly,
@@ -471,5 +629,17 @@ mod tests {
         assert_eq!(loaded.density, Density::Comfortable);
         assert_eq!(loaded.ungrouped_at, None);
         assert_eq!(loaded.unlock_method, UnlockMethod::Password);
+        assert_eq!(loaded.batch_columns, BatchColumns::default());
+        // Hiding the host column is ignored; unusable widths are clamped.
+        std::fs::write(
+            &path,
+            json!({"version": 1, "batch_columns": {"shown": [], "weights": {"host": 1e9, "user": "x"}}})
+                .to_string(),
+        )
+        .unwrap();
+        let columns = Preferences::load(&path).unwrap().batch_columns;
+        assert_eq!(columns.visible(), [(0, BatchColumn::Host)]);
+        assert_eq!(columns.weights[0], 10.0);
+        assert_eq!(columns.weights[1], BatchColumn::User.weight());
     }
 }

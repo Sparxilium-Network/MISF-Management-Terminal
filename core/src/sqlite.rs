@@ -138,15 +138,22 @@ pub(crate) fn load(conn: &Connection) -> Result<Database> {
     let mut rows = statement.query([])?;
     while let Some(row) = rows.next()? {
         let id: String = row.get(0)?;
+        let (operation, output): (String, String) = (row.get(2)?, row.get(6)?);
         let result = CheckResult {
             checked_at: row.get(1)?,
-            operation: row.get(2)?,
+            // Read back from the saved transcript, so no column is needed for it.
+            phased: if operation == "upgrade" {
+                crate::model::parse_phased(&output)
+            } else {
+                vec![]
+            },
+            operation,
             status: row.get(3)?,
             distro: row.get(4)?,
             package_manager: row.get(5)?,
             packages: packages.remove(&(id.clone(), false)).unwrap_or_default(),
             upgraded: packages.remove(&(id.clone(), true)).unwrap_or_default(),
-            output: row.get(6)?,
+            output,
             error: row.get(7)?,
         };
         results.insert(id, result);

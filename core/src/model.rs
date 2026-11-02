@@ -238,8 +238,31 @@ pub struct CheckResult {
     pub packages: Vec<Package>,
     /// Packages installed by a successful upgrade.
     pub upgraded: Vec<Package>,
+    /// Names apt held back on this upgrade for a phased rollout; they stay in `packages`.
+    pub phased: Vec<String>,
     pub output: String,
     pub error: String,
+}
+
+/// Packages an apt upgrade deferred for a phased rollout, under either heading apt has used.
+pub fn parse_phased(output: &str) -> Vec<String> {
+    let mut phased = Vec::new();
+    let mut listing = false;
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if trimmed == "The following upgrades have been deferred due to phasing:"
+            || trimmed == "Not upgrading yet due to phasing:"
+        {
+            listing = true;
+        } else if listing && line.starts_with(' ') && !trimmed.is_empty() {
+            phased.extend(trimmed.split_whitespace().map(str::to_owned));
+        } else {
+            listing = false;
+        }
+    }
+    phased.sort();
+    phased.dedup();
+    phased
 }
 
 pub fn parse_packages(output: &str) -> Result<Vec<Package>> {
@@ -392,6 +415,15 @@ __MISF_INSTALLED__
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn phased_upgrades_are_read_under_old_and_new_apt_wording() {
+        let old = "Calculating upgrade...\nThe following upgrades have been deferred due to phasing:\n  libfoo1 python3-bar\n  zed\n0 upgraded, 0 newly installed, 0 to remove and 3 not upgraded.\n";
+        assert_eq!(parse_phased(old), ["libfoo1", "python3-bar", "zed"]);
+        let new = "Not upgrading yet due to phasing:\r\n  libfoo1 zed\r\n\r\nSummary:\r\n  Upgrading: 0\r\n";
+        assert_eq!(parse_phased(new), ["libfoo1", "zed"]);
+        assert!(parse_phased("Summary:\n  Upgrading: 2\n").is_empty());
     }
 
     #[test]
