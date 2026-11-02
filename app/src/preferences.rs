@@ -75,6 +75,34 @@ impl HostDetail {
     }
 }
 
+/// How tightly the sidebar packs its hosts.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum Density {
+    /// A card per host.
+    #[default]
+    Comfortable,
+    /// One short line per host, like a file tree.
+    Compact,
+}
+
+impl Density {
+    pub const ALL: [Self; 2] = [Self::Comfortable, Self::Compact];
+
+    fn code(self) -> &'static str {
+        match self {
+            Self::Comfortable => "comfortable",
+            Self::Compact => "compact",
+        }
+    }
+
+    pub fn label(self, t: Translator) -> &'static str {
+        match self {
+            Self::Comfortable => t.get("density.comfortable"),
+            Self::Compact => t.get("density.compact"),
+        }
+    }
+}
+
 /// How the batch table orders its hosts.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum BatchOrder {
@@ -188,6 +216,9 @@ pub struct Preferences {
     /// The fields kept for [`HostDetail::Custom`], even while another level is chosen.
     pub host_fields: HostFields,
     pub batch_order: BatchOrder,
+    pub density: Density,
+    /// Where the ungrouped hosts sit among the groups; `None` puts them last.
+    pub ungrouped_at: Option<usize>,
 }
 
 impl Preferences {
@@ -228,6 +259,13 @@ impl Preferences {
                 .and_then(|code| HostDetail::ALL.into_iter().find(|d| d.code() == code))
                 .unwrap_or_default(),
             host_fields: HostFields::from_json(&value["host_list"]["fields"]).unwrap_or_default(),
+            density: value["host_list"]["density"]
+                .as_str()
+                .and_then(|code| Density::ALL.into_iter().find(|d| d.code() == code))
+                .unwrap_or_default(),
+            ungrouped_at: value["host_list"]["ungrouped_at"]
+                .as_u64()
+                .and_then(|at| usize::try_from(at).ok()),
             batch_order: value["batch_order"]
                 .as_str()
                 .and_then(|code| BatchOrder::ALL.into_iter().find(|o| o.code() == code))
@@ -250,6 +288,8 @@ impl Preferences {
                     .zip(self.host_fields.flags())
                     .filter_map(|(code, shown)| shown.then_some(code))
                     .collect::<Vec<_>>(),
+                "density": self.density.code(),
+                "ungrouped_at": self.ungrouped_at,
             },
             "batch_order": self.batch_order.code(),
         });
@@ -349,6 +389,8 @@ mod tests {
             host_detail: HostDetail::Custom,
             host_fields: fields,
             batch_order: BatchOrder::Sidebar,
+            density: Density::Compact,
+            ungrouped_at: Some(1),
             ..Default::default()
         };
         preferences.save(&path).unwrap();
@@ -356,6 +398,8 @@ mod tests {
         assert_eq!(loaded.host_detail, HostDetail::Custom);
         assert_eq!(loaded.host_card_fields(), fields);
         assert_eq!(loaded.batch_order, BatchOrder::Sidebar);
+        assert_eq!(loaded.density, Density::Compact);
+        assert_eq!(loaded.ungrouped_at, Some(1));
         // The custom choice is kept while another level is shown.
         let name_only = Preferences {
             host_detail: HostDetail::NameOnly,
@@ -374,5 +418,7 @@ mod tests {
         assert_eq!(loaded.host_detail, HostDetail::Full);
         assert_eq!(loaded.host_fields, HostFields::default());
         assert_eq!(loaded.batch_order, BatchOrder::Pending);
+        assert_eq!(loaded.density, Density::Comfortable);
+        assert_eq!(loaded.ungrouped_at, None);
     }
 }

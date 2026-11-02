@@ -1,7 +1,7 @@
 use crate::{
     i18n::{Language, Translator},
     preferences::{
-        BatchOrder, HostDetail, Preferences, SETTINGS_DEFAULT, SETTINGS_MIN, WindowSize,
+        BatchOrder, Density, HostDetail, Preferences, SETTINGS_DEFAULT, SETTINGS_MIN, WindowSize,
     },
     theme::{self, Appearance, Palette},
     worker::{Event, Worker},
@@ -115,8 +115,7 @@ impl SidebarLayout {
         if group == dragged {
             return None;
         }
-        // Groups always follow the ungrouped section.
-        if !group.is_empty() && pointer.y < rect.center().y {
+        if pointer.y < rect.center().y {
             let at = DropAt::Group {
                 before: Some(group.clone()),
             };
@@ -596,6 +595,20 @@ impl ManagementApp {
                             }
                         });
                     ui.end_row();
+                    ui.label(t.get("density.title"));
+                    egui::ComboBox::from_id_salt("density")
+                        .selected_text(self.preferences.density.label(t))
+                        .width(165.0)
+                        .show_ui(ui, |ui| {
+                            for density in Density::ALL {
+                                ui.selectable_value(
+                                    &mut self.preferences.density,
+                                    density,
+                                    density.label(t),
+                                );
+                            }
+                        });
+                    ui.end_row();
                     ui.label(t.get("host_detail.title"));
                     egui::ComboBox::from_id_salt("host_detail")
                         .selected_text(self.preferences.host_detail.label(t))
@@ -1047,15 +1060,28 @@ impl ManagementApp {
         )
     }
 
-    /// Host IDs under each sidebar heading: ungrouped first, then every group in order.
+    /// Group IDs in sidebar order, with "" where the ungrouped hosts sit.
+    fn section_order(&self) -> Vec<String> {
+        let mut order: Vec<String> = self.groups.iter().map(|g| g.id.clone()).collect();
+        let at = (self.preferences.ungrouped_at)
+            .unwrap_or(order.len())
+            .min(order.len());
+        order.insert(at, String::new());
+        order
+    }
+
+    /// Host IDs under each sidebar heading, in sidebar order ("" = ungrouped).
     fn sections(&self) -> Vec<(String, Vec<String>)> {
-        let mut sections = vec![(String::new(), Vec::new())];
-        sections.extend(self.groups.iter().map(|g| (g.id.clone(), Vec::new())));
+        let mut sections: Vec<(String, Vec<String>)> = (self.section_order().into_iter())
+            .map(|group| (group, Vec::new()))
+            .collect();
+        let ungrouped = sections.iter().position(|(group, _)| group.is_empty());
         for host in &self.hosts {
             let index = sections
                 .iter()
                 .position(|(group, _)| *group == host.group_id)
-                .unwrap_or(0);
+                .or(ungrouped)
+                .unwrap_or_default();
             sections[index].1.push(host.id.clone());
         }
         sections
@@ -1070,21 +1096,23 @@ impl ManagementApp {
         searching: bool,
     ) {
         let t = Translator(self.preferences.language);
-        ui.add_space(4.0);
-        let sense = if group.is_some() && !searching {
-            egui::Sense::click_and_drag()
-        } else {
+        let compact = self.preferences.density == Density::Compact;
+        ui.add_space(if compact { 2.0 } else { 4.0 });
+        let sense = if searching {
             egui::Sense::hover()
+        } else {
+            egui::Sense::click_and_drag()
         };
+        let height = if compact { 22.0 } else { 26.0 };
         let (rect, response) =
-            ui.allocate_exact_size(egui::vec2(ui.available_width(), 26.0), sense);
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), height), sense);
         let name = group.map_or(t.get("group.ungrouped"), |g| g.name.as_str());
         let arrow = match group {
             None => "",
-            Some(_) if collapsed => " ▸",
-            Some(_) => " ▾",
+            Some(_) if collapsed => "▸ ",
+            Some(_) => "▾ ",
         };
-        let color = if response.hovered() && group.is_some() {
+        let color = if response.hovered() && !searching {
             Color32::from_rgb(220, 231, 245)
         } else {
             Color32::from_rgb(147, 174, 208)
@@ -1093,7 +1121,7 @@ impl ManagementApp {
         painter.text(
             rect.left_center() + egui::vec2(2.0, 0.0),
             egui::Align2::LEFT_CENTER,
-            format!("{name}{arrow}"),
+            format!("{arrow}{name}"),
             egui::FontId::proportional(13.0),
             color,
         );
@@ -1104,10 +1132,16 @@ impl ManagementApp {
             egui::FontId::proportional(11.0),
             Color32::from_rgb(120, 144, 175),
         );
-        let Some(group) = group.filter(|_| !searching) else {
+        if searching {
+            return;
+        }
+        // The ungrouped heading moves like a group but has nothing to collapse or rename.
+        response.dnd_set_drag_payload(DragItem::Group(
+            group.map_or(String::new(), |g| g.id.clone()),
+        ));
+        let Some(group) = group else {
             return;
         };
-        response.dnd_set_drag_payload(DragItem::Group(group.id.clone()));
         if response.clicked() {
             if let Some(stored) = self.groups.iter_mut().find(|g| g.id == group.id) {
                 stored.collapsed = !collapsed;
@@ -1133,101 +1167,151 @@ impl ManagementApp {
             });
     }
 
-    /// Draws one host and returns where it went, for placing a drop.
+    /// Draws one host, `indent` in from the left, and returns where it went, for placing a drop.
     fn host_card(
         &mut self,
         ui: &mut egui::Ui,
         host: &Host,
+        indent: f32,
         searching: bool,
         dragged: Option<&DragItem>,
     ) -> egui::Rect {
         let palette = Palette::for_context(ui.ctx());
         let selected = self.selected == host.id;
-        let lifted = dragged == Some(&DragItem::Host(host.id.clone()));
+        let opacity = if dragged == Some(&DragItem::Host(host.id.clone())) {
+            0.4
+        } else {
+            1.0
+        };
         let fields = self.preferences.host_card_fields();
-        let system = fields.system && !host.distro.is_empty();
+        let mut lines = Vec::new();
+        if fields.address {
+            lines.push(format!("{}@{}:{}", host.username, host.address, host.port));
+        }
+        if fields.system && !host.distro.is_empty() {
+            lines.push(host.distro.clone());
+        }
         let note = (host.notes.lines())
             .map(str::trim)
             .find(|line| !line.is_empty())
             .filter(|_| fields.notes);
-        // A card with only its name is shorter, to fit more hosts.
-        let margin = if !fields.address && !system && note.is_none() {
-            egui::Margin::symmetric(12, 7)
+        lines.extend(note.map(str::to_owned));
+        let success = host
+            .last_check
+            .as_ref()
+            .is_some_and(|r| r.status == "success");
+        let dot = if success {
+            Color32::from_rgb(78, 201, 162)
         } else {
-            egui::Margin::same(12)
+            palette.muted
         };
-        let detail = |text: &str| {
-            egui::Label::new(
-                RichText::new(text)
-                    .size(11.0)
-                    .color(Color32::from_rgb(166, 187, 213)),
-            )
-            .truncate()
-        };
+        let detail_color = Color32::from_rgb(166, 187, 213);
         let fill = if selected {
             Color32::from_rgb(40, 66, 95)
         } else {
             NAVY
         };
-        let card = egui::Frame::new()
-            .fill(fill)
-            .corner_radius(7)
-            .inner_margin(margin)
-            .multiply_with_opacity(if lifted { 0.4 } else { 1.0 })
-            .show(ui, |ui| {
-                ui.set_min_width(ui.available_width() - 2.0);
-                let success = host
-                    .last_check
-                    .as_ref()
-                    .is_some_and(|r| r.status == "success");
-                ui.horizontal(|ui| {
-                    if fields.status {
-                        ui.label(RichText::new("●").size(10.0).color(if success {
-                            Color32::from_rgb(78, 201, 162)
-                        } else {
-                            palette.muted
-                        }));
+        let compact = self.preferences.density == Density::Compact;
+        let rect = if compact {
+            // One line like a file tree: the details follow the name, clipped at the edge.
+            let (rect, _) = ui
+                .allocate_exact_size(egui::vec2(ui.available_width(), 22.0), egui::Sense::hover());
+            let rect = rect.with_min_x(rect.min.x + indent);
+            let painter = ui.painter_at(rect);
+            if selected || ui.rect_contains_pointer(rect) {
+                let fill = if selected {
+                    fill
+                } else {
+                    Color32::from_rgb(29, 49, 74)
+                };
+                painter.rect_filled(rect, 4, fill.gamma_multiply(opacity));
+            }
+            let mut x = rect.left() + 6.0;
+            if fields.status {
+                let center = egui::pos2(x + 3.0, rect.center().y);
+                painter.circle_filled(center, 3.5, dot.gamma_multiply(opacity));
+                x += 13.0;
+            }
+            let name = painter.layout_no_wrap(
+                host.name.clone(),
+                egui::FontId::proportional(13.0),
+                Color32::WHITE.gamma_multiply(opacity),
+            );
+            let name_width = name.size().x;
+            let top = rect.center().y - name.size().y / 2.0;
+            painter.galley(egui::pos2(x, top), name, Color32::WHITE);
+            if !lines.is_empty() {
+                painter.text(
+                    egui::pos2(x + name_width + 8.0, rect.center().y),
+                    egui::Align2::LEFT_CENTER,
+                    lines.join("  ·  "),
+                    egui::FontId::proportional(11.0),
+                    detail_color.gamma_multiply(opacity),
+                );
+            }
+            rect
+        } else {
+            // A card with only its name is shorter, to fit more hosts.
+            let margin = if lines.is_empty() {
+                egui::Margin::symmetric(12, 7)
+            } else {
+                egui::Margin::same(12)
+            };
+            let card = egui::Frame::new()
+                .fill(fill)
+                .corner_radius(7)
+                .inner_margin(margin)
+                .outer_margin(egui::Margin {
+                    left: indent as i8,
+                    ..Default::default()
+                })
+                .multiply_with_opacity(opacity)
+                .show(ui, |ui| {
+                    ui.set_min_width(ui.available_width() - 2.0);
+                    ui.horizontal(|ui| {
+                        if fields.status {
+                            ui.label(RichText::new("●").size(10.0).color(dot));
+                        }
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(&host.name)
+                                    .strong()
+                                    .size(15.0)
+                                    .color(Color32::WHITE),
+                            )
+                            .truncate(),
+                        );
+                    });
+                    for line in &lines {
+                        ui.add(
+                            egui::Label::new(RichText::new(line).size(11.0).color(detail_color))
+                                .truncate(),
+                        );
                     }
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(&host.name)
-                                .strong()
-                                .size(15.0)
-                                .color(Color32::WHITE),
-                        )
-                        .truncate(),
-                    );
-                });
-                if fields.address {
-                    ui.add(detail(&format!(
-                        "{}@{}:{}",
-                        host.username, host.address, host.port
-                    )));
-                }
-                if system {
-                    ui.add(detail(&host.distro));
-                }
-                if let Some(note) = note {
-                    ui.add(detail(note));
-                }
-            })
-            .response;
+                })
+                .response;
+            ui.add_space(5.0);
+            card.rect.with_min_x(card.rect.min.x + indent)
+        };
         // Dragging is off while searching, where the list hides some hosts.
         let sense = if searching {
             egui::Sense::click()
         } else {
             egui::Sense::click_and_drag()
         };
-        let response = ui
-            .interact(card.rect, card.id, sense)
+        let mut response = ui
+            .interact(rect, ui.scope_id().with(("host_card", &host.id)), sense)
             .on_hover_cursor(egui::CursorIcon::PointingHand);
+        // A compact row may clip its details; the tooltip shows them whole.
+        if compact && !lines.is_empty() {
+            response = response.on_hover_text(lines.join("\n"));
+        }
         response.dnd_set_drag_payload(DragItem::Host(host.id.clone()));
         if response.clicked() {
             self.selected = host.id.clone();
             self.log(Action::HostSelect, Outcome::Succeeded);
         }
-        ui.add_space(5.0);
-        card.rect
+        rect
     }
 
     /// Shows what is being dragged and where it would land, and drops it on release.
@@ -1242,6 +1326,14 @@ impl ManagementApp {
                     .find(|h| h.id == *id)
                     .map(|h| h.name.clone()),
                 layout.host_drop(pointer, id),
+            ),
+            DragItem::Group(id) if id.is_empty() => (
+                Some(
+                    Translator(self.preferences.language)
+                        .get("group.ungrouped")
+                        .to_owned(),
+                ),
+                layout.group_drop(pointer, id),
             ),
             DragItem::Group(id) => (
                 self.groups
@@ -1303,17 +1395,26 @@ impl ManagementApp {
         self.arrange(&sections, order);
     }
 
+    /// Moves a group, or with an empty `id` the ungrouped hosts, before another or to the end.
     fn move_group(&mut self, id: &str, before: Option<&str>) {
-        let mut order: Vec<String> = self
-            .groups
-            .iter()
-            .map(|g| g.id.clone())
+        let mut order: Vec<String> = (self.section_order().into_iter())
             .filter(|g| g != id)
             .collect();
         let at = before
             .and_then(|b| order.iter().position(|g| g == b))
             .unwrap_or(order.len());
         order.insert(at, id.to_owned());
+        // Where the ungrouped hosts sit is a display preference, not part of the host store.
+        let ungrouped =
+            (order.iter().position(String::is_empty)).filter(|&at| at + 1 < order.len());
+        if ungrouped != self.preferences.ungrouped_at {
+            self.preferences.ungrouped_at = ungrouped;
+            if let Err(error) = self.preferences.save(&self.settings_path) {
+                let t = Translator(self.preferences.language);
+                self.error = Some(t.format("settings.save_error", &[("error", error)]));
+            }
+        }
+        order.retain(|g| !g.is_empty());
         self.arrange(&self.sections(), order);
     }
 
@@ -1479,6 +1580,9 @@ impl ManagementApp {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 layout.visible = ui.clip_rect();
+                if self.preferences.density == Density::Compact {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                }
                 if !any_visible && !show_headers {
                     ui.add_space(30.0);
                     ui.label(
@@ -1506,9 +1610,16 @@ impl ManagementApp {
                     if show_headers {
                         self.group_header(ui, group.as_ref(), hosts.len(), collapsed, searching);
                     }
+                    // Hosts in a group sit under its heading; ungrouped ones stay at the edge.
+                    let indent = if show_headers && !group_id.is_empty() {
+                        16.0
+                    } else {
+                        0.0
+                    };
                     if !collapsed {
                         for host in hosts {
-                            let rect = self.host_card(ui, &host, searching, dragged.as_deref());
+                            let rect =
+                                self.host_card(ui, &host, indent, searching, dragged.as_deref());
                             layout.cards.push((rect, group_id.clone(), host.id));
                         }
                     }
@@ -4023,7 +4134,7 @@ mod tests {
         app.busy = false;
         app.received("list", list.clone());
         let labels = frame(&mut app, vec![]);
-        let (first, second) = (find(&labels, "First"), find(&labels, "Second"));
+        let (first, second) = (find(&labels, "▾ First"), find(&labels, "▾ Second"));
         drag(
             &mut app,
             second.center(),
@@ -4045,6 +4156,26 @@ mod tests {
         );
         assert!(commands.try_recv().is_err());
         assert_eq!(app.selected, "bravo");
+
+        // The ungrouped heading above the first group: only the preference changes.
+        let ungrouped = Translator(app.preferences.language).get("group.ungrouped");
+        let labels = frame(&mut app, vec![]);
+        let (heading, first) = (find(&labels, ungrouped), find(&labels, "▾ First"));
+        drag(
+            &mut app,
+            heading.center(),
+            first.center() - egui::vec2(0.0, 4.0),
+        );
+        assert!(commands.try_recv().is_err());
+        assert_eq!(app.preferences.ungrouped_at, Some(0));
+        let labels = frame(&mut app, vec![]);
+        assert!(find(&labels, ungrouped).top() < find(&labels, "▾ First").top());
+
+        // Compact rows are drawn too, with grouped hosts indented past ungrouped ones.
+        app.preferences.density = Density::Compact;
+        let labels = frame(&mut app, vec![]);
+        assert!(find(&labels, "bravo").left() > find(&labels, "alpha").left());
+        assert!(find(&labels, "charlie").height() < 20.0);
     }
 
     #[test]
@@ -4097,12 +4228,14 @@ mod tests {
         app.preferences.batch_order = BatchOrder::Name;
         assert_eq!(names(&app), ["alpha", "bravo", "charlie", "delta"]);
         app.preferences.batch_order = BatchOrder::Sidebar;
-        assert_eq!(names(&app), ["delta", "bravo", "alpha", "charlie"]);
+        assert_eq!(names(&app), ["bravo", "alpha", "charlie", "delta"]);
         let (_, headings) = app.batch_order(t);
         let headings: Vec<_> = headings
             .iter()
             .map(|(at, name, _)| (*at, name.as_str()))
             .collect();
-        assert_eq!(headings, [(0, "Ungrouped"), (1, "First"), (3, "Second")]);
+        assert_eq!(headings, [(0, "First"), (2, "Second"), (3, "Ungrouped")]);
+        app.preferences.ungrouped_at = Some(0);
+        assert_eq!(names(&app), ["delta", "bravo", "alpha", "charlie"]);
     }
 }
