@@ -656,6 +656,20 @@ impl ManagementApp {
                             }
                         });
                     ui.end_row();
+                    ui.label(t.get("batch_order.title"));
+                    egui::ComboBox::from_id_salt("batch_order")
+                        .selected_text(self.preferences.batch_order.label(t))
+                        .width(165.0)
+                        .show_ui(ui, |ui| {
+                            for order in BatchOrder::ALL {
+                                ui.selectable_value(
+                                    &mut self.preferences.batch_order,
+                                    order,
+                                    order.label(t),
+                                );
+                            }
+                        });
+                    ui.end_row();
                     return;
                 }
                 ui.label(t.get("settings.language"));
@@ -2347,29 +2361,6 @@ impl ManagementApp {
         (order, headings)
     }
 
-    /// The menu in the batch table's corner that picks its order.
-    fn batch_order_menu(&mut self, ui: &mut egui::Ui, t: Translator) {
-        let current = self.preferences.batch_order;
-        let mut chosen = current;
-        ui.menu_button("⇅", |ui| {
-            ui.label(RichText::new(t.get("batch_order.title")).strong());
-            for order in BatchOrder::ALL {
-                if ui.radio_value(&mut chosen, order, order.label(t)).clicked() {
-                    ui.close();
-                }
-            }
-        })
-        .response
-        .on_hover_text(t.format("batch_order.hint", &[("order", current.label(t).into())]));
-        if chosen == current {
-            return;
-        }
-        self.preferences.batch_order = chosen;
-        if let Err(error) = self.preferences.save(&self.settings_path) {
-            self.error = Some(t.format("settings.save_error", &[("error", error)]));
-        }
-    }
-
     /// The batch table: the columns share its whole width in the ratios the user dragged.
     fn batch_table(
         &mut self,
@@ -2403,7 +2394,6 @@ impl ManagementApp {
         let stripe = ui.visuals().faint_bg_color;
 
         let header = next_row(ui);
-        self.batch_order_menu(&mut table_cell(ui, span(header, 0.0, CHECK), "order"), t);
         for (k, (_, column)) in columns.iter().enumerate() {
             table_cell(ui, span(header, edges[k], edges[k + 1]), ("caption", k)).add(
                 egui::Label::new(RichText::new(column.label(t)).strong().color(palette.muted))
