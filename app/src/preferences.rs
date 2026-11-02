@@ -75,6 +75,41 @@ impl HostDetail {
     }
 }
 
+/// How the batch table orders its hosts.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum BatchOrder {
+    /// The sidebar's order, under the same group headings.
+    Sidebar,
+    /// Most pending updates first.
+    #[default]
+    Pending,
+    /// Most recently checked or upgraded first.
+    Recent,
+    Name,
+}
+
+impl BatchOrder {
+    pub const ALL: [Self; 4] = [Self::Sidebar, Self::Pending, Self::Recent, Self::Name];
+
+    fn code(self) -> &'static str {
+        match self {
+            Self::Sidebar => "sidebar",
+            Self::Pending => "pending",
+            Self::Recent => "recent",
+            Self::Name => "name",
+        }
+    }
+
+    pub fn label(self, t: Translator) -> &'static str {
+        match self {
+            Self::Sidebar => t.get("batch_order.sidebar"),
+            Self::Pending => t.get("batch_order.pending"),
+            Self::Recent => t.get("batch_order.recent"),
+            Self::Name => t.get("batch_order.name"),
+        }
+    }
+}
+
 /// The lines a host card can show under its name.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct HostFields {
@@ -152,6 +187,7 @@ pub struct Preferences {
     pub host_detail: HostDetail,
     /// The fields kept for [`HostDetail::Custom`], even while another level is chosen.
     pub host_fields: HostFields,
+    pub batch_order: BatchOrder,
 }
 
 impl Preferences {
@@ -192,6 +228,10 @@ impl Preferences {
                 .and_then(|code| HostDetail::ALL.into_iter().find(|d| d.code() == code))
                 .unwrap_or_default(),
             host_fields: HostFields::from_json(&value["host_list"]["fields"]).unwrap_or_default(),
+            batch_order: value["batch_order"]
+                .as_str()
+                .and_then(|code| BatchOrder::ALL.into_iter().find(|o| o.code() == code))
+                .unwrap_or_default(),
         })
     }
 
@@ -211,6 +251,7 @@ impl Preferences {
                     .filter_map(|(code, shown)| shown.then_some(code))
                     .collect::<Vec<_>>(),
             },
+            "batch_order": self.batch_order.code(),
         });
         if let Some(window) = self.window {
             value["window"] = json!({
@@ -295,7 +336,7 @@ mod tests {
     }
 
     #[test]
-    fn host_list_detail_round_trips() {
+    fn host_list_detail_and_batch_order_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("ui-settings.json");
         let fields = HostFields {
@@ -307,12 +348,14 @@ mod tests {
         let preferences = Preferences {
             host_detail: HostDetail::Custom,
             host_fields: fields,
+            batch_order: BatchOrder::Sidebar,
             ..Default::default()
         };
         preferences.save(&path).unwrap();
         let loaded = Preferences::load(&path).unwrap();
         assert_eq!(loaded.host_detail, HostDetail::Custom);
         assert_eq!(loaded.host_card_fields(), fields);
+        assert_eq!(loaded.batch_order, BatchOrder::Sidebar);
         // The custom choice is kept while another level is shown.
         let name_only = Preferences {
             host_detail: HostDetail::NameOnly,
@@ -330,5 +373,6 @@ mod tests {
         let loaded = Preferences::load(&path).unwrap();
         assert_eq!(loaded.host_detail, HostDetail::Full);
         assert_eq!(loaded.host_fields, HostFields::default());
+        assert_eq!(loaded.batch_order, BatchOrder::Pending);
     }
 }

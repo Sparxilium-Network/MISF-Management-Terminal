@@ -1,6 +1,8 @@
 use crate::{
     i18n::{Language, Translator},
-    preferences::{HostDetail, Preferences, SETTINGS_DEFAULT, SETTINGS_MIN, WindowSize},
+    preferences::{
+        BatchOrder, HostDetail, Preferences, SETTINGS_DEFAULT, SETTINGS_MIN, WindowSize,
+    },
     theme::{self, Appearance, Palette},
     worker::{Event, Worker},
 };
@@ -1959,9 +1961,7 @@ impl ManagementApp {
                 .unwrap_or_default()
         };
         let (check_commands, upgrade_commands) = (commands(false), commands(true));
-        // Most pending updates first; the stable sort keeps the saved order among equals.
-        let mut order: Vec<usize> = (0..self.hosts.len()).collect();
-        order.sort_by_key(|&i| std::cmp::Reverse(pending_count(&self.hosts[i])));
+        let (order, headings) = self.batch_order(t);
         // Display order, never the set's order, so the request matches what the user sees.
         let selected: Vec<String> = order
             .iter()
@@ -2088,7 +2088,7 @@ impl ManagementApp {
                         .striped(true)
                         .spacing([18.0, 6.0])
                         .show(ui, |ui| {
-                            ui.label("");
+                            self.batch_order_menu(ui, t);
                             for caption in [
                                 t.get("batch.host"),
                                 t.get("batch.system"),
@@ -2102,18 +2102,26 @@ impl ManagementApp {
                             }
                             ui.end_row();
                             for (
-                                id,
-                                name,
-                                reason,
-                                system,
-                                operation,
-                                status,
-                                failed,
-                                pending,
-                                upgraded,
-                                time,
-                            ) in rows
+                                row,
+                                (
+                                    id,
+                                    name,
+                                    reason,
+                                    system,
+                                    operation,
+                                    status,
+                                    failed,
+                                    pending,
+                                    upgraded,
+                                    time,
+                                ),
+                            ) in rows.into_iter().enumerate()
                             {
+                                if let Some((_, heading, ids)) =
+                                    headings.iter().find(|(at, ..)| *at == row)
+                                {
+                                    self.batch_heading(ui, t, heading, ids, &ready);
+                                }
                                 let mut checked = self.batch_selected.contains(&id);
                                 let mut response = ui.add_enabled(
                                     reason.is_none(),
@@ -2184,6 +2192,111 @@ impl ManagementApp {
             );
         });
         self.result_panel(ui, &host, (viewport_height - 560.0).max(160.0));
+    }
+
+    /// Host indexes in table order, and in sidebar order each group's heading:
+    /// the row it comes before, its name and its host IDs.
+    #[allow(clippy::type_complexity)]
+    fn batch_order(&self, t: Translator) -> (Vec<usize>, Vec<(usize, String, Vec<String>)>) {
+        // Stable sorts keep the sidebar order among equals.
+        let mut order: Vec<usize> = (0..self.hosts.len()).collect();
+        let mut headings = Vec::new();
+        match self.preferences.batch_order {
+            BatchOrder::Sidebar if !self.groups.is_empty() => {
+                order.clear();
+                for (group, ids) in self.sections() {
+                    if ids.is_empty() {
+                        continue;
+                    }
+                    let name = self
+                        .groups
+                        .iter()
+                        .find(|g| g.id == group)
+                        .map_or(t.get("group.ungrouped"), |g| g.name.as_str());
+                    headings.push((order.len(), name.to_owned(), ids.clone()));
+                    order.extend(
+                        ids.iter()
+                            .filter_map(|id| self.hosts.iter().position(|h| h.id == *id)),
+                    );
+                }
+            }
+            BatchOrder::Sidebar => {}
+            BatchOrder::Pending => {
+                order.sort_by_key(|&i| std::cmp::Reverse(pending_count(&self.hosts[i])));
+            }
+            BatchOrder::Recent => order.sort_by_key(|&i| {
+                std::cmp::Reverse(self.hosts[i].last_check.as_ref().and_then(|r| {
+                    DateTime::parse_from_rfc3339(&r.checked_at)
+                        .ok()
+                        .map(|time| time.timestamp())
+                }))
+            }),
+            BatchOrder::Name => order.sort_by_cached_key(|&i| self.hosts[i].name.to_lowercase()),
+        }
+        (order, headings)
+    }
+
+    /// The menu in the batch table's corner that picks its order.
+    fn batch_order_menu(&mut self, ui: &mut egui::Ui, t: Translator) {
+        let current = self.preferences.batch_order;
+        let mut chosen = current;
+        ui.menu_button("⇅", |ui| {
+            ui.label(RichText::new(t.get("batch_order.title")).strong());
+            for order in BatchOrder::ALL {
+                if ui.radio_value(&mut chosen, order, order.label(t)).clicked() {
+                    ui.close();
+                }
+            }
+        })
+        .response
+        .on_hover_text(t.format("batch_order.hint", &[("order", current.label(t).into())]));
+        if chosen == current {
+            return;
+        }
+        self.preferences.batch_order = chosen;
+        if let Err(error) = self.preferences.save(&self.settings_path) {
+            self.error = Some(t.format("settings.save_error", &[("error", error)]));
+        }
+    }
+
+    /// A group's row in the batch table; its checkbox picks every host there that can run.
+    fn batch_heading(
+        &mut self,
+        ui: &mut egui::Ui,
+        t: Translator,
+        name: &str,
+        ids: &[String],
+        ready: &BTreeSet<String>,
+    ) {
+        let eligible: Vec<&String> = ids.iter().filter(|id| ready.contains(*id)).collect();
+        let chosen = eligible
+            .iter()
+            .filter(|id| self.batch_selected.contains(**id))
+            .count();
+        let mut all = !eligible.is_empty() && chosen == eligible.len();
+        let partly = chosen > 0 && !all;
+        let response = ui
+            .add_enabled(
+                !eligible.is_empty(),
+                egui::Checkbox::without_text(&mut all).indeterminate(partly),
+            )
+            .on_hover_text(t.get("batch_order.group_select"));
+        if response.changed() {
+            for id in eligible {
+                if all {
+                    self.batch_selected.insert(id.clone());
+                } else {
+                    self.batch_selected.remove(id);
+                }
+            }
+            self.log(Action::BatchSelect, Outcome::Succeeded);
+        }
+        ui.label(
+            RichText::new(format!("{name} · {}", ids.len()))
+                .strong()
+                .color(Color32::from_rgb(147, 174, 208)),
+        );
+        ui.end_row();
     }
 
     fn prompt_upgrade(&mut self, ids: Vec<String>, batch: bool) {
@@ -3932,5 +4045,64 @@ mod tests {
         );
         assert!(commands.try_recv().is_err());
         assert_eq!(app.selected, "bravo");
+    }
+
+    #[test]
+    fn batch_table_follows_the_chosen_order() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = RuntimePaths {
+            store: directory.path().join("hosts.db"),
+            debug: true,
+            debug_allow_passkey: false,
+        };
+        let ctx = egui::Context::default();
+        let (requests, _commands) = mpsc::channel();
+        let (_events, results) = mpsc::channel();
+        let mut app = ManagementApp::initialize(
+            &ctx,
+            paths,
+            AuditLog::new(directory.path()).unwrap(),
+            Worker {
+                requests,
+                events: results,
+            },
+        );
+        let host = |id: &str, group: &str, pending: usize, at: &str| {
+            json!({"id": id, "name": id, "address": "127.0.0.1", "port": 22,
+                "username": "ops", "os": "Linux", "group_id": group,
+                "last_check": {"checked_at": at, "operation": "check", "status": "success",
+                    "packages": vec![json!({"name": "pkg", "current_version": "1", "candidate_version": "2", "architecture": "amd64", "repository": "main"}); pending]}})
+        };
+        app.received(
+            "list",
+            json!({
+                "hosts": [
+                    host("delta", "", 1, "2026-11-01T08:00:00+08:00"),
+                    host("bravo", "g1", 3, "2026-11-01T01:00:00Z"),
+                    host("alpha", "g1", 0, "2026-10-30T00:00:00Z"),
+                    host("charlie", "g2", 2, "2026-11-02T00:00:00Z"),
+                ],
+                "groups": [{"id": "g1", "name": "First"}, {"id": "g2", "name": "Second"}],
+            }),
+        );
+        let t = Translator(Language::EnUs);
+        let names = |app: &ManagementApp| -> Vec<String> {
+            let (order, _) = app.batch_order(t);
+            order.iter().map(|&i| app.hosts[i].name.clone()).collect()
+        };
+        assert_eq!(names(&app), ["bravo", "charlie", "delta", "alpha"]);
+        app.preferences.batch_order = BatchOrder::Recent;
+        // 08:00+08:00 is 00:00Z, before bravo's 01:00Z.
+        assert_eq!(names(&app), ["charlie", "bravo", "delta", "alpha"]);
+        app.preferences.batch_order = BatchOrder::Name;
+        assert_eq!(names(&app), ["alpha", "bravo", "charlie", "delta"]);
+        app.preferences.batch_order = BatchOrder::Sidebar;
+        assert_eq!(names(&app), ["delta", "bravo", "alpha", "charlie"]);
+        let (_, headings) = app.batch_order(t);
+        let headings: Vec<_> = headings
+            .iter()
+            .map(|(at, name, _)| (*at, name.as_str()))
+            .collect();
+        assert_eq!(headings, [(0, "Ungrouped"), (1, "First"), (3, "Second")]);
     }
 }
