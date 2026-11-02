@@ -57,6 +57,7 @@ Linux／macOS 可使用 `cargo run --locked -p misf`，須在對應平台建置�
 - 保存多台 Linux／BSD 主機，支援新增、編輯、刪除與搜尋。
 - SSH 帳密登入，或匯入 OpenSSH／PEM 私鑰；加密私鑰可填密語。
 - 左側主機清單可分類：按「+ 新增分類」建立分類，拖曳主機到其他位置或分類即可調整順序，拖曳分類標題可調整分類順序；點分類名稱收合／展開，右鍵可重新命名或刪除（刪除分類不會刪除主機，主機移到「未分類」）。搜尋時暫停拖曳。順序、分類與收合狀態存於主機庫。
+- 「設定 → 偏好設定 → 主機清單顯示」可選「完整」（狀態燈、使用者@位址:連接埠、作業系統版本、備註第一行）、「只顯示主機名稱」或「自訂顯示項目」，自訂勾選的項目在切換等級後仍會保留。此偏好存於 `ui-settings.json` 的 `host_list`。
 - 「SSH 金鑰管理」可新增／刪除共用金鑰，主機認證方式選「已儲存的 SSH 金鑰」即可共用同一把；畫面只顯示名稱、演算法與指紋，仍有主機使用的金鑰不能刪除。
 - 首次連線先核對並保存 SHA-256 主機指紋，確認前不提交帳密；指紋變更立即阻擋認證。
 - 使用 russh 自帶 SSH，不呼叫系統 ssh，也不讀取電腦的 SSH config、known_hosts、SSH agent 或系統私鑰。
@@ -152,6 +153,6 @@ LUKSbox 測試使用暫存資料，涵蓋明文保留、確認刪除與路徑限
 - CLI 的加密工作階段只存在同一程序內；可透過 stdin 傳入 JSON 請求陣列，依序執行解鎖、操作與鎖定。不要把解鎖密碼放進命令列參數。
 - `docs/architecture.md`：目前實作架構。
 
-開發用畫面擷取可使用 `cargo build -p misf --features capture`，以 `MISF_SCREENSHOT_TO` 指定 PNG 路徑，並以 `--debug.dir` 指定測試資料。`MISF_OPEN_EDITOR=1`／`MISF_OPEN_SETTINGS=1`／`MISF_OPEN_PASSKEY=1`／`MISF_OPEN_BATCH=1`／`MISF_OPEN_KEYS=1` 可預先開啟對應畫面；旗標只有明確設為 `1` 才啟用；`MISF_OPEN_SETTINGS=about` 直接開啟「關於」頁。debug 模式的 Passkey 按鈕停用，擷取不操作硬體。正式 release 預設不啟用擷取功能。
+開發用畫面擷取可使用 `cargo build -p misf --features capture`，以 `MISF_SCREENSHOT_TO` 指定 PNG 路徑，並以 `--debug.dir` 指定測試資料。`MISF_OPEN_EDITOR=1`／`MISF_OPEN_SETTINGS=1`／`MISF_OPEN_PASSKEY=1`／`MISF_OPEN_BATCH=1`／`MISF_OPEN_KEYS=1` 可預先開啟對應畫面；旗標只有明確設為 `1` 才啟用；`MISF_OPEN_SETTINGS=about`／`MISF_OPEN_SETTINGS=preferences` 直接開啟「關於」／「偏好設定」頁。debug 模式的 Passkey 按鈕停用，擷取不操作硬體。正式 release 預設不啟用擷取功能。
 
 `.daybrake` 不是 daybreak 拼錯，是故意的。

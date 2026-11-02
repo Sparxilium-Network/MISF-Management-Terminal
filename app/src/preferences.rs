@@ -1,4 +1,7 @@
-use crate::{i18n::Language, theme::Appearance};
+use crate::{
+    i18n::{Language, Translator},
+    theme::Appearance,
+};
 use serde_json::json;
 use std::{io::Write, path::Path};
 
@@ -31,7 +34,7 @@ impl WindowSize {
 }
 
 /// The settings window's content size, in logical points.
-pub const SETTINGS_DEFAULT: [f32; 2] = [660.0, 340.0];
+pub const SETTINGS_DEFAULT: [f32; 2] = [660.0, 400.0];
 pub const SETTINGS_MIN: [f32; 2] = [560.0, 280.0];
 
 /// Reads `width` and `height`, growing them to `min`; `None` when either is unusable.
@@ -43,15 +46,124 @@ fn size_from_json(value: &serde_json::Value, min: [f32; 2]) -> Option<[f32; 2]> 
     Some([size("width", min[0])?, size("height", min[1])?])
 }
 
+/// How much each host card in the sidebar shows besides its name.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum HostDetail {
+    #[default]
+    Full,
+    NameOnly,
+    Custom,
+}
+
+impl HostDetail {
+    pub const ALL: [Self; 3] = [Self::Full, Self::NameOnly, Self::Custom];
+
+    fn code(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::NameOnly => "name",
+            Self::Custom => "custom",
+        }
+    }
+
+    pub fn label(self, t: Translator) -> &'static str {
+        match self {
+            Self::Full => t.get("host_detail.full"),
+            Self::NameOnly => t.get("host_detail.name_only"),
+            Self::Custom => t.get("host_detail.custom"),
+        }
+    }
+}
+
+/// The lines a host card can show under its name.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HostFields {
+    /// The dot coloured by the last connection check.
+    pub status: bool,
+    /// `user@address:port`.
+    pub address: bool,
+    /// The detected distribution.
+    pub system: bool,
+    /// The first line of the notes.
+    pub notes: bool,
+}
+
+impl HostFields {
+    const ALL: Self = Self {
+        status: true,
+        address: true,
+        system: true,
+        notes: true,
+    };
+    const NONE: Self = Self {
+        status: false,
+        address: false,
+        system: false,
+        notes: false,
+    };
+    const CODES: [&'static str; 4] = ["status", "address", "system", "notes"];
+
+    /// Each field with its preference code and label, for the settings checkboxes.
+    pub fn each(&mut self, t: Translator) -> [(&mut bool, &'static str); 4] {
+        [
+            (&mut self.status, t.get("host_detail.status")),
+            (&mut self.address, t.get("host_detail.address")),
+            (&mut self.system, t.get("host_detail.system")),
+            (&mut self.notes, t.get("host_detail.notes")),
+        ]
+    }
+
+    fn flags(self) -> [bool; 4] {
+        [self.status, self.address, self.system, self.notes]
+    }
+
+    fn from_json(value: &serde_json::Value) -> Option<Self> {
+        let codes: Vec<&str> = value
+            .as_array()?
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .collect();
+        let has = |code| codes.contains(&code);
+        Some(Self {
+            status: has("status"),
+            address: has("address"),
+            system: has("system"),
+            notes: has("notes"),
+        })
+    }
+}
+
+impl Default for HostFields {
+    /// What a card showed before it could be chosen.
+    fn default() -> Self {
+        Self {
+            notes: false,
+            ..Self::ALL
+        }
+    }
+}
+
 #[derive(Clone, Copy, Default, PartialEq)]
 pub struct Preferences {
     pub language: Language,
     pub appearance: Appearance,
     pub window: Option<WindowSize>,
     pub settings_window: Option<[f32; 2]>,
+    pub host_detail: HostDetail,
+    /// The fields kept for [`HostDetail::Custom`], even while another level is chosen.
+    pub host_fields: HostFields,
 }
 
 impl Preferences {
+    /// What host cards show at the chosen level.
+    pub fn host_card_fields(&self) -> HostFields {
+        match self.host_detail {
+            HostDetail::Full => HostFields::ALL,
+            HostDetail::NameOnly => HostFields::NONE,
+            HostDetail::Custom => self.host_fields,
+        }
+    }
+
     pub fn load(path: &Path) -> Result<Self, String> {
         let bytes = match std::fs::read(path) {
             Ok(bytes) => bytes,
@@ -75,6 +187,11 @@ impl Preferences {
                 .unwrap_or_default(),
             window: WindowSize::from_json(&value["window"]),
             settings_window: size_from_json(&value["settings_window"], SETTINGS_MIN),
+            host_detail: value["host_list"]["detail"]
+                .as_str()
+                .and_then(|code| HostDetail::ALL.into_iter().find(|d| d.code() == code))
+                .unwrap_or_default(),
+            host_fields: HostFields::from_json(&value["host_list"]["fields"]).unwrap_or_default(),
         })
     }
 
@@ -86,6 +203,14 @@ impl Preferences {
             "version": 1,
             "language": self.language.code(),
             "appearance": self.appearance.code(),
+            "host_list": {
+                "detail": self.host_detail.code(),
+                "fields": HostFields::CODES
+                    .into_iter()
+                    .zip(self.host_fields.flags())
+                    .filter_map(|(code, shown)| shown.then_some(code))
+                    .collect::<Vec<_>>(),
+            },
         });
         if let Some(window) = self.window {
             value["window"] = json!({
@@ -167,5 +292,43 @@ mod tests {
         };
         assert_eq!(load(json!({"width": 10, "height": 20})), Some(SETTINGS_MIN));
         assert_eq!(load(json!({"width": "wide", "height": 300})), None);
+    }
+
+    #[test]
+    fn host_list_detail_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ui-settings.json");
+        let fields = HostFields {
+            status: true,
+            address: false,
+            system: false,
+            notes: true,
+        };
+        let preferences = Preferences {
+            host_detail: HostDetail::Custom,
+            host_fields: fields,
+            ..Default::default()
+        };
+        preferences.save(&path).unwrap();
+        let loaded = Preferences::load(&path).unwrap();
+        assert_eq!(loaded.host_detail, HostDetail::Custom);
+        assert_eq!(loaded.host_card_fields(), fields);
+        // The custom choice is kept while another level is shown.
+        let name_only = Preferences {
+            host_detail: HostDetail::NameOnly,
+            ..loaded
+        };
+        assert_eq!(name_only.host_card_fields(), HostFields::NONE);
+        name_only.save(&path).unwrap();
+        assert_eq!(Preferences::load(&path).unwrap().host_fields, fields);
+        // Older or unknown settings fall back to the full card.
+        std::fs::write(
+            &path,
+            json!({"version": 1, "host_list": {"detail": "huge"}}).to_string(),
+        )
+        .unwrap();
+        let loaded = Preferences::load(&path).unwrap();
+        assert_eq!(loaded.host_detail, HostDetail::Full);
+        assert_eq!(loaded.host_fields, HostFields::default());
     }
 }

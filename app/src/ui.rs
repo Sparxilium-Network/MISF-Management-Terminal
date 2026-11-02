@@ -1,6 +1,6 @@
 use crate::{
     i18n::{Language, Translator},
-    preferences::{Preferences, SETTINGS_DEFAULT, SETTINGS_MIN, WindowSize},
+    preferences::{HostDetail, Preferences, SETTINGS_DEFAULT, SETTINGS_MIN, WindowSize},
     theme::{self, Appearance, Palette},
     worker::{Event, Worker},
 };
@@ -360,9 +360,13 @@ impl ManagementApp {
             app.open_vault_dialog(VaultMode::Passkey);
         }
         #[cfg(feature = "capture")]
-        if let Ok(page @ ("1" | "about")) = std::env::var("MISF_OPEN_SETTINGS").as_deref() {
-            if page == "about" {
-                app.settings_page = SettingsPage::About;
+        if let Ok(page @ ("1" | "about" | "preferences")) =
+            std::env::var("MISF_OPEN_SETTINGS").as_deref()
+        {
+            match page {
+                "about" => app.settings_page = SettingsPage::About,
+                "preferences" => app.settings_page = SettingsPage::Preferences,
+                _ => {}
             }
             app.settings_open = true;
             app.log(Action::SettingsOpen, Outcome::Succeeded);
@@ -590,6 +594,30 @@ impl ManagementApp {
                             }
                         });
                     ui.end_row();
+                    ui.label(t.get("host_detail.title"));
+                    egui::ComboBox::from_id_salt("host_detail")
+                        .selected_text(self.preferences.host_detail.label(t))
+                        .width(165.0)
+                        .show_ui(ui, |ui| {
+                            for detail in HostDetail::ALL {
+                                ui.selectable_value(
+                                    &mut self.preferences.host_detail,
+                                    detail,
+                                    detail.label(t),
+                                );
+                            }
+                        });
+                    ui.end_row();
+                    if self.preferences.host_detail == HostDetail::Custom {
+                        ui.label("");
+                        ui.vertical(|ui| {
+                            ui.spacing_mut().item_spacing.y = 6.0;
+                            for (shown, label) in self.preferences.host_fields.each(t) {
+                                ui.checkbox(shown, label);
+                            }
+                        });
+                        ui.end_row();
+                    }
                     return;
                 }
                 ui.label(t.get("settings.language"));
@@ -1114,6 +1142,26 @@ impl ManagementApp {
         let palette = Palette::for_context(ui.ctx());
         let selected = self.selected == host.id;
         let lifted = dragged == Some(&DragItem::Host(host.id.clone()));
+        let fields = self.preferences.host_card_fields();
+        let system = fields.system && !host.distro.is_empty();
+        let note = (host.notes.lines())
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .filter(|_| fields.notes);
+        // A card with only its name is shorter, to fit more hosts.
+        let margin = if !fields.address && !system && note.is_none() {
+            egui::Margin::symmetric(12, 7)
+        } else {
+            egui::Margin::same(12)
+        };
+        let detail = |text: &str| {
+            egui::Label::new(
+                RichText::new(text)
+                    .size(11.0)
+                    .color(Color32::from_rgb(166, 187, 213)),
+            )
+            .truncate()
+        };
         let fill = if selected {
             Color32::from_rgb(40, 66, 95)
         } else {
@@ -1122,7 +1170,7 @@ impl ManagementApp {
         let card = egui::Frame::new()
             .fill(fill)
             .corner_radius(7)
-            .inner_margin(12)
+            .inner_margin(margin)
             .multiply_with_opacity(if lifted { 0.4 } else { 1.0 })
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width() - 2.0);
@@ -1131,29 +1179,34 @@ impl ManagementApp {
                     .as_ref()
                     .is_some_and(|r| r.status == "success");
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("●").size(10.0).color(if success {
-                        Color32::from_rgb(78, 201, 162)
-                    } else {
-                        palette.muted
-                    }));
-                    ui.label(
-                        RichText::new(&host.name)
-                            .strong()
-                            .size(15.0)
-                            .color(Color32::WHITE),
+                    if fields.status {
+                        ui.label(RichText::new("●").size(10.0).color(if success {
+                            Color32::from_rgb(78, 201, 162)
+                        } else {
+                            palette.muted
+                        }));
+                    }
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(&host.name)
+                                .strong()
+                                .size(15.0)
+                                .color(Color32::WHITE),
+                        )
+                        .truncate(),
                     );
                 });
-                ui.label(
-                    RichText::new(format!("{}@{}:{}", host.username, host.address, host.port))
-                        .size(11.0)
-                        .color(Color32::from_rgb(166, 187, 213)),
-                );
-                if !host.distro.is_empty() {
-                    ui.label(
-                        RichText::new(&host.distro)
-                            .size(11.0)
-                            .color(Color32::from_rgb(166, 187, 213)),
-                    );
+                if fields.address {
+                    ui.add(detail(&format!(
+                        "{}@{}:{}",
+                        host.username, host.address, host.port
+                    )));
+                }
+                if system {
+                    ui.add(detail(&host.distro));
+                }
+                if let Some(note) = note {
+                    ui.add(detail(note));
                 }
             })
             .response;
