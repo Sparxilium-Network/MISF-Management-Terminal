@@ -17,7 +17,7 @@ pub mod vault;
 mod windows_passkey;
 
 use anyhow::{Context, Result, ensure};
-use model::{Host, SshKey};
+use model::{Host, HostGroup, SshKey};
 use serde_json::{Value, json};
 use std::sync::Arc;
 use store::Store;
@@ -66,6 +66,50 @@ fn save_results(store: &Store, results: Vec<(String, model::CheckResult)>) -> Re
     })
 }
 
+/// Applies a sidebar drag: `groups` lists every group ID and `hosts` every host as
+/// `{id, group_id}`, both in their new order.
+fn arrange(db: &mut store::Database, request: &Value) -> Result<()> {
+    const STALE: &str = "主機清單已在其他地方變更，請重新整理後再拖曳";
+    let groups: Vec<&str> = request["groups"]
+        .as_array()
+        .context("缺少分類順序")?
+        .iter()
+        .map(|id| id.as_str().context("分類 ID 格式錯誤"))
+        .collect::<Result<_>>()?;
+    let hosts: Vec<(&str, &str)> = request["hosts"]
+        .as_array()
+        .context("缺少主機順序")?
+        .iter()
+        .map(|entry| {
+            Ok((
+                entry["id"].as_str().context("主機 ID 格式錯誤")?,
+                entry["group_id"].as_str().unwrap_or_default(),
+            ))
+        })
+        .collect::<Result<_>>()?;
+    let mut new_groups = Vec::with_capacity(groups.len());
+    for id in &groups {
+        let index = db.groups.iter().position(|g| g.id == *id).context(STALE)?;
+        new_groups.push(db.groups.swap_remove(index));
+    }
+    ensure!(db.groups.is_empty(), STALE);
+    let mut new_hosts = Vec::with_capacity(hosts.len());
+    for (id, group_id) in hosts {
+        ensure!(
+            group_id.is_empty() || groups.contains(&group_id),
+            "找不到分類"
+        );
+        let index = db.hosts.iter().position(|h| h.id == id).context(STALE)?;
+        let mut host = db.hosts.swap_remove(index);
+        host.group_id = group_id.into();
+        new_hosts.push(host);
+    }
+    ensure!(db.hosts.is_empty(), STALE);
+    db.groups = new_groups;
+    db.hosts = new_hosts;
+    Ok(())
+}
+
 pub async fn dispatch(request: Value, store: &Store, progress: &dyn Fn(&str)) -> Result<Value> {
     let action = request["action"].as_str().context("缺少 action")?;
     let id = request["id"].as_str().unwrap_or_default();
@@ -76,6 +120,7 @@ pub async fn dispatch(request: Value, store: &Store, progress: &dyn Fn(&str)) ->
             Ok(json!({
                 "hosts": database.hosts,
                 "keys": database.keys.iter().map(SshKey::summary).collect::<Vec<_>>(),
+                "groups": database.groups,
                 "path": store.path,
                 "encrypted": store.is_encrypted(),
                 "format": format,
@@ -118,8 +163,13 @@ pub async fn dispatch(request: Value, store: &Store, progress: &dyn Fn(&str)) ->
                             None
                         };
                     }
+                    // Only dragging in the sidebar moves a host between groups.
+                    host.group_id = old.group_id.clone();
                     *old = host.clone();
                 } else {
+                    if !db.groups.iter().any(|g| g.id == host.group_id) {
+                        host.group_id.clear();
+                    }
                     host.fingerprint.clear();
                     host.distro.clear();
                     host.package_manager.clear();
@@ -175,6 +225,55 @@ pub async fn dispatch(request: Value, store: &Store, progress: &dyn Fn(&str)) ->
                 Ok(())
             })?;
             Ok(json!({"deleted": id}))
+        }
+        "group_add" => {
+            let group = HostGroup::new(request["name"].as_str().unwrap_or_default())?;
+            store.update(|db| {
+                db.groups.push(group.clone());
+                Ok(())
+            })?;
+            Ok(json!(group))
+        }
+        "group_rename" => {
+            let name = HostGroup::check_name(request["name"].as_str().unwrap_or_default())?;
+            store.update(|db| {
+                db.groups
+                    .iter_mut()
+                    .find(|g| g.id == id)
+                    .context("找不到分類")?
+                    .name = name;
+                Ok(())
+            })?;
+            Ok(json!({"renamed": id}))
+        }
+        "group_collapse" => {
+            let collapsed = request["collapsed"].as_bool().context("缺少收合狀態")?;
+            store.update(|db| {
+                db.groups
+                    .iter_mut()
+                    .find(|g| g.id == id)
+                    .context("找不到分類")?
+                    .collapsed = collapsed;
+                Ok(())
+            })?;
+            Ok(json!({"collapsed": collapsed}))
+        }
+        "group_delete" => {
+            // The group's hosts stay where they are, ungrouped.
+            store.update(|db| {
+                let before = db.groups.len();
+                db.groups.retain(|g| g.id != id);
+                ensure!(db.groups.len() < before, "找不到分類");
+                for host in db.hosts.iter_mut().filter(|h| h.group_id == id) {
+                    host.group_id.clear();
+                }
+                Ok(())
+            })?;
+            Ok(json!({"deleted": id}))
+        }
+        "arrange" => {
+            store.update(|db| arrange(db, &request))?;
+            Ok(json!({"arranged": true}))
         }
         "probe" => Ok(json!({"fingerprint": ssh::probe(&store.host(id)?).await?})),
         "trust" => {

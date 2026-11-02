@@ -16,6 +16,8 @@ pub struct Host {
     pub key_passphrase: String,
     /// A stored [`SshKey`] used instead of `private_key`; empty for an inline key.
     pub key_id: String,
+    /// The [`HostGroup`] the sidebar lists this host under; empty for ungrouped.
+    pub group_id: String,
     pub sudo_password: String,
     pub use_pty: bool,
     pub fingerprint: String,
@@ -132,6 +134,36 @@ pub struct SshKey {
     pub fingerprint: String,
     pub private_key: String,
     pub passphrase: String,
+}
+
+/// A named, collapsible section of the sidebar's host list.
+#[derive(Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct HostGroup {
+    pub id: String,
+    pub name: String,
+    pub collapsed: bool,
+}
+
+impl HostGroup {
+    pub fn new(name: &str) -> Result<Self> {
+        Ok(Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: Self::check_name(name)?,
+            collapsed: false,
+        })
+    }
+
+    pub fn check_name(name: &str) -> Result<String> {
+        let name = name.trim();
+        ensure!(!name.is_empty(), "請填寫分類名稱");
+        ensure!(name.chars().count() <= 64, "分類名稱最多 64 個字");
+        ensure!(
+            !name.chars().any(char::is_control),
+            "分類名稱不可包含控制字元"
+        );
+        Ok(name.into())
+    }
 }
 
 impl SshKey {

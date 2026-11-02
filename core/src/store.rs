@@ -1,4 +1,4 @@
-use crate::model::{Host, SshKey};
+use crate::model::{Host, HostGroup, SshKey};
 use crate::vault::VaultFile;
 use anyhow::{Context, Result, ensure};
 use fs2::FileExt;
@@ -19,6 +19,9 @@ pub struct Database {
     /// SSH keys hosts share by `key_id`; never in the legacy JSON.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub keys: Vec<SshKey>,
+    /// Sidebar groups, in display order; never in the legacy JSON.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<HostGroup>,
     /// Names the user gave LUKSbox key slots, by slot index; never in the legacy JSON.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub slot_names: BTreeMap<u32, String>,
@@ -143,6 +146,7 @@ impl Store {
                     version: db.version,
                     hosts: db.hosts.clone(),
                     keys: db.keys.clone(),
+                    groups: db.groups.clone(),
                     slot_names: db.slot_names.clone(),
                 })
             },

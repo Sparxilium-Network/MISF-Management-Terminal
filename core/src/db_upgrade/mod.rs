@@ -8,8 +8,14 @@ use rusqlite::Connection;
 mod v0_v1;
 mod v1_v2;
 mod v2_v3;
+mod v3_v4;
 
 pub(crate) type Migration = fn(&Connection) -> Result<()>;
 
 /// `MIGRATIONS[n]` upgrades schema version n to n + 1; version 0 is an empty file.
-pub(crate) const MIGRATIONS: &[Migration] = &[v0_v1::upgrade, v1_v2::upgrade, v2_v3::upgrade];
+pub(crate) const MIGRATIONS: &[Migration] = &[
+    v0_v1::upgrade,
+    v1_v2::upgrade,
+    v2_v3::upgrade,
+    v3_v4::upgrade,
+];

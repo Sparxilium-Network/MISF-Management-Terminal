@@ -921,3 +921,73 @@ async fn hosts_share_a_stored_key_that_cannot_be_deleted_while_in_use() {
         .unwrap();
     assert!(store.read().unwrap().keys.is_empty());
 }
+
+#[tokio::test]
+async fn hosts_are_dragged_between_groups_and_survive_group_deletion() {
+    let fixture = fixture(false, false).await;
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::new(dir.path().join("hosts.db"));
+    let run = |request: serde_json::Value| {
+        let store = &store;
+        async move { dispatch(request, store, &|_| {}).await }
+    };
+    let mut ids = Vec::new();
+    for name in ["web", "db"] {
+        let mut host = fixture.host.clone();
+        host.id.clear();
+        host.name = name.into();
+        host.group_id = "made-up".into();
+        let saved = run(json!({"action":"save","host":host})).await.unwrap();
+        // A new host only joins a group that exists.
+        assert_eq!(saved["group_id"], "");
+        ids.push(saved["id"].as_str().unwrap().to_owned());
+    }
+    let group = run(json!({"action":"group_add","name":"  prod  "}))
+        .await
+        .unwrap();
+    let group_id = group["id"].as_str().unwrap().to_owned();
+    assert_eq!(group["name"], "prod");
+    assert!(run(json!({"action":"group_add","name":" "})).await.is_err());
+    // db moves first, into the group; a stale or partial order is refused whole.
+    let arrange =
+        |hosts: serde_json::Value| json!({"action":"arrange","groups":[group_id],"hosts":hosts});
+    for stale in [
+        json!([{"id": ids[1], "group_id": group_id}]),
+        json!([{"id": ids[1], "group_id": "nope"}, {"id": ids[0], "group_id": ""}]),
+    ] {
+        assert!(run(arrange(stale)).await.is_err());
+    }
+    run(arrange(
+        json!([{"id": ids[1], "group_id": group_id}, {"id": ids[0], "group_id": ""}]),
+    ))
+    .await
+    .unwrap();
+    run(json!({"action":"group_rename","id":group_id,"name":"production"}))
+        .await
+        .unwrap();
+    run(json!({"action":"group_collapse","id":group_id,"collapsed":true}))
+        .await
+        .unwrap();
+    // Editing a host leaves it in the group it was dragged to.
+    let mut edited = store.read().unwrap().hosts[0].clone();
+    edited.group_id.clear();
+    edited.notes = "edited".into();
+    run(json!({"action":"save","host":edited})).await.unwrap();
+    let listed = run(json!({"action":"list"})).await.unwrap();
+    let names: Vec<_> = listed["hosts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| (h["name"].as_str().unwrap(), h["group_id"].as_str().unwrap()))
+        .collect();
+    assert_eq!(names, [("db", group_id.as_str()), ("web", "")]);
+    assert_eq!(listed["groups"][0]["name"], "production");
+    assert_eq!(listed["groups"][0]["collapsed"], true);
+    run(json!({"action":"group_delete","id":group_id}))
+        .await
+        .unwrap();
+    let database = store.read().unwrap();
+    assert!(database.groups.is_empty());
+    assert_eq!(database.hosts[0].name, "db");
+    assert_eq!(database.hosts[0].group_id, "");
+}

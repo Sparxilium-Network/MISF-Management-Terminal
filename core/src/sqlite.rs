@@ -2,7 +2,7 @@
 //! slot and `application_id` marks the file as MISF's, so opening or importing an older
 //! database detects its version and upgrades it, while foreign or newer files are refused.
 use crate::db_upgrade::{MIGRATIONS, Migration};
-use crate::model::{CheckResult, Host, Package, SshKey};
+use crate::model::{CheckResult, Host, HostGroup, Package, SshKey};
 use crate::store::Database;
 use anyhow::{Context, Result, ensure};
 use rusqlite::{Connection, MAIN_DB, config::DbConfig, limits::Limit, params};
@@ -154,7 +154,7 @@ pub(crate) fn load(conn: &Connection) -> Result<Database> {
     let mut statement = conn.prepare(
         "SELECT id, name, address, port, username, os, auth_type, password, private_key,
                 key_passphrase, sudo_password, use_pty, fingerprint, notes, distro, package_manager,
-                manager_choice, key_id
+                manager_choice, key_id, group_id
          FROM hosts ORDER BY position",
     )?;
     let mut rows = statement.query([])?;
@@ -181,6 +181,7 @@ pub(crate) fn load(conn: &Connection) -> Result<Database> {
             package_manager: row.get(15)?,
             manager_choice: row.get(16)?,
             key_id: row.get(17)?,
+            group_id: row.get(18)?,
         });
     }
     let mut statement = conn.prepare(
@@ -199,6 +200,17 @@ pub(crate) fn load(conn: &Connection) -> Result<Database> {
             })
         })?
         .collect::<rusqlite::Result<_>>()?;
+    let mut statement =
+        conn.prepare("SELECT id, name, collapsed FROM host_groups ORDER BY position")?;
+    let groups = statement
+        .query_map([], |row| {
+            Ok(HostGroup {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                collapsed: row.get(2)?,
+            })
+        })?
+        .collect::<rusqlite::Result<_>>()?;
     let mut statement = conn.prepare("SELECT slot, name FROM key_slots")?;
     let slot_names = statement
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
@@ -207,6 +219,7 @@ pub(crate) fn load(conn: &Connection) -> Result<Database> {
         version: 1,
         hosts,
         keys,
+        groups,
         slot_names,
     })
 }
@@ -216,16 +229,27 @@ pub(crate) fn save(conn: &mut Connection, db: &Database) -> Result<()> {
     let tx = conn.transaction()?;
     tx.execute_batch(
         "DELETE FROM packages; DELETE FROM check_results; DELETE FROM hosts;
-         DELETE FROM key_slots; DELETE FROM ssh_keys;",
+         DELETE FROM key_slots; DELETE FROM ssh_keys; DELETE FROM host_groups;",
     )?;
     {
         let mut host_row = tx.prepare(
             "INSERT INTO hosts (id, position, name, address, port, username, os, auth_type,
                  password, private_key, key_passphrase, sudo_password, use_pty, fingerprint,
-                 notes, distro, package_manager, manager_choice, key_id)
+                 notes, distro, package_manager, manager_choice, key_id, group_id)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
-                 ?18, ?19)",
+                 ?18, ?19, ?20)",
         )?;
+        let mut group_row = tx.prepare(
+            "INSERT INTO host_groups (id, position, name, collapsed) VALUES (?1, ?2, ?3, ?4)",
+        )?;
+        for (position, group) in db.groups.iter().enumerate() {
+            group_row.execute(params![
+                group.id,
+                position as i64,
+                group.name,
+                group.collapsed
+            ])?;
+        }
         let mut key_row = tx.prepare(
             "INSERT INTO ssh_keys (id, position, name, algorithm, fingerprint, private_key,
                  passphrase)
@@ -278,6 +302,7 @@ pub(crate) fn save(conn: &mut Connection, db: &Database) -> Result<()> {
                     host.package_manager,
                     host.manager_choice,
                     host.key_id,
+                    host.group_id,
                 ])
                 .with_context(|| format!("無法寫入主機 {}；主機 ID 可能重複", host.name))?;
             let Some(result) = &host.last_check else {
@@ -394,6 +419,7 @@ pub(crate) mod tests {
                     manager_choice: "dnf".into(),
                     auth_type: "key".into(),
                     key_id: "k".into(),
+                    group_id: "g".into(),
                     ..Default::default()
                 },
             ],
@@ -404,6 +430,11 @@ pub(crate) mod tests {
                 fingerprint: "SHA256:test".into(),
                 private_key: "key-body".into(),
                 passphrase: "key-pass".into(),
+            }],
+            groups: vec![HostGroup {
+                id: "g".into(),
+                name: "group-name".into(),
+                collapsed: true,
             }],
             slot_names: BTreeMap::from([(0, "管理密碼 1".into()), (3, "YubiKey".into())]),
         }
@@ -547,7 +578,7 @@ pub(crate) mod tests {
             .unwrap()
             .collect::<rusqlite::Result<_>>()
             .unwrap();
-        assert_eq!(columns, ["tags", "key_id", "manager_choice"]);
+        assert_eq!(columns, ["tags", "group_id", "key_id"]);
         // A failed backup leaves the file at its old version.
         let mut conn = Connection::open_in_memory().unwrap();
         conn.deserialize_read_exact(MAIN_DB, &image[..], image.len(), false)
@@ -582,8 +613,10 @@ pub(crate) mod tests {
         assert!(before.windows(8).any(|w| w == b"key-body"));
         db.hosts.remove(0);
         db.keys.clear();
+        db.groups.clear();
         let after = to_image(&db).unwrap();
         assert!(!after.windows(6).any(|w| w == b"secret"));
         assert!(!after.windows(8).any(|w| w == b"key-body"));
+        assert!(!after.windows(10).any(|w| w == b"group-name"));
     }
 }

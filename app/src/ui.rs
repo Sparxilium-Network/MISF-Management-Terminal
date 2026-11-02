@@ -6,7 +6,7 @@ use crate::{
 };
 use chrono::{DateTime, Local};
 use eframe::egui::{self, Color32, RichText, Stroke};
-use misf_core::model::{CheckResult, Host};
+use misf_core::model::{CheckResult, Host, HostGroup};
 use misf_core::{
     audit::{Action, AuditLog, Outcome},
     runtime::RuntimePaths,
@@ -19,6 +19,114 @@ use zeroize::Zeroize;
 const NAVY: Color32 = Color32::from_rgb(19, 36, 59);
 const BLUE: Color32 = Color32::from_rgb(33, 117, 195);
 const RED: Color32 = Color32::from_rgb(178, 58, 58);
+
+/// The group name dialog: `id` is `None` to add a group, or the group being renamed.
+#[derive(Default)]
+struct GroupDialog {
+    id: Option<String>,
+    name: String,
+}
+
+/// What the sidebar is dragging, carried as egui's drag-and-drop payload.
+#[derive(Clone, PartialEq)]
+enum DragItem {
+    Host(String),
+    Group(String),
+}
+
+/// Where a drag would land: before a host or group, or at the end when `before` is `None`.
+enum DropAt {
+    Host {
+        group: String,
+        before: Option<String>,
+    },
+    Group {
+        before: Option<String>,
+    },
+}
+
+/// Where the sidebar drew each section and host card this frame.
+struct SidebarLayout {
+    /// The scroll area's visible part; drops outside it are ignored.
+    visible: egui::Rect,
+    /// Heading and cards of each section, by group ID ("" = ungrouped).
+    sections: Vec<(egui::Rect, String)>,
+    /// Each card with its group ID and host ID.
+    cards: Vec<(egui::Rect, String, String)>,
+}
+
+impl SidebarLayout {
+    /// The drop for a host and the y of its insertion line.
+    fn host_drop(&self, pointer: egui::Pos2, dragged: &str) -> Option<(DropAt, f32)> {
+        if !self.visible.contains(pointer) {
+            return None;
+        }
+        let card = self
+            .cards
+            .iter()
+            .position(|(rect, ..)| (rect.top() - 3.0..=rect.bottom() + 3.0).contains(&pointer.y));
+        if let Some(index) = card {
+            let (rect, group, id) = &self.cards[index];
+            if id == dragged {
+                return None;
+            }
+            if pointer.y < rect.center().y {
+                let at = DropAt::Host {
+                    group: group.clone(),
+                    before: Some(id.clone()),
+                };
+                return Some((at, rect.top() - 2.5));
+            }
+            let before = self.cards[index + 1..]
+                .iter()
+                .find(|(.., other)| other != dragged)
+                .filter(|(_, other_group, _)| other_group == group)
+                .map(|(.., other)| other.clone());
+            let at = DropAt::Host {
+                group: group.clone(),
+                before,
+            };
+            return Some((at, rect.bottom() + 2.5));
+        }
+        // A heading or a section's empty space: the end of that section.
+        let (rect, group) = self
+            .sections
+            .iter()
+            .find(|(rect, _)| rect.y_range().contains(pointer.y))?;
+        let at = DropAt::Host {
+            group: group.clone(),
+            before: None,
+        };
+        Some((at, rect.bottom() - 2.0))
+    }
+
+    /// The drop for a group and the y of its insertion line.
+    fn group_drop(&self, pointer: egui::Pos2, dragged: &str) -> Option<(DropAt, f32)> {
+        if !self.visible.contains(pointer) {
+            return None;
+        }
+        let index = self
+            .sections
+            .iter()
+            .position(|(rect, _)| rect.y_range().contains(pointer.y))?;
+        let (rect, group) = &self.sections[index];
+        if group == dragged {
+            return None;
+        }
+        // Groups always follow the ungrouped section.
+        if !group.is_empty() && pointer.y < rect.center().y {
+            let at = DropAt::Group {
+                before: Some(group.clone()),
+            };
+            return Some((at, rect.top()));
+        }
+        let before = self.sections[index + 1..]
+            .iter()
+            .find(|(_, other)| other != dragged)
+            .map(|(_, other)| other.clone());
+        Some((DropAt::Group { before }, rect.bottom()))
+    }
+}
 
 struct Editor {
     host: Host,
@@ -130,6 +238,8 @@ pub struct ManagementApp {
     settings_page: SettingsPage,
     worker: Worker,
     hosts: Vec<Host>,
+    groups: Vec<HostGroup>,
+    group_dialog: Option<GroupDialog>,
     selected: String,
     search: String,
     package_search: String,
@@ -198,6 +308,8 @@ impl ManagementApp {
             settings_page: SettingsPage::Vault,
             worker,
             hosts: vec![],
+            groups: vec![],
+            group_dialog: None,
             selected: String::new(),
             search: String::new(),
             package_search: String::new(),
@@ -248,7 +360,10 @@ impl ManagementApp {
             app.open_vault_dialog(VaultMode::Passkey);
         }
         #[cfg(feature = "capture")]
-        if std::env::var("MISF_OPEN_SETTINGS").as_deref() == Ok("1") {
+        if let Ok(page @ ("1" | "about")) = std::env::var("MISF_OPEN_SETTINGS").as_deref() {
+            if page == "about" {
+                app.settings_page = SettingsPage::About;
+            }
             app.settings_open = true;
             app.log(Action::SettingsOpen, Outcome::Succeeded);
         }
@@ -441,7 +556,14 @@ impl ManagementApp {
             ui.add_enabled(!self.busy, egui::Button::new(label))
                 .clicked()
         });
-        ui.add_space(8.0);
+        ui.add_space(14.0);
+        let palette = Palette::for_context(ui.ctx());
+        ui.label(
+            RichText::new(t.get("app.development_warning"))
+                .strong()
+                .color(palette.warning),
+        );
+        ui.label(t.get("app.development_detail"));
         convert
     }
 
@@ -559,6 +681,10 @@ impl ManagementApp {
                         Err(error) => {
                             self.status = t.get("status.failed").into();
                             self.error = Some(error);
+                            // The sidebar showed this change before it was saved.
+                            if action == "arrange" || action == "group_collapse" {
+                                self.send(json!({"action":"list"}));
+                            }
                             if action == "vault_create" {
                                 self.vault_dialog = None;
                                 self.send(json!({"action":"storage_status"}));
@@ -659,6 +785,7 @@ impl ManagementApp {
                         return;
                     }
                 }
+                self.groups = serde_json::from_value(data["groups"].clone()).unwrap_or_default();
                 self.ssh_keys = data["keys"]
                     .as_array()
                     .into_iter()
@@ -696,6 +823,11 @@ impl ManagementApp {
                 self.selected.clear();
                 self.send(json!({"action":"list"}));
             }
+            "group_add" | "group_rename" | "group_delete" => {
+                self.group_dialog = None;
+                self.send(json!({"action":"list"}));
+            }
+            "arrange" | "group_collapse" => self.status = t.get("group.saved").into(),
             "key_add" => {
                 if let Some(dialog) = &mut self.key_dialog {
                     dialog.name.clear();
@@ -885,6 +1017,337 @@ impl ManagementApp {
         )
     }
 
+    /// Host IDs under each sidebar heading: ungrouped first, then every group in order.
+    fn sections(&self) -> Vec<(String, Vec<String>)> {
+        let mut sections = vec![(String::new(), Vec::new())];
+        sections.extend(self.groups.iter().map(|g| (g.id.clone(), Vec::new())));
+        for host in &self.hosts {
+            let index = sections
+                .iter()
+                .position(|(group, _)| *group == host.group_id)
+                .unwrap_or(0);
+            sections[index].1.push(host.id.clone());
+        }
+        sections
+    }
+
+    fn group_header(
+        &mut self,
+        ui: &mut egui::Ui,
+        group: Option<&HostGroup>,
+        count: usize,
+        collapsed: bool,
+        searching: bool,
+    ) {
+        let t = Translator(self.preferences.language);
+        ui.add_space(4.0);
+        let sense = if group.is_some() && !searching {
+            egui::Sense::click_and_drag()
+        } else {
+            egui::Sense::hover()
+        };
+        let (rect, response) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), 26.0), sense);
+        let name = group.map_or(t.get("group.ungrouped"), |g| g.name.as_str());
+        let arrow = match group {
+            None => "",
+            Some(_) if collapsed => " ▸",
+            Some(_) => " ▾",
+        };
+        let color = if response.hovered() && group.is_some() {
+            Color32::from_rgb(220, 231, 245)
+        } else {
+            Color32::from_rgb(147, 174, 208)
+        };
+        let painter = ui.painter();
+        painter.text(
+            rect.left_center() + egui::vec2(2.0, 0.0),
+            egui::Align2::LEFT_CENTER,
+            format!("{name}{arrow}"),
+            egui::FontId::proportional(13.0),
+            color,
+        );
+        painter.text(
+            rect.right_center() - egui::vec2(4.0, 0.0),
+            egui::Align2::RIGHT_CENTER,
+            count.to_string(),
+            egui::FontId::proportional(11.0),
+            Color32::from_rgb(120, 144, 175),
+        );
+        let Some(group) = group.filter(|_| !searching) else {
+            return;
+        };
+        response.dnd_set_drag_payload(DragItem::Group(group.id.clone()));
+        if response.clicked() {
+            if let Some(stored) = self.groups.iter_mut().find(|g| g.id == group.id) {
+                stored.collapsed = !collapsed;
+            }
+            self.send(json!({"action":"group_collapse","id":group.id,"collapsed":!collapsed}));
+        }
+        response
+            .on_hover_text(t.get("group.hint"))
+            .context_menu(|ui| {
+                if ui.button(t.get("group.rename")).clicked() {
+                    self.group_dialog = Some(GroupDialog {
+                        id: Some(group.id.clone()),
+                        name: group.name.clone(),
+                    });
+                }
+                if ui
+                    .button(t.get("group.delete"))
+                    .on_hover_text(t.get("group.delete_hint"))
+                    .clicked()
+                {
+                    self.send(json!({"action":"group_delete","id":group.id}));
+                }
+            });
+    }
+
+    /// Draws one host and returns where it went, for placing a drop.
+    fn host_card(
+        &mut self,
+        ui: &mut egui::Ui,
+        host: &Host,
+        searching: bool,
+        dragged: Option<&DragItem>,
+    ) -> egui::Rect {
+        let palette = Palette::for_context(ui.ctx());
+        let selected = self.selected == host.id;
+        let lifted = dragged == Some(&DragItem::Host(host.id.clone()));
+        let fill = if selected {
+            Color32::from_rgb(40, 66, 95)
+        } else {
+            NAVY
+        };
+        let card = egui::Frame::new()
+            .fill(fill)
+            .corner_radius(7)
+            .inner_margin(12)
+            .multiply_with_opacity(if lifted { 0.4 } else { 1.0 })
+            .show(ui, |ui| {
+                ui.set_min_width(ui.available_width() - 2.0);
+                let success = host
+                    .last_check
+                    .as_ref()
+                    .is_some_and(|r| r.status == "success");
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("●").size(10.0).color(if success {
+                        Color32::from_rgb(78, 201, 162)
+                    } else {
+                        palette.muted
+                    }));
+                    ui.label(
+                        RichText::new(&host.name)
+                            .strong()
+                            .size(15.0)
+                            .color(Color32::WHITE),
+                    );
+                });
+                ui.label(
+                    RichText::new(format!("{}@{}:{}", host.username, host.address, host.port))
+                        .size(11.0)
+                        .color(Color32::from_rgb(166, 187, 213)),
+                );
+                if !host.distro.is_empty() {
+                    ui.label(
+                        RichText::new(&host.distro)
+                            .size(11.0)
+                            .color(Color32::from_rgb(166, 187, 213)),
+                    );
+                }
+            })
+            .response;
+        // Dragging is off while searching, where the list hides some hosts.
+        let sense = if searching {
+            egui::Sense::click()
+        } else {
+            egui::Sense::click_and_drag()
+        };
+        let response = ui
+            .interact(card.rect, card.id, sense)
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        response.dnd_set_drag_payload(DragItem::Host(host.id.clone()));
+        if response.clicked() {
+            self.selected = host.id.clone();
+            self.log(Action::HostSelect, Outcome::Succeeded);
+        }
+        ui.add_space(5.0);
+        card.rect
+    }
+
+    /// Shows what is being dragged and where it would land, and drops it on release.
+    fn drag_feedback(&mut self, ui: &egui::Ui, item: &DragItem, layout: &SidebarLayout) {
+        let Some(pointer) = ui.ctx().pointer_interact_pos() else {
+            return;
+        };
+        let (name, drop) = match item {
+            DragItem::Host(id) => (
+                self.hosts
+                    .iter()
+                    .find(|h| h.id == *id)
+                    .map(|h| h.name.clone()),
+                layout.host_drop(pointer, id),
+            ),
+            DragItem::Group(id) => (
+                self.groups
+                    .iter()
+                    .find(|g| g.id == *id)
+                    .map(|g| g.name.clone()),
+                layout.group_drop(pointer, id),
+            ),
+        };
+        let painter = ui.ctx().layer_painter(egui::LayerId::new(
+            egui::Order::Tooltip,
+            egui::Id::unique("sidebar_drag"),
+        ));
+        let galley = painter.layout_no_wrap(
+            name.unwrap_or_default(),
+            egui::FontId::proportional(13.0),
+            Color32::WHITE,
+        );
+        let label = egui::Rect::from_min_size(
+            pointer + egui::vec2(14.0, 6.0),
+            galley.size() + egui::vec2(16.0, 8.0),
+        );
+        painter.rect_filled(label, 5, BLUE);
+        painter.galley(label.min + egui::vec2(8.0, 4.0), galley, Color32::WHITE);
+        if let Some((_, line)) = &drop {
+            painter.hline(
+                layout.visible.x_range(),
+                *line,
+                Stroke::new(2.0, Color32::from_rgb(120, 190, 255)),
+            );
+        }
+        if !ui.input(|i| i.pointer.any_released()) {
+            return;
+        }
+        egui::DragAndDrop::clear_payload(ui.ctx());
+        match (item, drop) {
+            (DragItem::Host(id), Some((DropAt::Host { group, before }, _))) => {
+                self.move_host(id, &group, before.as_deref());
+            }
+            (DragItem::Group(id), Some((DropAt::Group { before }, _))) => {
+                self.move_group(id, before.as_deref());
+            }
+            _ => {}
+        }
+    }
+
+    fn move_host(&mut self, id: &str, group: &str, before: Option<&str>) {
+        let mut sections = self.sections();
+        for (_, ids) in &mut sections {
+            ids.retain(|host| host != id);
+        }
+        if let Some((_, ids)) = sections.iter_mut().find(|(g, _)| g == group) {
+            let at = before
+                .and_then(|b| ids.iter().position(|host| host == b))
+                .unwrap_or(ids.len());
+            ids.insert(at, id.to_owned());
+        }
+        let order = self.groups.iter().map(|g| g.id.clone()).collect();
+        self.arrange(&sections, order);
+    }
+
+    fn move_group(&mut self, id: &str, before: Option<&str>) {
+        let mut order: Vec<String> = self
+            .groups
+            .iter()
+            .map(|g| g.id.clone())
+            .filter(|g| g != id)
+            .collect();
+        let at = before
+            .and_then(|b| order.iter().position(|g| g == b))
+            .unwrap_or(order.len());
+        order.insert(at, id.to_owned());
+        self.arrange(&self.sections(), order);
+    }
+
+    /// Shows a drag's result at once and saves it; a refused one reloads the stored order.
+    fn arrange(&mut self, sections: &[(String, Vec<String>)], order: Vec<String>) {
+        let placement = |hosts: &[Host]| -> Vec<(String, String)> {
+            hosts
+                .iter()
+                .map(|h| (h.id.clone(), h.group_id.clone()))
+                .collect()
+        };
+        let before = placement(&self.hosts);
+        let unchanged_groups = self.groups.iter().map(|g| &g.id).eq(order.iter());
+        let mut remaining = std::mem::take(&mut self.hosts);
+        for group in std::iter::once("").chain(order.iter().map(String::as_str)) {
+            let Some((_, ids)) = sections.iter().find(|(g, _)| g == group) else {
+                continue;
+            };
+            for id in ids {
+                if let Some(index) = remaining.iter().position(|h| h.id == *id) {
+                    let mut host = remaining.remove(index);
+                    host.group_id = group.to_owned();
+                    self.hosts.push(host);
+                }
+            }
+        }
+        self.hosts.append(&mut remaining);
+        let after = placement(&self.hosts);
+        if unchanged_groups && before == after {
+            return;
+        }
+        self.groups
+            .sort_by_key(|g| order.iter().position(|id| *id == g.id));
+        let hosts: Vec<Value> = after
+            .iter()
+            .map(|(id, group)| json!({"id": id, "group_id": group}))
+            .collect();
+        self.send(json!({"action":"arrange","groups":order,"hosts":hosts}));
+    }
+
+    fn group_dialog(&mut self, ctx: &egui::Context) {
+        let Some(mut dialog) = self.group_dialog.take() else {
+            return;
+        };
+        if self.locked {
+            return;
+        }
+        let t = Translator(self.preferences.language);
+        let (mut save, mut cancel) = (false, false);
+        let modal = egui::Modal::new(egui::Id::unique("group_dialog")).show(ctx, |ui| {
+            ui.set_width(360.0);
+            ui.heading(if dialog.id.is_some() {
+                t.get("group.rename_title")
+            } else {
+                t.get("group.add_title")
+            });
+            ui.add_space(8.0);
+            ui.label(t.get("group.name"));
+            let edit = ui.add(
+                egui::TextEdit::singleline(&mut dialog.name)
+                    .char_limit(64)
+                    .desired_width(f32::INFINITY),
+            );
+            if ui.memory(|m| m.focused().is_none()) {
+                edit.request_focus();
+            }
+            save = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            ui.add_space(12.0);
+            ui.add_enabled_ui(!self.busy, |ui| {
+                ui.horizontal(|ui| {
+                    save |= ui
+                        .add_enabled(!dialog.name.trim().is_empty(), primary(t.get("group.save")))
+                        .clicked();
+                    cancel = ui.button(t.get("common.cancel")).clicked();
+                });
+            });
+        });
+        if cancel || modal.should_close() {
+            return;
+        }
+        if save && !self.busy && !dialog.name.trim().is_empty() {
+            self.send(match &dialog.id {
+                Some(id) => json!({"action":"group_rename","id":id,"name":dialog.name}),
+                None => json!({"action":"group_add","name":dialog.name}),
+            });
+        }
+        self.group_dialog = Some(dialog);
+    }
+
     fn sidebar(&mut self, ui: &mut egui::Ui) {
         let palette = Palette::for_context(ui.ctx());
         let t = Translator(self.preferences.language);
@@ -918,31 +1381,50 @@ impl ManagementApp {
             }
         });
         ui.add_space(10.0);
-        ui.label(
-            RichText::new(t.format(
-                "host.list_count",
-                &[("count", self.hosts.len().to_string())],
-            ))
-            .size(12.0)
-            .color(Color32::from_rgb(147, 174, 208)),
-        );
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new(t.format(
+                    "host.list_count",
+                    &[("count", self.hosts.len().to_string())],
+                ))
+                .size(12.0)
+                .color(Color32::from_rgb(147, 174, 208)),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let add = ui
+                    .add_enabled(
+                        !self.locked,
+                        egui::Button::new(RichText::new(t.get("group.add")).size(12.0))
+                            .frame(false),
+                    )
+                    .on_hover_text(t.get("group.hint"));
+                if add.clicked() {
+                    self.group_dialog = Some(GroupDialog::default());
+                }
+            });
+        });
         ui.add_space(6.0);
         let query = self.search.to_lowercase();
-        let visible: Vec<_> = self
-            .hosts
-            .iter()
-            .filter(|h| {
-                format!("{} {} {}", h.name, h.address, h.notes)
-                    .to_lowercase()
-                    .contains(&query)
-            })
-            .cloned()
-            .collect();
+        let searching = !query.is_empty();
+        let matches = |h: &Host| {
+            format!("{} {} {}", h.name, h.address, h.notes)
+                .to_lowercase()
+                .contains(&query)
+        };
+        let any_visible = self.hosts.iter().any(matches);
+        let show_headers = !self.groups.is_empty();
+        let dragged = egui::DragAndDrop::payload::<DragItem>(ui.ctx());
+        let mut layout = SidebarLayout {
+            visible: egui::Rect::NOTHING,
+            sections: Vec::new(),
+            cards: Vec::new(),
+        };
         egui::ScrollArea::vertical()
             .max_height((ui.available_height() - 98.0).max(80.0))
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                if visible.is_empty() {
+                layout.visible = ui.clip_rect();
+                if !any_visible && !show_headers {
                     ui.add_space(30.0);
                     ui.label(
                         RichText::new(if self.hosts.is_empty() {
@@ -953,64 +1435,36 @@ impl ManagementApp {
                         .color(Color32::from_rgb(143, 166, 197)),
                     );
                 }
-                for host in visible {
-                    let selected = self.selected == host.id;
-                    let fill = if selected {
-                        Color32::from_rgb(40, 66, 95)
-                    } else {
-                        NAVY
-                    };
-                    let card = egui::Frame::new()
-                        .fill(fill)
-                        .corner_radius(7)
-                        .inner_margin(12)
-                        .show(ui, |ui| {
-                            ui.set_min_width(ui.available_width() - 2.0);
-                            let success = host
-                                .last_check
-                                .as_ref()
-                                .is_some_and(|r| r.status == "success");
-                            ui.horizontal(|ui| {
-                                ui.label(RichText::new("●").size(10.0).color(if success {
-                                    Color32::from_rgb(78, 201, 162)
-                                } else {
-                                    palette.muted
-                                }));
-                                ui.label(
-                                    RichText::new(&host.name)
-                                        .strong()
-                                        .size(15.0)
-                                        .color(Color32::WHITE),
-                                );
-                            });
-                            ui.label(
-                                RichText::new(format!(
-                                    "{}@{}:{}",
-                                    host.username, host.address, host.port
-                                ))
-                                .size(11.0)
-                                .color(Color32::from_rgb(166, 187, 213)),
-                            );
-                            if !host.distro.is_empty() {
-                                ui.label(
-                                    RichText::new(&host.distro)
-                                        .size(11.0)
-                                        .color(Color32::from_rgb(166, 187, 213)),
-                                );
-                            }
-                        })
-                        .response;
-                    if ui
-                        .interact(card.rect, card.id, egui::Sense::click())
-                        .on_hover_cursor(egui::CursorIcon::PointingHand)
-                        .clicked()
-                    {
-                        self.selected = host.id;
-                        self.log(Action::HostSelect, Outcome::Succeeded);
+                for (group_id, ids) in self.sections() {
+                    let hosts: Vec<Host> = ids
+                        .iter()
+                        .filter_map(|id| self.hosts.iter().find(|h| h.id == *id))
+                        .filter(|h| matches(h))
+                        .cloned()
+                        .collect();
+                    if searching && hosts.is_empty() {
+                        continue;
                     }
-                    ui.add_space(5.0);
+                    let group = self.groups.iter().find(|g| g.id == group_id).cloned();
+                    let collapsed = !searching && group.as_ref().is_some_and(|g| g.collapsed);
+                    let top = ui.cursor().top();
+                    if show_headers {
+                        self.group_header(ui, group.as_ref(), hosts.len(), collapsed, searching);
+                    }
+                    if !collapsed {
+                        for host in hosts {
+                            let rect = self.host_card(ui, &host, searching, dragged.as_deref());
+                            layout.cards.push((rect, group_id.clone(), host.id));
+                        }
+                    }
+                    let bottom = ui.cursor().top();
+                    let rect = egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), top..=bottom);
+                    layout.sections.push((rect, group_id));
                 }
             });
+        if let Some(item) = dragged {
+            self.drag_feedback(ui, &item, &layout);
+        }
         ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
             ui.label(
                 RichText::new(t.get("app.local_mode"))
@@ -1794,15 +2248,6 @@ impl ManagementApp {
     fn storage_notes(&mut self, ui: &mut egui::Ui) {
         let palette = Palette::for_context(ui.ctx());
         let t = Translator(self.preferences.language);
-        ui.horizontal_wrapped(|ui| {
-            ui.label(
-                RichText::new(t.get("app.development_warning"))
-                    .strong()
-                    .size(12.0)
-                    .color(palette.warning),
-            );
-            ui.label(RichText::new(t.get("app.development_detail")).size(12.0));
-        });
         if !self.storage_warning.is_empty() {
             ui.colored_label(palette.error, &self.storage_warning);
         }
@@ -2097,6 +2542,8 @@ impl ManagementApp {
             wipe_host(host);
         }
         self.hosts.clear();
+        self.groups.clear();
+        self.group_dialog = None;
         self.storage_format.clear();
         self.schema_version = None;
         self.selected.clear();
@@ -2803,6 +3250,7 @@ impl ManagementApp {
         self.plaintext_delete_dialog(ctx);
         // After the editor, so it opens on top when chosen from there.
         self.key_dialog(ctx);
+        self.group_dialog(ctx);
         if let Some(error) = self.error.clone() {
             let mut close = false;
             egui::Modal::new(egui::Id::unique("error")).show(ctx, |ui| {
@@ -3298,5 +3746,138 @@ mod tests {
             assert!(app.upgrade_confirm.is_some());
         }
         assert!(commands.try_recv().is_err());
+    }
+
+    #[test]
+    fn dragging_a_host_or_group_in_the_sidebar_saves_the_new_arrangement() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = RuntimePaths {
+            store: directory.path().join("hosts.db"),
+            debug: true,
+            debug_allow_passkey: false,
+        };
+        let ctx = egui::Context::default();
+        let (requests, commands) = mpsc::channel();
+        let (_events, results) = mpsc::channel();
+        let mut app = ManagementApp::initialize(
+            &ctx,
+            paths,
+            AuditLog::new(directory.path()).unwrap(),
+            Worker {
+                requests,
+                events: results,
+            },
+        );
+        assert_eq!(commands.recv().unwrap()["action"], "storage_status");
+        let host = |id: &str, group: &str| {
+            json!({"id": id, "name": id, "address": "127.0.0.1", "port": 22,
+                "username": "ops", "os": "Linux", "group_id": group})
+        };
+        let list = json!({
+            "hosts": [host("alpha", ""), host("bravo", "g1"), host("charlie", "g1")],
+            "groups": [{"id": "g1", "name": "First"}, {"id": "g2", "name": "Second"}],
+        });
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(280.0, 900.0));
+        let frame = |app: &mut ManagementApp, events: Vec<egui::Event>| {
+            let input = egui::RawInput {
+                screen_rect: Some(screen),
+                events,
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| app.sidebar(ui));
+            output.textures_delta.clear();
+            // Where each label was drawn, to aim the pointer at it.
+            let mut labels = Vec::new();
+            for clipped in output.shapes {
+                if let egui::epaint::Shape::Text(text) = clipped.shape {
+                    labels.push((text.galley.job.text.clone(), text.visual_bounding_rect()));
+                }
+            }
+            labels
+        };
+        let find = |labels: &[(String, egui::Rect)], prefix: &str| {
+            labels
+                .iter()
+                .find(|(text, _)| text.starts_with(prefix))
+                .unwrap_or_else(|| panic!("{prefix} not drawn"))
+                .1
+        };
+        let drag = |app: &mut ManagementApp, from: egui::Pos2, to: egui::Pos2| {
+            let button = |pos, pressed| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            };
+            frame(
+                app,
+                vec![egui::Event::PointerMoved(from), button(from, true)],
+            );
+            for step in 1..=10 {
+                let pos = from + (to - from) * (step as f32 / 10.0);
+                frame(app, vec![egui::Event::PointerMoved(pos)]);
+            }
+            frame(app, vec![button(to, false)]);
+            frame(app, vec![])
+        };
+        let placement = |request: &Value| -> Vec<(String, String)> {
+            request["hosts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|h| {
+                    (
+                        h["id"].as_str().unwrap().into(),
+                        h["group_id"].as_str().unwrap().into(),
+                    )
+                })
+                .collect()
+        };
+
+        // alpha onto the lower half of charlie: last in the first group.
+        app.received("list", list.clone());
+        let labels = frame(&mut app, vec![]);
+        let (alpha, charlie) = (find(&labels, "alpha"), find(&labels, "charlie"));
+        drag(
+            &mut app,
+            alpha.center(),
+            charlie.center() + egui::vec2(0.0, 24.0),
+        );
+        let request = commands.try_recv().expect("no arrange request");
+        assert_eq!(request["action"], "arrange");
+        assert_eq!(
+            placement(&request),
+            [("bravo", "g1"), ("charlie", "g1"), ("alpha", "g1")]
+                .map(|(h, g)| (h.into(), g.into()))
+        );
+        assert_eq!(request["groups"], json!(["g1", "g2"]));
+        assert!(app.hosts.iter().all(|h| h.group_id == "g1"));
+
+        // The second group's heading above the first one's: the groups swap.
+        app.busy = false;
+        app.received("list", list.clone());
+        let labels = frame(&mut app, vec![]);
+        let (first, second) = (find(&labels, "First"), find(&labels, "Second"));
+        drag(
+            &mut app,
+            second.center(),
+            first.center() - egui::vec2(0.0, 4.0),
+        );
+        let request = commands.try_recv().expect("no arrange request");
+        assert_eq!(request["groups"], json!(["g2", "g1"]));
+        assert_eq!(placement(&request)[0], ("alpha".into(), String::new()));
+
+        // Dropping a host back where it was saves nothing; a click still selects it.
+        app.busy = false;
+        app.received("list", list);
+        let labels = frame(&mut app, vec![]);
+        let bravo = find(&labels, "bravo");
+        drag(
+            &mut app,
+            bravo.center(),
+            bravo.center() + egui::vec2(0.0, 3.0),
+        );
+        assert!(commands.try_recv().is_err());
+        assert_eq!(app.selected, "bravo");
     }
 }
