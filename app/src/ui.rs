@@ -1,7 +1,8 @@
 use crate::{
     i18n::{Language, Translator},
     preferences::{
-        BatchOrder, Density, HostDetail, Preferences, SETTINGS_DEFAULT, SETTINGS_MIN, WindowSize,
+        BatchOrder, Density, HostDetail, Preferences, SETTINGS_DEFAULT, SETTINGS_MIN, UnlockMethod,
+        WindowSize,
     },
     theme::{self, Appearance, Palette},
     worker::{Event, Worker},
@@ -198,7 +199,7 @@ struct SlotRow {
     name: String,
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum VaultMode {
     Create,
     Unlock,
@@ -234,6 +235,8 @@ pub struct ManagementApp {
     saved_window: (Option<WindowSize>, Option<[f32; 2]>),
     debug: bool,
     passkey_allowed: bool,
+    /// The preferred unlock method starts by itself only once per launch.
+    default_unlock_started: bool,
     preferences: Preferences,
     settings_open: bool,
     settings_page: SettingsPage,
@@ -304,6 +307,7 @@ impl ManagementApp {
             saved_window: (preferences.window, preferences.settings_window),
             debug: paths.debug,
             passkey_allowed: paths.passkey_allowed(),
+            default_unlock_started: false,
             preferences,
             settings_open: false,
             settings_page: SettingsPage::Vault,
@@ -633,6 +637,20 @@ impl ManagementApp {
                         });
                         ui.end_row();
                     }
+                    ui.label(t.get("unlock_method.title"));
+                    egui::ComboBox::from_id_salt("unlock_method")
+                        .selected_text(self.preferences.unlock_method.label(t))
+                        .width(165.0)
+                        .show_ui(ui, |ui| {
+                            for &method in UnlockMethod::ALL {
+                                ui.selectable_value(
+                                    &mut self.preferences.unlock_method,
+                                    method,
+                                    method.label(t),
+                                );
+                            }
+                        });
+                    ui.end_row();
                     return;
                 }
                 ui.label(t.get("settings.language"));
@@ -748,6 +766,7 @@ impl ManagementApp {
                     self.clear_host_cache();
                     self.open_vault_dialog(VaultMode::Unlock);
                     self.status = t.get("vault.locked").into();
+                    self.start_default_unlock();
                 } else {
                     self.check_plaintext_copy();
                     self.send(json!({"action":"list"}));
@@ -2844,6 +2863,27 @@ impl ManagementApp {
         self.key_dialog = None;
     }
 
+    /// Starts the unlock method chosen in preferences, so a passkey prompt appears without
+    /// first choosing it in the dialog. A PIN is still typed where the platform asks for one.
+    fn start_default_unlock(&mut self) {
+        if std::mem::replace(&mut self.default_unlock_started, true) || !self.passkey_allowed {
+            return;
+        }
+        let hello = match self.preferences.unlock_method {
+            UnlockMethod::Password => return,
+            UnlockMethod::WindowsHello => true,
+            UnlockMethod::SecurityKey => false,
+        };
+        let Some(dialog) = self.vault_dialog.as_mut() else {
+            return;
+        };
+        dialog.mode = VaultMode::Passkey;
+        dialog.hello = hello;
+        if cfg!(target_os = "windows") {
+            self.send(json!({"action":"vault_unlock_passkey","hello":hello,"name":"","pin":""}));
+        }
+    }
+
     fn open_vault_dialog(&mut self, mode: VaultMode) {
         self.log(Action::VaultDialogOpen, Outcome::Succeeded);
         self.vault_dialog = Some(VaultDialog {
@@ -2895,6 +2935,7 @@ impl ManagementApp {
         let mut add = false;
         let mut backup = false;
         let mut passkey = false;
+        let mut use_password = false;
         let mut revoke = None;
         let mut rename = None;
         egui::Modal::new(egui::Id::unique("vault_dialog")).show(ctx, |ui| {
@@ -3024,6 +3065,9 @@ impl ManagementApp {
                                 }),
                             )
                             .clicked();
+                        if self.locked {
+                            use_password = ui.button(t.get("passkey.use_password")).clicked();
+                        }
                         cancel = ui.button(t.get("common.cancel")).clicked();
                     });
                 } else {
@@ -3109,6 +3153,12 @@ impl ManagementApp {
             dialog.password.zeroize();
             dialog.confirmation.zeroize();
             dialog.mode = VaultMode::Passkey;
+            self.log(Action::VaultDialogOpen, Outcome::Succeeded);
+        }
+        if use_password {
+            dialog.password.zeroize();
+            dialog.error.clear();
+            dialog.mode = VaultMode::Unlock;
             self.log(Action::VaultDialogOpen, Outcome::Succeeded);
         }
         if let Some((slot, name)) = rename {
@@ -3911,6 +3961,47 @@ mod tests {
         app.received("vault_upgrade", status);
         assert_eq!(app.schema_upgrade_prompt, None);
         assert_eq!(commands.recv().unwrap()["action"], "list");
+    }
+
+    #[test]
+    fn preferred_passkey_starts_once_when_the_vault_is_locked_at_launch() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = RuntimePaths {
+            store: directory.path().join("hosts.db"),
+            debug: true,
+            debug_allow_passkey: true,
+        };
+        let ctx = egui::Context::default();
+        let audit = AuditLog::new(directory.path()).unwrap();
+        let (requests, commands) = mpsc::channel();
+        let (_events, results) = mpsc::channel();
+        let mut app = ManagementApp::initialize(
+            &ctx,
+            paths,
+            audit,
+            Worker {
+                requests,
+                events: results,
+            },
+        );
+        assert_eq!(commands.recv().unwrap()["action"], "storage_status");
+        app.passkey_allowed = true;
+        app.preferences.unlock_method = UnlockMethod::SecurityKey;
+        let locked = json!({"encrypted":true, "locked":true});
+        app.received("storage_status", locked.clone());
+        let dialog = app.vault_dialog.as_ref().unwrap();
+        assert_eq!(dialog.mode, VaultMode::Passkey);
+        assert!(!dialog.hello);
+        if cfg!(target_os = "windows") {
+            let request = commands.recv().unwrap();
+            assert_eq!(request["action"], "vault_unlock_passkey");
+            assert_eq!(request["hello"], false);
+        }
+        // Locking again later shows the plain dialog instead of prompting by surprise.
+        app.busy = false;
+        app.received("storage_status", locked);
+        assert_eq!(app.vault_dialog.as_ref().unwrap().mode, VaultMode::Unlock);
+        assert!(commands.try_recv().is_err());
     }
 
     fn rendered_text(ctx: &egui::Context, mut draw: impl FnMut(&mut egui::Ui)) -> String {

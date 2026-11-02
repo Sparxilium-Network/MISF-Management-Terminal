@@ -103,6 +103,41 @@ impl Density {
     }
 }
 
+/// How a locked vault asks to be unlocked when the app starts.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum UnlockMethod {
+    /// The password field; a passkey is one click away.
+    #[default]
+    Password,
+    /// Starts Windows Hello right away.
+    WindowsHello,
+    /// Starts a FIDO2 security key right away.
+    SecurityKey,
+}
+
+impl UnlockMethod {
+    #[cfg(target_os = "windows")]
+    pub const ALL: &[Self] = &[Self::Password, Self::WindowsHello, Self::SecurityKey];
+    #[cfg(not(target_os = "windows"))]
+    pub const ALL: &[Self] = &[Self::Password, Self::SecurityKey];
+
+    fn code(self) -> &'static str {
+        match self {
+            Self::Password => "password",
+            Self::WindowsHello => "windows_hello",
+            Self::SecurityKey => "security_key",
+        }
+    }
+
+    pub fn label(self, t: Translator) -> &'static str {
+        match self {
+            Self::Password => t.get("auth.password"),
+            Self::WindowsHello => "Windows Hello",
+            Self::SecurityKey => t.get("unlock_method.security_key"),
+        }
+    }
+}
+
 /// How the batch table orders its hosts.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum BatchOrder {
@@ -220,6 +255,7 @@ pub struct Preferences {
     /// Where the ungrouped hosts sit among the groups; `None` puts them last.
     pub ungrouped_at: Option<usize>,
     pub ungrouped_collapsed: bool,
+    pub unlock_method: UnlockMethod,
 }
 
 impl Preferences {
@@ -274,6 +310,10 @@ impl Preferences {
                 .as_str()
                 .and_then(|code| BatchOrder::ALL.into_iter().find(|o| o.code() == code))
                 .unwrap_or_default(),
+            unlock_method: value["unlock_method"]
+                .as_str()
+                .and_then(|code| UnlockMethod::ALL.iter().copied().find(|m| m.code() == code))
+                .unwrap_or_default(),
         })
     }
 
@@ -297,6 +337,7 @@ impl Preferences {
                 "ungrouped_collapsed": self.ungrouped_collapsed,
             },
             "batch_order": self.batch_order.code(),
+            "unlock_method": self.unlock_method.code(),
         });
         if let Some(window) = self.window {
             value["window"] = json!({
@@ -397,6 +438,7 @@ mod tests {
             density: Density::Compact,
             ungrouped_at: Some(1),
             ungrouped_collapsed: true,
+            unlock_method: UnlockMethod::SecurityKey,
             ..Default::default()
         };
         preferences.save(&path).unwrap();
@@ -407,6 +449,7 @@ mod tests {
         assert_eq!(loaded.density, Density::Compact);
         assert_eq!(loaded.ungrouped_at, Some(1));
         assert!(loaded.ungrouped_collapsed);
+        assert_eq!(loaded.unlock_method, UnlockMethod::SecurityKey);
         // The custom choice is kept while another level is shown.
         let name_only = Preferences {
             host_detail: HostDetail::NameOnly,
@@ -427,5 +470,6 @@ mod tests {
         assert_eq!(loaded.batch_order, BatchOrder::Pending);
         assert_eq!(loaded.density, Density::Comfortable);
         assert_eq!(loaded.ungrouped_at, None);
+        assert_eq!(loaded.unlock_method, UnlockMethod::Password);
     }
 }
