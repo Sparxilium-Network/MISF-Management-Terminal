@@ -53,7 +53,7 @@ Linux／macOS 可使用 `cargo run --locked -p misf`，須在對應平台建置�
 
 - 主機與憑證存於 `hosts.db`（SQLite，檔頭 `user_version` 記錄結構版本，目前為 v4）。開啟較舊版本會先在同目錄備份 `hosts.v<N>.bak.db`，再於單一交易內自動升級；較新版本、非 MISF、損壞或結構遭改動的資料庫一律拒絕開啟並保留原檔。每個版本的升級各自在 `core/src/db_upgrade/` 一個檔案。
 - 從 JSON 版本升級時，第一次讀取會把同目錄的 `hosts.json` 匯入新的 `hosts.db`，原 JSON 保持不變（之後的修改只寫入 SQLite）。
-- 非敏感偏好存於未加密的 `ui-settings.json`（`version: 1`）：語言、外觀、主視窗大小與是否最大化、設定視窗大小，以及主機清單顯示 `host_list`（等級 `detail`、自訂 `fields`、密集度 `density`：`comfortable`／`compact`，以及「未分類」在分類間的位置 `ungrouped_at`，省略時排在最後；`ungrouped_collapsed` 為其收合狀態）、批次作業排序 `batch_order`（`sidebar`／`pending`／`recent`／`name`）、批次表格欄位 `batch_columns`（`shown` 為顯示的欄位代碼，主機欄一律顯示；`weights` 為各欄寬度比例，限制在 0.2–10），以及預設解鎖方式 `unlock_method`（`password`／`windows_hello`／`security_key`；只在啟動時第一次遇到鎖定才自動開始）。不保存憑證，主機庫鎖定時也能讀寫。
+- 非敏感偏好存於未加密的 `ui-settings.json`（`version: 1`）：語言、外觀、主視窗大小與是否最大化、設定視窗大小，以及主機清單顯示 `host_list`（等級 `detail`、自訂 `fields`、密集度 `density`：`comfortable`／`compact`，以及「未分類」在分類間的位置 `ungrouped_at`，省略時排在最後；`ungrouped_collapsed` 為其收合狀態）、批次作業排序 `batch_order`（`sidebar`／`pending`／`recent`／`name`）、套件明細位置 `batch_detail`（`inline` 表格下方／`popup` 雙擊開啟視窗）、批次表格欄位 `batch_columns`（`shown` 為顯示的欄位代碼，主機欄一律顯示；`weights` 為各欄寬度比例，限制在 0.2–10），以及預設解鎖方式 `unlock_method`（`password`／`windows_hello`／`security_key`；只在啟動時第一次遇到鎖定才自動開始）。不保存憑證，主機庫鎖定時也能讀寫。
 - 主機清單的分類、順序與收合狀態存於主機庫（`host_groups` 資料表與 `hosts.group_id`）。
 - 主機資料序列化內容上限 64 MiB。
 

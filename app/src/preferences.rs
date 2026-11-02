@@ -173,6 +173,34 @@ impl BatchOrder {
     }
 }
 
+/// Where the batch view shows the chosen host's packages.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum BatchDetail {
+    /// Under the table, with previous and next buttons.
+    #[default]
+    Inline,
+    /// In a window opened by double-clicking a host.
+    Popup,
+}
+
+impl BatchDetail {
+    pub const ALL: [Self; 2] = [Self::Inline, Self::Popup];
+
+    fn code(self) -> &'static str {
+        match self {
+            Self::Inline => "inline",
+            Self::Popup => "popup",
+        }
+    }
+
+    pub fn label(self, t: Translator) -> &'static str {
+        match self {
+            Self::Inline => t.get("batch_detail.inline"),
+            Self::Popup => t.get("batch_detail.popup"),
+        }
+    }
+}
+
 /// A column of the batch table, besides the checkbox.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum BatchColumn {
@@ -396,6 +424,7 @@ pub struct Preferences {
     pub host_fields: HostFields,
     pub batch_order: BatchOrder,
     pub batch_columns: BatchColumns,
+    pub batch_detail: BatchDetail,
     pub density: Density,
     /// Where the ungrouped hosts sit among the groups; `None` puts them last.
     pub ungrouped_at: Option<usize>,
@@ -456,6 +485,10 @@ impl Preferences {
                 .and_then(|code| BatchOrder::ALL.into_iter().find(|o| o.code() == code))
                 .unwrap_or_default(),
             batch_columns: BatchColumns::from_json(&value["batch_columns"]),
+            batch_detail: value["batch_detail"]
+                .as_str()
+                .and_then(|code| BatchDetail::ALL.into_iter().find(|d| d.code() == code))
+                .unwrap_or_default(),
             unlock_method: value["unlock_method"]
                 .as_str()
                 .and_then(|code| UnlockMethod::ALL.iter().copied().find(|m| m.code() == code))
@@ -484,6 +517,7 @@ impl Preferences {
             },
             "batch_order": self.batch_order.code(),
             "batch_columns": self.batch_columns.to_json(),
+            "batch_detail": self.batch_detail.code(),
             "unlock_method": self.unlock_method.code(),
         });
         if let Some(window) = self.window {
@@ -591,6 +625,7 @@ mod tests {
             ungrouped_collapsed: true,
             unlock_method: UnlockMethod::SecurityKey,
             batch_columns: columns,
+            batch_detail: BatchDetail::Popup,
             ..Default::default()
         };
         preferences.save(&path).unwrap();
@@ -603,6 +638,7 @@ mod tests {
         assert!(loaded.ungrouped_collapsed);
         assert_eq!(loaded.unlock_method, UnlockMethod::SecurityKey);
         assert_eq!(loaded.batch_columns, columns);
+        assert_eq!(loaded.batch_detail, BatchDetail::Popup);
         let shown: Vec<_> = columns.visible().into_iter().map(|(_, c)| c).collect();
         assert_eq!(
             shown[..3],
@@ -630,6 +666,7 @@ mod tests {
         assert_eq!(loaded.ungrouped_at, None);
         assert_eq!(loaded.unlock_method, UnlockMethod::Password);
         assert_eq!(loaded.batch_columns, BatchColumns::default());
+        assert_eq!(loaded.batch_detail, BatchDetail::Inline);
         // Hiding the host column is ignored; unusable widths are clamped.
         std::fs::write(
             &path,

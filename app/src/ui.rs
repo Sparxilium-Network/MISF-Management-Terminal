@@ -1,8 +1,8 @@
 use crate::{
     i18n::{Language, Translator},
     preferences::{
-        BatchColumn, BatchOrder, Density, HostDetail, Preferences, SETTINGS_DEFAULT, SETTINGS_MIN,
-        UnlockMethod, WindowSize,
+        BatchColumn, BatchDetail, BatchOrder, Density, HostDetail, Preferences, SETTINGS_DEFAULT,
+        SETTINGS_MIN, UnlockMethod, WindowSize,
     },
     theme::{self, Appearance, Palette},
     worker::{Event, Worker},
@@ -258,6 +258,8 @@ pub struct ManagementApp {
     tab: usize,
     view: View,
     batch_selected: BTreeSet<String>,
+    /// Whether the chosen host's packages are open in a window ([`BatchDetail::Popup`]).
+    batch_popup: bool,
     /// The one package manager the batch selection may contain.
     batch_manager: String,
     upgrade_confirm: Option<UpgradeConfirm>,
@@ -331,6 +333,7 @@ impl ManagementApp {
             tab: 0,
             view: View::Host,
             batch_selected: BTreeSet::new(),
+            batch_popup: false,
             batch_manager: String::new(),
             upgrade_confirm: None,
             encrypted: false,
@@ -666,6 +669,20 @@ impl ManagementApp {
                                     &mut self.preferences.batch_order,
                                     order,
                                     order.label(t),
+                                );
+                            }
+                        });
+                    ui.end_row();
+                    ui.label(t.get("batch_detail.title"));
+                    egui::ComboBox::from_id_salt("batch_detail")
+                        .selected_text(self.preferences.batch_detail.label(t))
+                        .width(165.0)
+                        .show_ui(ui, |ui| {
+                            for detail in BatchDetail::ALL {
+                                ui.selectable_value(
+                                    &mut self.preferences.batch_detail,
+                                    detail,
+                                    detail.label(t),
                                 );
                             }
                         });
@@ -2282,10 +2299,49 @@ impl ManagementApp {
                 .auto_shrink([false, true])
                 .show(ui, |ui| self.batch_table(ui, t, rows, &headings, &ready));
         });
-        ui.add_space(12.0);
         let Some(host) = self.current().cloned() else {
+            self.batch_popup = false;
             return;
         };
+        if self.preferences.batch_detail == BatchDetail::Inline {
+            self.batch_popup = false;
+            ui.add_space(12.0);
+            self.batch_detail_heading(ui, t, &host, &order);
+            self.result_panel(ui, &host, (viewport_height - 560.0).max(160.0));
+            return;
+        }
+        if !self.batch_popup {
+            return;
+        }
+        let screen = ui.ctx().content_rect();
+        let modal = egui::Modal::new(egui::Id::unique("batch_detail")).show(ui.ctx(), |ui| {
+            ui.set_width((screen.width() - 120.0).clamp(480.0, 1400.0));
+            let close = ui
+                .horizontal(|ui| {
+                    self.batch_detail_heading(ui, t, &host, &order);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.button(t.get("common.close")).clicked()
+                    })
+                    .inner
+                })
+                .inner;
+            self.result_panel(ui, &host, (screen.height() - 300.0).max(160.0));
+            close
+        });
+        // Escape and a click outside close it too.
+        if modal.inner || modal.should_close() {
+            self.batch_popup = false;
+        }
+    }
+
+    /// Previous and next buttons and the title above the chosen host's packages.
+    fn batch_detail_heading(
+        &mut self,
+        ui: &mut egui::Ui,
+        t: Translator,
+        host: &Host,
+        order: &[usize],
+    ) {
         ui.horizontal(|ui| {
             // Previous and next follow the table's sorted order.
             let index = order.iter().position(|&i| self.hosts[i].id == host.id);
@@ -2316,7 +2372,6 @@ impl ManagementApp {
                     .strong(),
             );
         });
-        self.result_panel(ui, &host, (viewport_height - 560.0).max(160.0));
     }
 
     /// Host indexes in table order, and in sidebar order each group's heading:
@@ -2480,9 +2535,17 @@ impl ManagementApp {
                 match column {
                     BatchColumn::Host => {
                         let button = egui::Button::selectable(self.selected == data.id, text);
-                        if cell.add(button.truncate()).clicked() {
+                        let popup = self.preferences.batch_detail == BatchDetail::Popup;
+                        let mut response = cell.add(button.truncate());
+                        if popup {
+                            response = response.on_hover_text(t.get("batch_detail.open_hint"));
+                        }
+                        if response.clicked() {
                             self.selected = data.id.clone();
                             self.log(Action::HostSelect, Outcome::Succeeded);
+                        }
+                        if popup && response.double_clicked() {
+                            self.batch_popup = true;
                         }
                     }
                     BatchColumn::Status => {
@@ -4584,5 +4647,40 @@ mod tests {
         assert!(find(&labels, t.get("batch.system")).left() > system.left() + 100.0);
         let saved = crate::preferences::Preferences::load(&app.settings_path).unwrap();
         assert!(saved.batch_columns.weights[0] > 2.5);
+
+        // In popup mode the packages wait for a double-click and Escape closes them.
+        let title = |name: &str| t.format("batch.detail", &[("name", name.into())]);
+        let drawn = |labels: &[(String, egui::Rect)], text: &str| {
+            labels.iter().any(|(drawn, _)| drawn == text)
+        };
+        let labels = frame(&mut app, vec![]);
+        assert!(drawn(&labels, &title(&app.current().unwrap().name)));
+        app.preferences.batch_detail = BatchDetail::Popup;
+        let labels = frame(&mut app, vec![]);
+        assert!(
+            !labels
+                .iter()
+                .any(|(text, _)| text.starts_with("Packages on"))
+        );
+        let host = find(&labels, "bravo").center();
+        frame(&mut app, vec![egui::Event::PointerMoved(host)]);
+        for pressed in [true, false, true, false] {
+            frame(&mut app, vec![button(host, pressed)]);
+        }
+        frame(&mut app, vec![]);
+        let labels = frame(&mut app, vec![]);
+        assert_eq!(app.selected, "bravo");
+        assert!(drawn(&labels, &title("bravo")));
+        let escape = egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Default::default(),
+        };
+        frame(&mut app, vec![escape]);
+        let labels = frame(&mut app, vec![]);
+        assert!(!app.batch_popup);
+        assert!(!drawn(&labels, &title("bravo")));
     }
 }
