@@ -1107,11 +1107,7 @@ impl ManagementApp {
         let (rect, response) =
             ui.allocate_exact_size(egui::vec2(ui.available_width(), height), sense);
         let name = group.map_or(t.get("group.ungrouped"), |g| g.name.as_str());
-        let arrow = match group {
-            None => "",
-            Some(_) if collapsed => "▸ ",
-            Some(_) => "▾ ",
-        };
+        let arrow = if collapsed { "▸ " } else { "▾ " };
         let color = if response.hovered() && !searching {
             Color32::from_rgb(220, 231, 245)
         } else {
@@ -1135,11 +1131,17 @@ impl ManagementApp {
         if searching {
             return;
         }
-        // The ungrouped heading moves like a group but has nothing to collapse or rename.
         response.dnd_set_drag_payload(DragItem::Group(
             group.map_or(String::new(), |g| g.id.clone()),
         ));
+        // The ungrouped heading moves and collapses like a group, but is never renamed or deleted.
         let Some(group) = group else {
+            if response.clicked() {
+                self.preferences.ungrouped_collapsed = !collapsed;
+                if let Err(error) = self.preferences.save(&self.settings_path) {
+                    self.error = Some(t.format("settings.save_error", &[("error", error)]));
+                }
+            }
             return;
         };
         if response.clicked() {
@@ -1605,7 +1607,10 @@ impl ManagementApp {
                         continue;
                     }
                     let group = self.groups.iter().find(|g| g.id == group_id).cloned();
-                    let collapsed = !searching && group.as_ref().is_some_and(|g| g.collapsed);
+                    let collapsed = !searching
+                        && group
+                            .as_ref()
+                            .map_or(self.preferences.ungrouped_collapsed, |g| g.collapsed);
                     let top = ui.cursor().top();
                     if show_headers {
                         self.group_header(ui, group.as_ref(), hosts.len(), collapsed, searching);
@@ -4158,7 +4163,10 @@ mod tests {
         assert_eq!(app.selected, "bravo");
 
         // The ungrouped heading above the first group: only the preference changes.
-        let ungrouped = Translator(app.preferences.language).get("group.ungrouped");
+        let ungrouped = &format!(
+            "▾ {}",
+            Translator(app.preferences.language).get("group.ungrouped")
+        );
         let labels = frame(&mut app, vec![]);
         let (heading, first) = (find(&labels, ungrouped), find(&labels, "▾ First"));
         drag(
@@ -4170,6 +4178,34 @@ mod tests {
         assert_eq!(app.preferences.ungrouped_at, Some(0));
         let labels = frame(&mut app, vec![]);
         assert!(find(&labels, ungrouped).top() < find(&labels, "▾ First").top());
+
+        // A click on the ungrouped heading collapses it like a group.
+        let heading = find(&labels, ungrouped);
+        frame(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(heading.center()),
+                egui::Event::PointerButton {
+                    pos: heading.center(),
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Default::default(),
+                },
+            ],
+        );
+        frame(
+            &mut app,
+            vec![egui::Event::PointerButton {
+                pos: heading.center(),
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            }],
+        );
+        assert!(app.preferences.ungrouped_collapsed);
+        let labels = frame(&mut app, vec![]);
+        assert!(labels.iter().all(|(text, _)| !text.starts_with("alpha")));
+        app.preferences.ungrouped_collapsed = false;
 
         // Compact rows are drawn too, with grouped hosts indented past ungrouped ones.
         app.preferences.density = Density::Compact;

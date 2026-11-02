@@ -219,6 +219,7 @@ pub struct Preferences {
     pub density: Density,
     /// Where the ungrouped hosts sit among the groups; `None` puts them last.
     pub ungrouped_at: Option<usize>,
+    pub ungrouped_collapsed: bool,
 }
 
 impl Preferences {
@@ -266,6 +267,9 @@ impl Preferences {
             ungrouped_at: value["host_list"]["ungrouped_at"]
                 .as_u64()
                 .and_then(|at| usize::try_from(at).ok()),
+            ungrouped_collapsed: value["host_list"]["ungrouped_collapsed"]
+                .as_bool()
+                .unwrap_or(false),
             batch_order: value["batch_order"]
                 .as_str()
                 .and_then(|code| BatchOrder::ALL.into_iter().find(|o| o.code() == code))
@@ -290,6 +294,7 @@ impl Preferences {
                     .collect::<Vec<_>>(),
                 "density": self.density.code(),
                 "ungrouped_at": self.ungrouped_at,
+                "ungrouped_collapsed": self.ungrouped_collapsed,
             },
             "batch_order": self.batch_order.code(),
         });
@@ -391,6 +396,7 @@ mod tests {
             batch_order: BatchOrder::Sidebar,
             density: Density::Compact,
             ungrouped_at: Some(1),
+            ungrouped_collapsed: true,
             ..Default::default()
         };
         preferences.save(&path).unwrap();
@@ -400,6 +406,7 @@ mod tests {
         assert_eq!(loaded.batch_order, BatchOrder::Sidebar);
         assert_eq!(loaded.density, Density::Compact);
         assert_eq!(loaded.ungrouped_at, Some(1));
+        assert!(loaded.ungrouped_collapsed);
         // The custom choice is kept while another level is shown.
         let name_only = Preferences {
             host_detail: HostDetail::NameOnly,
