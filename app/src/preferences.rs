@@ -109,7 +109,9 @@ pub enum UnlockMethod {
     /// The password field; a passkey is one click away.
     #[default]
     Password,
-    /// Starts Windows Hello right away.
+    /// Starts Windows Hello right away. Other platforms never load it, since it is not in
+    /// [`UnlockMethod::ALL`] there, and fall back to the password.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     WindowsHello,
     /// Starts a FIDO2 security key right away.
     SecurityKey,
