@@ -51,9 +51,9 @@ dependencies = [
 
 [[package]]
 name = "aes"
-version = "0.9.3"
+version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "35f0f96ce78e38c3dc6d8948aa8163d06385be74000f3c7a95bf1eef35d3ea32"
+checksum = "fc0fc36d7440d015b45468ba08a21e80e056ebbd014c611c6298bb7503e04bd1"
 dependencies = [
  "cipher 0.5.2",
  "cpubits",
@@ -82,7 +82,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f2b8006a0c83f52b62ba44a97b58bf76fe2f70a329e588f67f89691d93d498f"
 dependencies = [
  "aead 0.6.1",
- "aes 0.9.3",
+ "aes 0.9.4",
  "cipher 0.5.2",
  "ctr 0.10.1",
  "ctutils",
@@ -2170,7 +2170,7 @@ dependencies = [
 name = "luksbox-fido2"
 version = "0.6.1"
 dependencies = [
- "aes 0.9.3",
+ "aes 0.9.4",
  "bindgen",
  "getrandom 0.4.3",
  "hmac 0.13.0",
@@ -3068,7 +3068,7 @@ version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "63d440a804ec8d6fafbb6b84471e013286658d373248927692ab3366686220ca"
 dependencies = [
- "aes 0.9.3",
+ "aes 0.9.4",
  "aes-gcm 0.11.1",
  "cbc",
  "der",
@@ -3536,7 +3536,7 @@ version = "0.65.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3bb77a4b259312b2abbc541bca1c13cb4e9b61c560a7fd894068c3b92e0c9dc3"
 dependencies = [
- "aes 0.9.3",
+ "aes 0.9.4",
  "bitflags 2.13.2",
  "block-padding",
  "byteorder",
@@ -4043,7 +4043,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d801accda99469cde6d73da741422610fdf6508a72d9a69d1b55cb241c720597"
 dependencies = [
  "aead 0.6.1",
- "aes 0.9.3",
+ "aes 0.9.4",
  "aes-gcm 0.11.1",
  "chacha20 0.10.2",
  "cipher 0.5.2",
