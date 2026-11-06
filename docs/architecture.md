@@ -1,5 +1,7 @@
 # MISF Management Terminal：全 Rust 原生桌面
 
+> 最後修改：2026-11-07 ｜ 基於 commit：`af2c75e`
+
 > [!WARNING]
 > **本專案仍處於開發階段，請勿用於正式環境。**
 > 相關安全保護機制尚未完善。

@@ -1,5 +1,7 @@
 # Passkey 實體測試
 
+> 最後修改：2026-11-07 ｜ 基於 commit：`af2c75e`
+
 使用空的測試資料目錄與測試用驗證器。以下流程不讀取預設主機庫；`--debug.allow-passkey` 明確允許註冊真實憑證，外部 SSH 與備份限制維持啟用。不需要重設金鑰、清除 PIN 或刪除現有 Passkey。
 
 ```powershell

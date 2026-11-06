@@ -1,5 +1,7 @@
 # 依賴更新與安全公告
 
+> 最後修改：2026-11-07 ｜ 基於 commit：`af2c75e`
+
 檢查日期：2026-10-30（Asia/Taipei）。來源為 crates.io 官方 API、Cargo
 registry 與 RustSec。應用程式及本機 FIDO2 副本的直接 registry 依賴已對齊當日
 最新穩定版，共核對 27 種直接 registry 套件（含同日加入的圖示建置套件）；`Cargo.lock` 保存可重現的實際版本。未為了版本數字而強制覆蓋上游

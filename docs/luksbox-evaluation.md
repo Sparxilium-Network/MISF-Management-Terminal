@@ -1,11 +1,13 @@
 # LUKSbox 整合評估與實作
 
+> 最後修改：2026-11-07 ｜ 基於 commit：`af2c75e`
+
 評估日期：2026-10-28 至 2026-10-29（Asia/Taipei）。使用 PentHertz/LUKSbox v0.6.1，固定 Git commit
 `69448f708f1328d672deb595e359579d630cb0b0`；不追蹤浮動 main。
 
 ## 結論與範圍
 
-Windows MSVC 的隔離原型已驗證可直接以 Rust 函式庫建立容器、用兩組密碼解鎖並讀寫檔案，不需掛載驅動。依使用者選擇，MISF 加入「可選的加密本機主機庫」，保留原生 Rust UI；現有使用者需在介面主動啟用。
+Windows MSVC 的隔離原型已驗證可直接以 Rust 函式庫建立容器、用兩組密碼解鎖並讀寫檔案，不需掛載驅動。依使用者選擇，MISF 最初加入「可選的加密本機主機庫」，保留原生 Rust UI。2026-11 起改為強制加密，不再提供未加密模式；舊版明文主機庫只在建立加密主機庫時轉入。
 
 採用 upstream core／format／VFS／FIDO2；容器內保存單一 SQLite 映像 `/hosts.db`（舊容器為 `/hosts.json`，下次儲存時轉換），其內容、SSH 憑證、套件結果及 VFS 中繼資料都經上游加密。未自行設計新容器格式。最多 8 個密碼／Passkey keyslot 彼此獨立解鎖，支援指定槽撤銷；不接入掛載層。Apache-2.0 的 LICENSE 與 NOTICE 一併發佈。
 

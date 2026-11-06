@@ -1,15 +1,25 @@
 # MISF Management Terminal 開發說明
 
-一般使用方式見 [README](../README.md)。本文件給開發者與維護者，記錄建置、儲存格式、安全設計細節與測試方式。
+> 最後修改：2026-11-07 ｜ 基於 commit：`af2c75e`
+
+一般使用方式見 [README](../README.md) 與 [使用指南](user-guide.md)。本文件是開發文件的入口，給開發者與維護者，記錄建置、儲存格式、安全設計細節與測試方式。
 
 全 Rust 原生桌面客戶端，以 eframe／egui 繪製畫面，內建 Rust SSH 核心。畫面與核心編譯成同一個執行檔，不需要 Java、瀏覽器或管理伺服器。
+
+## 開發文件索引
+
+| 文件 | 內容 |
+| --- | --- |
+| [架構](architecture.md) | 目前實作架構、資料表與 JSON 協定 |
+| [依賴更新與安全公告](dependency-updates.md) | 依賴版本、更新紀錄與尚未修補的公告 |
+| [LUKSbox 整合評估](luksbox-evaluation.md) | 加密主機庫的評估、整合方式與限制 |
+| [Passkey 實體測試](passkey-testing.md) | 以實體驗證器測試 Passkey 的程序 |
 
 ## 結構
 
 - `app/`：eframe／egui 原生 UI；背景執行緒執行網路及磁碟作業。
 - `core/`：主機資料、SSH 及套件管理核心；亦提供 stdin/stdout JSON CLI。
 - CLI 的加密工作階段只存在同一程序內；可透過 stdin 傳入 JSON 請求陣列，依序執行解鎖、操作與鎖定。不要把解鎖密碼放進命令列參數。
-- [架構](architecture.md)：目前實作架構、資料表與 JSON 協定。
 
 ## 啟動與打包
 
