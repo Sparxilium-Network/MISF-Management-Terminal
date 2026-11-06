@@ -162,6 +162,18 @@ fn outcome(succeeded: bool) -> Outcome {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Hosts live only in a vault, so a test profile creates one first.
+    async fn create_vault(session: &mut Session) {
+        session
+            .handle(
+                json!({"action":"vault_create","passphrase":"test vault 2026"}),
+                &|_| {},
+            )
+            .await
+            .unwrap();
+    }
+
     #[tokio::test]
     async fn debug_blocks_remote_network_and_authenticator_and_logs_only_metadata() {
         let dir = tempfile::tempdir().unwrap();
@@ -172,6 +184,7 @@ mod tests {
         };
         let log = AuditLog::new(dir.path()).unwrap();
         let mut session = Session::new(&paths, log);
+        create_vault(&mut session).await;
         let host = Host {
             id: "test".into(),
             name: "example".into(),
@@ -211,7 +224,8 @@ mod tests {
         for secret in ["192.0.2.10", "secret-sentinel", "root"] {
             assert!(!text.contains(secret));
         }
-        assert_eq!(text.lines().count(), 5);
+        // Creating the vault adds two records.
+        assert_eq!(text.lines().count(), 7);
         assert!(text.contains("blocked"));
     }
 
@@ -276,6 +290,7 @@ mod tests {
             debug_allow_passkey: false,
         };
         let mut session = Session::new(&paths, AuditLog::new(dir.path()).unwrap());
+        create_vault(&mut session).await;
         for (id, name, address) in [
             ("local", "loopback", "127.0.0.1"),
             ("remote", "external", "192.0.2.10"),

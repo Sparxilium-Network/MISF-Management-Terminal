@@ -14,6 +14,7 @@ use misf_core::{
     audit::{Action, AuditLog, Outcome},
     runtime::RuntimePaths,
     ssh,
+    vault::{MIN_PASSPHRASE_CHARS, PassphraseProblem, passphrase_problem},
 };
 use serde_json::{Value, json};
 use std::{collections::BTreeSet, path::PathBuf};
@@ -502,7 +503,7 @@ impl ManagementApp {
             RichText::new(if self.encrypted {
                 t.get("storage.encrypted")
             } else {
-                t.get("storage.plaintext")
+                t.get("storage.not_created")
             })
             .color(palette.warning),
         );
@@ -510,7 +511,7 @@ impl ManagementApp {
         ui.add_space(10.0);
         ui.add_enabled_ui(!self.busy, |ui| {
             if !self.encrypted {
-                ui.label(t.get("settings.vault_plaintext"));
+                ui.label(t.get("settings.vault_not_created"));
                 ui.add_space(6.0);
                 if ui.button(t.get("vault.enable_button")).clicked() {
                     self.open_vault_dialog(VaultMode::Create);
@@ -827,7 +828,14 @@ impl ManagementApp {
         match action {
             "storage_status" => {
                 self.apply_storage(&data);
-                if self.locked {
+                if !self.encrypted {
+                    // There is no unencrypted mode: a vault must exist before any host.
+                    self.clear_host_cache();
+                    if self.vault_dialog.is_none() {
+                        self.open_vault_dialog(VaultMode::Create);
+                    }
+                    self.status = t.get("vault.setup_required").into();
+                } else if self.locked {
                     self.clear_host_cache();
                     self.open_vault_dialog(VaultMode::Unlock);
                     self.status = t.get("vault.locked").into();
@@ -1749,15 +1757,31 @@ impl ManagementApp {
                     .color(palette.muted),
             );
             ui.add_space(12.0);
-            ui.heading(RichText::new(t.get("vault.locked")).size(29.0));
-            ui.label(t.get("vault.unlock_description"));
+            let setup = !self.encrypted;
+            ui.heading(
+                RichText::new(if setup {
+                    t.get("vault.setup_heading")
+                } else {
+                    t.get("vault.locked")
+                })
+                .size(29.0),
+            );
+            ui.label(if setup {
+                t.get("vault.setup_description")
+            } else {
+                t.get("vault.unlock_description")
+            });
             ui.add_space(24.0);
             card(ui).show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
                 ui.add_space(15.0);
                 ui.label(t.get("vault.algorithm"));
                 ui.add_space(12.0);
-                if ui.add(primary(t.get("vault.unlock_host"))).clicked() {
+                if setup {
+                    if ui.add(primary(t.get("vault.enable_button"))).clicked() {
+                        self.open_vault_dialog(VaultMode::Create);
+                    }
+                } else if ui.add(primary(t.get("vault.unlock_host"))).clicked() {
                     self.open_vault_dialog(VaultMode::Unlock);
                 }
                 ui.add_space(15.0);
@@ -2728,7 +2752,7 @@ impl ManagementApp {
                 RichText::new(if self.encrypted {
                     t.get("storage.encrypted")
                 } else {
-                    t.get("storage.plaintext")
+                    t.get("storage.not_created")
                 })
                 .size(11.0)
                 .color(palette.warning),
@@ -3266,7 +3290,10 @@ impl ManagementApp {
                     if dialog.mode == VaultMode::Create {
                         ui.label(t.get("vault.create_description"));
                         ui.colored_label(palette.warning, t.get("vault.experimental"));
-                        ui.label(t.get("vault.retain_plaintext"));
+                        // Only an older profile has unencrypted hosts to convert.
+                        if self.plaintext_exists {
+                            ui.label(t.get("vault.retain_plaintext"));
+                        }
                     }
                     if dialog.mode != VaultMode::Unlock {
                         field(
@@ -3381,8 +3408,17 @@ impl ManagementApp {
                 self.send(json!({"action":action,"hello":dialog.hello,"name":dialog.name,"pin":std::mem::take(&mut dialog.password)}));
             } else if dialog.mode != VaultMode::Unlock && dialog.password != dialog.confirmation {
                 dialog.error = t.get("vault.password_mismatch").into();
-            } else if dialog.mode != VaultMode::Unlock && dialog.password.chars().count() < 12 {
-                dialog.error = t.get("vault.password_short").into();
+            } else if let Some(problem) = (dialog.mode != VaultMode::Unlock)
+                .then(|| passphrase_problem(&dialog.password))
+                .flatten()
+            {
+                dialog.error = match problem {
+                    PassphraseProblem::TooShort => t.format(
+                        "vault.password_short",
+                        &[("min", MIN_PASSPHRASE_CHARS.to_string())],
+                    ),
+                    PassphraseProblem::TooFewKinds => t.get("vault.password_kinds").into(),
+                };
             } else if dialog.password.is_empty() {
                 dialog.error = t.get("vault.password_required").into();
             } else {
@@ -3650,13 +3686,9 @@ impl ManagementApp {
                                 false,
                             );
                             ui.label(
-                                RichText::new(if self.encrypted {
-                                    t.get("storage.credentials_encrypted")
-                                } else {
-                                    t.get("storage.credentials_plaintext")
-                                })
-                                .size(12.0)
-                                .color(palette.muted),
+                                RichText::new(t.get("storage.credentials_encrypted"))
+                                    .size(12.0)
+                                    .color(palette.muted),
                             );
                             if !editor.error.is_empty() {
                                 ui.colored_label(palette.error, &editor.error);
@@ -4089,10 +4121,17 @@ mod tests {
         );
         assert_eq!(commands.recv().unwrap()["action"], "storage_status");
         let full_path = directory.path().join("hosts.db").display().to_string();
-        let mut status = json!({"encrypted":false, "locked":false, "plaintext_exists":true, "plaintext_path":full_path});
+        let mut status = json!({"encrypted":false, "locked":true, "plaintext_exists":true, "plaintext_path":full_path});
+        // No vault yet: setup opens at once, and no host is ever read unencrypted.
         app.received("storage_status", status.clone());
         assert!(!app.plaintext_delete_prompt);
-        assert_eq!(commands.recv().unwrap()["action"], "list");
+        assert!(
+            app.vault_dialog
+                .as_ref()
+                .is_some_and(|dialog| dialog.mode == VaultMode::Create)
+        );
+        assert!(commands.try_recv().is_err());
+        app.vault_dialog = None;
         status["encrypted"] = json!(true);
         status["locked"] = json!(true);
         app.received("storage_status", status.clone());

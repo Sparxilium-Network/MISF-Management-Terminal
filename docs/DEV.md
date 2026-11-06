@@ -51,8 +51,8 @@ Linux／macOS 可使用 `cargo run --locked -p misf`，須在對應平台建置�
 
 預設資料目錄為使用者目錄下的 `.misf-management/`，可用 `MISF_DATA_DIR` 改變。
 
-- 主機與憑證存於 `hosts.db`（SQLite，檔頭 `user_version` 記錄結構版本，目前為 v4）。開啟較舊版本會先在同目錄備份 `hosts.v<N>.bak.db`，再於單一交易內自動升級；較新版本、非 MISF、損壞或結構遭改動的資料庫一律拒絕開啟並保留原檔。每個版本的升級各自在 `core/src/db_upgrade/` 一個檔案。
-- 從 JSON 版本升級時，第一次讀取會把同目錄的 `hosts.json` 匯入新的 `hosts.db`，原 JSON 保持不變（之後的修改只寫入 SQLite）。
+- 主機與憑證只存於 LUKSbox 容器 `hosts.lbx` 內的 SQLite 映像（檔頭 `user_version` 記錄結構版本，目前為 v4），不提供未加密模式；尚未建立容器時，所有主機請求都會被拒絕。舊版留下的未加密 `hosts.db` 只在 `vault_create` 時讀取並轉入，讀取時較舊版本會先在同目錄備份 `hosts.v<N>.bak.db`，再於單一交易內自動升級；較新版本、非 MISF、損壞或結構遭改動的資料庫一律拒絕開啟並保留原檔。每個版本的升級各自在 `core/src/db_upgrade/` 一個檔案。
+- 更早的 JSON 版本 `hosts.json` 同樣只在建立容器時匯入，原 JSON 保持不變。
 - 非敏感偏好存於未加密的 `ui-settings.json`（`version: 1`）：語言、外觀、主視窗大小與是否最大化、設定視窗大小，以及主機清單顯示 `host_list`（等級 `detail`、自訂 `fields`、密集度 `density`：`comfortable`／`compact`，以及「未分類」在分類間的位置 `ungrouped_at`，省略時排在最後；`ungrouped_collapsed` 為其收合狀態）、批次作業排序 `batch_order`（`sidebar`／`pending`／`recent`／`name`）、套件明細位置 `batch_detail`（`inline` 表格下方／`popup` 雙擊開啟視窗）、批次表格欄位 `batch_columns`（`shown` 為顯示的欄位代碼，主機欄一律顯示；`weights` 為各欄寬度比例，限制在 0.2–10），以及預設解鎖方式 `unlock_method`（`password`／`windows_hello`／`security_key`；只在啟動時第一次遇到鎖定才自動開始）。不保存憑證，主機庫鎖定時也能讀寫。
 - 主機清單的分類、順序與收合狀態存於主機庫（`host_groups` 資料表與 `hosts.group_id`）。
 - 主機資料序列化內容上限 64 MiB。
@@ -76,8 +76,9 @@ Linux／macOS 可使用 `cargo run --locked -p misf`，須在對應平台建置�
 
 使用 LUKSbox v0.6.1（固定 commit `69448f708f1328d672deb595e359579d630cb0b0`）的 core／format／VFS 函式庫；FIDO2 使用有修改紀錄的本機相容性副本，將 P-256 等依賴更新至新版。不掛載磁碟、不需要 WinFsp 或 TPM 整合。加密為 AES-256-GCM-SIV；密碼採 Argon2id（256 MiB、3 次、4 lanes）。這不是 LUKS2 磁碟格式。版本與仍未修補的 RSA 公告見 [依賴更新與安全公告](dependency-updates.md)，整合評估見 [LUKSbox 整合評估](luksbox-evaluation.md)。
 
-- 啟用時建立容器、將資料直接從記憶體寫入，再關閉並重新解鎖驗證；原 `hosts.db` 先保留，再詢問是否刪除。
-- 啟用後只讀寫 `hosts.lbx`；`hosts.lbx.enabled` 記錄已選擇加密模式。容器內保存 SQLite 資料庫映像 `/hosts.db`，只在記憶體中開啟，不寫出明文資料庫檔；舊容器內的 `/hosts.json` 會在下一次儲存時於同一次中繼資料提交轉成 `/hosts.db`。
+- 第一次啟動即要求建立容器：將資料直接從記憶體寫入，再關閉並重新解鎖驗證。有舊版 `hosts.db` 時先保留，再詢問是否刪除；全新設定檔不會產生任何明文主機庫檔。
+- 新解鎖密碼（建立與新增備援）至少 8 個字元，須含數字、字母、符號其中至少兩種，空白只計長度（`vault::passphrase_problem`）。既有金鑰槽照常解鎖。
+- 建立後只讀寫 `hosts.lbx`；`hosts.lbx.enabled` 記錄已選擇加密模式。容器內保存 SQLite 資料庫映像 `/hosts.db`，只在記憶體中開啟，不寫出明文資料庫檔；舊容器內的 `/hosts.json` 會在下一次儲存時於同一次中繼資料提交轉成 `/hosts.db`。
 - 解鎖後若容器內資料庫是舊結構版本，先詢問；同意才寫回新版本，取消則保持鎖定、檔案不變。鎖定、錯誤密碼或容器遺失時不會退回讀取明文主機庫。
 - 密碼與 Passkey 合計最多 8 個槽。槽名稱存在加密容器內的主機資料庫。撤銷：核心禁止撤銷最後一個槽及不存在的槽；撤銷立即寫回目前容器，不刪除驗證器端憑證、不關閉已解鎖工作階段、不使舊備份失效。
 - 明文副本刪除只處理該檔案（刪除 `hosts.db` 時一併刪除 `hosts.db-journal`），必須已成功解鎖，且不經資源回收筒；這不是安全抹除。
@@ -130,7 +131,7 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 
 Rust 整合測試在 loopback 啟動測試 SSH 伺服器，驗證密碼／私鑰、指紋、PTY、sudo、系統偵測、APT 與 DNF 檢查／升級、套件管理器不符與混合批次阻擋，不接觸真實遠端主機。
 
-LUKSbox 測試使用暫存資料，涵蓋明文保留、確認刪除與路徑限制、鎖定後拒絕操作、錯誤密碼、多 keyslot、重新啟動、加密備份、縮短資料、密文損壞及並行開啟阻擋。Passkey 核心流程由模擬驗證器測試，未代替實體 Windows Hello／USB 裝置驗證。
+LUKSbox 測試使用暫存資料，涵蓋未建立容器時拒絕主機操作且不寫出明文檔、新密碼長度與字元種類規則、明文保留、確認刪除與路徑限制、鎖定後拒絕操作、錯誤密碼、多 keyslot、重新啟動、加密備份、縮短資料、密文損壞及並行開啟阻擋。Passkey 核心流程由模擬驗證器測試，未代替實體 Windows Hello／USB 裝置驗證。
 
 ## 畫面擷取
 

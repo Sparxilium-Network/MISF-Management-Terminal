@@ -4,12 +4,12 @@
 > **本專案仍處於開發階段，請勿用於正式環境。**
 > 相關安全保護機制尚未完善。
 
-單一桌面 App，以 eframe／egui 繪製原生視窗，直接呼叫同一個執行檔內的 Rust 核心。沒有 JavaFX、管理伺服器、TOKEN、遠端資料庫或 HTTP 服務。提供明文 JSON 或可選的 LUKSbox 加密主機庫；加密模式啟動時需使用已註冊密碼或 Passkey 解鎖。
+單一桌面 App，以 eframe／egui 繪製原生視窗，直接呼叫同一個執行檔內的 Rust 核心。沒有 JavaFX、管理伺服器、TOKEN、遠端資料庫或 HTTP 服務。主機庫一律為 LUKSbox 加密容器，不提供未加密模式；尚未建立容器時，核心拒絕所有主機操作，GUI 啟動即要求設定解鎖密碼。之後每次啟動需使用已註冊密碼或 Passkey 解鎖。
 
 ```mermaid
 flowchart LR
     UI[egui 原生 UI] -->|背景工作佇列| Core[Rust 核心]
-    Core --> Store[(明文 SQLite hosts.db 或 LUKSbox hosts.lbx)]
+    Core --> Store[(LUKSbox hosts.lbx 內的 SQLite 映像)]
     Core -->|russh / PTY| Host[Linux / BSD 目標主機]
 ```
 
@@ -37,9 +37,11 @@ APT 升級在相同流程後追加 `apt-get -y upgrade`：一般帳號以 `sudo 
 
 開檔前先拒絕 WAL：資料庫旁有 `-wal`／`-shm`，或檔頭讀寫格式位元組不是 rollback journal，就不交給 SQLite，避免 SQLite 在任何檢查之前重放 WAL 或改寫檔頭。每次開啟先強化連線：DEFENSIVE、關閉 trusted_schema、停用 trigger／view、ATTACH 上限 0、rollback journal（不用 WAL）、secure_delete、temp_store=MEMORY、mmap_size=0、cell_size_check；未編入 load_extension。接著執行 quick_check，核對 application_id 與版本，再把 sqlite_schema 與同版本遷移在記憶體重建的參考結構逐列比對；多出的 trigger、view、index 或改過的欄位定義都會拒絕。版本較新時拒絕開啟，不降級寫入；版本較舊時明文檔先複製為 `hosts.v<N>.bak.db`，再於單一交易執行遷移並更新 user_version。遷移每一步一個檔案，放在 `core/src/db_upgrade/vN_vM.rs`，依序串接，所以任何舊版本都會逐步升到目前版本（例如 v1 會依序執行 v1→v2、v2→v3…）；新增版本只要加一個檔案並附加到 `MIGRATIONS`，已發布的步驟不得修改。加密容器解鎖後若資料庫是舊版本，主機庫維持鎖定（`pending_upgrade`），先詢問使用者：同意才送出 `vault_upgrade` 寫回目前版本並開啟，取消則送出 `vault_upgrade_cancel` 關閉容器，檔案保持原版本。所有 SQL 為固定語句與綁定參數。
 
-明文模式仍以 `hosts.lock` 跨程序互斥，讀取時整份載入、寫入時於單一交易取代全部列；SQLite busy_timeout 為 5 秒。新資料庫先在同目錄暫存檔建立，必要時匯入同目錄舊版 `hosts.json`（原檔不變），再以不覆寫方式移入定位；損壞的 JSON 不會產生資料庫。損壞或不支援版本的既存檔案不會被自動覆寫。
+`StorageSession` 不再對外提供明文 `Store`：沒有 `hosts.lbx`／`hosts.lbx.enabled` 時狀態為 `encrypted:false, locked:true`，除 `storage_status`、`vault_create` 等容器動作外的請求一律拒絕。明文 `Store` 只在 `vault_create` 時讀取舊版資料：同目錄有 `hosts.db`（或更舊的 `hosts.json`）才以 `hosts.lock` 跨程序互斥讀出並轉入容器；全新設定檔直接以空資料庫建立容器，不寫出任何明文檔。讀取舊版明文檔時沿用上述檢查與遷移，損壞或不支援版本的檔案不會被自動覆寫。
 
-使用者可將主機庫轉成同目錄 `hosts.lbx`，內含加密的 SQLite 映像 `/hosts.db`：每次儲存在記憶體建立全新資料庫並序列化（已刪除的列不會殘留），寫入新 inode 後以 rename 於單一中繼資料提交取代；讀取時以 sqlite3_deserialize 在記憶體開啟並套用與檔案相同的檢查與遷移。舊容器的 `/hosts.json` 可直接讀取，下一次儲存時在同一提交中移除。使用 LUKSbox v0.6.1 固定版本的 core／format／VFS，以 AES-256-GCM-SIV 與 Argon2id 保存內容及中繼資料，無須掛載磁碟。轉換驗證後原明文檔先保留。GUI 每次啟動與解鎖後檢查目前資料目錄 hosts.db 及舊版 hosts.json，解鎖後以確認視窗顯示完整路徑並詢問刪除；保留不會停用下次詢問。核心 vault_delete_plaintext 要求已解鎖、明確確認及完全相同的絕對路徑，先讀取驗證容器、取得明文資料鎖，再拒絕非一般檔案／symlink／Windows reparse point，最後只刪除該檔（hosts.db 時連同 `-journal`）；hosts.db 刪除後若仍有舊版 hosts.json，會接著詢問。設定、日誌及其他副本不在刪除範圍，這不是安全抹除。詢問、保留與刪除結果皆使用固定事件寫入日誌，不記錄路徑或內容。加密模式鎖定時不提供主機操作，也禁止回退明文；支援手動鎖定、密碼與 Passkey 合計最多 8 槽、指定槽撤銷與加密備份。儲存狀態和解鎖金鑰保存在背景 worker 的 StorageSession，非每次請求重建。
+新解鎖密碼（建立容器與新增備援密碼）至少 8 個字元，且須包含數字、字母、符號其中至少兩種；空白只計入長度。規則由 `misf_core::vault::passphrase_problem` 提供，GUI 送出前先檢查，核心再檢查一次。既有金鑰槽不受影響。
+
+主機庫存於同目錄 `hosts.lbx`，內含加密的 SQLite 映像 `/hosts.db`：每次儲存在記憶體建立全新資料庫並序列化（已刪除的列不會殘留），寫入新 inode 後以 rename 於單一中繼資料提交取代；讀取時以 sqlite3_deserialize 在記憶體開啟並套用與檔案相同的檢查與遷移。舊容器的 `/hosts.json` 可直接讀取，下一次儲存時在同一提交中移除。使用 LUKSbox v0.6.1 固定版本的 core／format／VFS，以 AES-256-GCM-SIV 與 Argon2id 保存內容及中繼資料，無須掛載磁碟。從舊版明文檔轉換時，驗證後原明文檔先保留。GUI 每次啟動與解鎖後檢查目前資料目錄 hosts.db 及舊版 hosts.json，解鎖後以確認視窗顯示完整路徑並詢問刪除；保留不會停用下次詢問。核心 vault_delete_plaintext 要求已解鎖、明確確認及完全相同的絕對路徑，先讀取驗證容器、取得明文資料鎖，再拒絕非一般檔案／symlink／Windows reparse point，最後只刪除該檔（hosts.db 時連同 `-journal`）；hosts.db 刪除後若仍有舊版 hosts.json，會接著詢問。設定、日誌及其他副本不在刪除範圍，這不是安全抹除。詢問、保留與刪除結果皆使用固定事件寫入日誌，不記錄路徑或內容。加密模式鎖定時不提供主機操作，也禁止回退明文；支援手動鎖定、密碼與 Passkey 合計最多 8 槽、指定槽撤銷與加密備份。儲存狀態和解鎖金鑰保存在背景 worker 的 StorageSession，非每次請求重建。
 
 `core/src/passkey.rs` 使用相同上游的 FIDO2 crate：Windows 透過 webauthn.dll 要求使用者驗證並選擇 Hello／外接安全金鑰；Linux 透過 libfido2 與當次 PIN 操作 CTAP2 裝置。只接入 `Fido2HmacSecret` 包裝槽，不使用直接派生主金鑰槽。註冊後兩次讀取 PRF 確認一致，才追加並同步 header；公開 credential ID 與 salt 隨槽保存，PIN／PRF 不落地。解鎖從公開 header 取候選槽後取得 PRF，再由 Container 驗證容器；不存在相符金鑰或驗證失敗均禁止開啟。撤銷先檢查槽存在且不是最後一個槽，再同步 header。撤銷不代表使舊容器或已解鎖工作階段失效。
 

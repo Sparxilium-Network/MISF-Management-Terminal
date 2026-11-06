@@ -1,4 +1,5 @@
-//! Optional LUKSbox storage. No mount driver and no plaintext extraction files.
+//! Mandatory LUKSbox storage. No mount driver and no plaintext extraction files.
+//! A profile without a vault has no usable host store until one is created.
 use crate::{
     dispatch,
     store::{Database, Store},
@@ -272,10 +273,10 @@ impl StorageSession {
     }
     pub fn new(plain_path: PathBuf) -> Self {
         let encrypted = encrypted_profile_exists(&plain_path);
-        let store = (!encrypted).then(|| Store::new(plain_path.clone()));
         Self {
             plain_path,
-            store,
+            // Hosts are only ever served from an unlocked vault, never from plaintext.
+            store: None,
             pending: None,
             encrypted,
             warning: String::new(),
@@ -286,7 +287,6 @@ impl StorageSession {
         // Another MISF instance may have enabled encryption after this one started.
         if !self.encrypted && encrypted_profile_exists(&self.plain_path) {
             self.encrypted = true;
-            self.store = None;
         }
         if self.encrypted && self.plain_path.with_extension("lbx").exists() {
             ensure_encrypted_marker(&self.plain_path)?;
@@ -300,7 +300,8 @@ impl StorageSession {
         };
         Ok(StorageStatus {
             encrypted: self.encrypted,
-            locked: self.encrypted && self.store.is_none(),
+            // Also true before a vault exists: nothing is readable until one is created.
+            locked: self.store.is_none(),
             path: if self.encrypted {
                 self.plain_path.with_extension("lbx")
             } else {
@@ -454,6 +455,10 @@ impl StorageSession {
                 Ok(json!({"path":destination}))
             }
             _ => {
+                ensure!(
+                    self.encrypted,
+                    "尚未建立加密主機庫；請先設定解鎖密碼，MISF 不提供未加密儲存"
+                );
                 let store = self
                     .store
                     .as_ref()
@@ -542,82 +547,88 @@ impl StorageSession {
     fn enable(&mut self, passphrase: &[u8], name: &str, params: Argon2idParams) -> Result<()> {
         check_environment()?;
         ensure!(!self.encrypted, "已啟用 LUKSbox，禁止覆寫現有容器");
-        let source = self.store.as_ref().context("目前主機庫不可用")?;
         let target = self.plain_path.with_extension("lbx");
-        let store = source.with_db(
-            |db| {
-                ensure!(!target.exists(), "LUKSbox 容器已存在，禁止覆寫");
-                for suffix in ["header-bak", "meta-bak"] {
-                    ensure!(
-                        !sidecar(&target, suffix).exists(),
-                        "偵測到先前未完成轉換的容器備份；請先移動 .lbx.*-bak 後重試"
-                    );
-                }
-                let dir = target.parent().context("容器路徑無效")?;
-                let temp = tempfile::Builder::new()
-                    .prefix(".misf-vault-")
-                    .tempdir_in(dir)?;
-                let staging = temp.path().join("hosts.lbx");
-                let size_guard = luksbox_format::metadata::set_create_metadata_region_size_override(
-                    Some(METADATA_BYTES),
-                );
-                let format_guard = luksbox_vfs::set_format_v3_override(Some(true));
-                let container = Container::create_with_passphrase(
-                    &staging,
-                    None,
-                    CipherSuite::Aes256GcmSiv,
-                    params,
-                    passphrase,
-                )?;
-                let mut vault = VaultFile {
-                    vfs: Vfs::open(container)?,
-                    poisoned: false,
-                    slot_names: BTreeMap::new(),
-                };
-                // Only the new container's single passphrase slot exists.
-                db.slot_names.clear();
-                if !name.is_empty() {
-                    let first = vault.slots().first().context("新容器沒有金鑰槽")?.index;
-                    db.slot_names.insert(u32::try_from(first)?, name.into());
-                }
-                vault.write(db)?;
-                vault.finish()?;
-                drop(vault);
-                drop(format_guard);
-                drop(size_guard);
-                let mut verified = VaultFile::open(&staging, passphrase)?;
-                let actual = Zeroizing::new(serde_json::to_vec(&verified.read()?)?);
-                let expected = Zeroizing::new(serde_json::to_vec(db)?);
+        let convert = |db: &mut Database| -> Result<Store> {
+            ensure!(!target.exists(), "LUKSbox 容器已存在，禁止覆寫");
+            for suffix in ["header-bak", "meta-bak"] {
                 ensure!(
-                    *actual == *expected,
-                    "LUKSbox 轉換驗證失敗；原明文檔案已保留"
+                    !sidecar(&target, suffix).exists(),
+                    "偵測到先前未完成轉換的容器備份；請先移動 .lbx.*-bak 後重試"
                 );
-                verified.finish()?;
-                drop(verified);
-                let mut moved = vec![];
-                let commit: Result<()> = (|| {
-                    for suffix in ["header-bak", "meta-bak"] {
-                        let staged = sidecar(&staging, suffix);
-                        if staged.exists() {
-                            let destination = sidecar(&target, suffix);
-                            fs::rename(staged, &destination)?;
-                            moved.push(destination);
-                        }
-                    }
-                    fs::rename(&staging, &target)?;
-                    Ok(())
-                })();
-                if commit.is_err() && !target.exists() {
-                    for path in moved {
-                        let _ = fs::remove_file(path);
+            }
+            let dir = target.parent().context("容器路徑無效")?;
+            let temp = tempfile::Builder::new()
+                .prefix(".misf-vault-")
+                .tempdir_in(dir)?;
+            let staging = temp.path().join("hosts.lbx");
+            let size_guard = luksbox_format::metadata::set_create_metadata_region_size_override(
+                Some(METADATA_BYTES),
+            );
+            let format_guard = luksbox_vfs::set_format_v3_override(Some(true));
+            let container = Container::create_with_passphrase(
+                &staging,
+                None,
+                CipherSuite::Aes256GcmSiv,
+                params,
+                passphrase,
+            )?;
+            let mut vault = VaultFile {
+                vfs: Vfs::open(container)?,
+                poisoned: false,
+                slot_names: BTreeMap::new(),
+            };
+            // Only the new container's single passphrase slot exists.
+            db.slot_names.clear();
+            if !name.is_empty() {
+                let first = vault.slots().first().context("新容器沒有金鑰槽")?.index;
+                db.slot_names.insert(u32::try_from(first)?, name.into());
+            }
+            vault.write(db)?;
+            vault.finish()?;
+            drop(vault);
+            drop(format_guard);
+            drop(size_guard);
+            let mut verified = VaultFile::open(&staging, passphrase)?;
+            let actual = Zeroizing::new(serde_json::to_vec(&verified.read()?)?);
+            let expected = Zeroizing::new(serde_json::to_vec(db)?);
+            ensure!(
+                *actual == *expected,
+                "LUKSbox 轉換驗證失敗；原明文檔案已保留"
+            );
+            verified.finish()?;
+            drop(verified);
+            let mut moved = vec![];
+            let commit: Result<()> = (|| {
+                for suffix in ["header-bak", "meta-bak"] {
+                    let staged = sidecar(&staging, suffix);
+                    if staged.exists() {
+                        let destination = sidecar(&target, suffix);
+                        fs::rename(staged, &destination)?;
+                        moved.push(destination);
                     }
                 }
-                commit.context("無法提交加密容器；原明文檔案已保留")?;
-                let vault = VaultFile::open(&target, passphrase)?;
-                Ok(encrypted_store(target.clone(), vault))
-            },
-            false,
-        )?;
+                fs::rename(&staging, &target)?;
+                Ok(())
+            })();
+            if commit.is_err() && !target.exists() {
+                for path in moved {
+                    let _ = fs::remove_file(path);
+                }
+            }
+            commit.context("無法提交加密容器；原明文檔案已保留")?;
+            let vault = VaultFile::open(&target, passphrase)?;
+            Ok(encrypted_store(target.clone(), vault))
+        };
+        // Hosts from an older plaintext database (or legacy hosts.json) move into the
+        // vault; a new profile starts empty and never writes a plaintext file at all.
+        let store = if self.plain_path.exists() || self.plain_path.with_extension("json").exists() {
+            Store::new(self.plain_path.clone()).with_db(convert, false)?
+        } else {
+            convert(&mut Database {
+                version: 1,
+                ..Database::default()
+            })?
+        };
         self.store = Some(store);
         self.encrypted = true;
         self.warning.clear();
@@ -722,12 +733,49 @@ fn slot_name(request: &Value) -> Result<String> {
     Ok(name.into())
 }
 
+/// The shortest unlock password a new key slot accepts.
+pub const MIN_PASSPHRASE_CHARS: usize = 8;
+
+/// Why a new unlock password is refused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PassphraseProblem {
+    TooShort,
+    /// Fewer than two of: digits, letters, symbols.
+    TooFewKinds,
+}
+
+/// Checks a new unlock password: at least eight characters, mixing at least two of
+/// digits, letters and symbols. Whitespace counts toward the length only.
+pub fn passphrase_problem(password: &str) -> Option<PassphraseProblem> {
+    if password.chars().count() < MIN_PASSPHRASE_CHARS {
+        return Some(PassphraseProblem::TooShort);
+    }
+    let (mut digit, mut letter, mut symbol) = (false, false, false);
+    for c in password.chars() {
+        if c.is_numeric() {
+            digit = true;
+        } else if c.is_alphabetic() {
+            letter = true;
+        } else if !c.is_whitespace() {
+            symbol = true;
+        }
+    }
+    if usize::from(digit) + usize::from(letter) + usize::from(symbol) < 2 {
+        return Some(PassphraseProblem::TooFewKinds);
+    }
+    None
+}
+
 fn validate_passphrase(password: &[u8]) -> Result<()> {
-    ensure!(
-        std::str::from_utf8(password)?.chars().count() >= 12,
-        "解鎖密碼至少需要 12 個字元，建議使用長密碼句"
-    );
-    Ok(())
+    match passphrase_problem(std::str::from_utf8(password)?) {
+        None => Ok(()),
+        Some(PassphraseProblem::TooShort) => {
+            anyhow::bail!("解鎖密碼至少需要 {MIN_PASSPHRASE_CHARS} 個字元")
+        }
+        Some(PassphraseProblem::TooFewKinds) => {
+            anyhow::bail!("解鎖密碼需包含數字、字母、符號其中至少兩種")
+        }
+    }
 }
 
 fn take_secret(request: &mut Value) -> Result<Zeroizing<Vec<u8>>> {
@@ -776,8 +824,8 @@ mod tests {
     use super::*;
     use crate::model::Host;
 
-    const FIRST: &[u8] = b"first recovery phrase";
-    const SECOND: &[u8] = b"second recovery phrase";
+    const FIRST: &[u8] = b"first recovery phrase 1";
+    const SECOND: &[u8] = b"second recovery phrase 2";
     fn params() -> Argon2idParams {
         Argon2idParams {
             m_cost_kib: 8,
@@ -807,6 +855,46 @@ mod tests {
             })
             .unwrap();
         (dir, StorageSession::new(path))
+    }
+
+    #[tokio::test]
+    async fn a_new_profile_has_no_hosts_until_a_vault_exists_and_never_writes_plaintext() {
+        let dir = tempfile::tempdir().unwrap();
+        let plain = dir.path().join("hosts.db");
+        let mut session = StorageSession::new(plain.clone());
+        let status = session.status().unwrap();
+        assert!(!status.encrypted && status.locked);
+        for request in [
+            json!({"action":"list"}),
+            json!({"action":"save","host":{"name":"x","address":"192.0.2.1","port":22,"username":"u"}}),
+        ] {
+            let error = session.handle(request, &|_| {}).await.unwrap_err();
+            assert!(error.to_string().contains("加密"), "{error:#}");
+        }
+        for weak in ["short1", "lettersonly", "12345678"] {
+            assert!(
+                session
+                    .handle(json!({"action":"vault_create","passphrase":weak}), &|_| {})
+                    .await
+                    .is_err()
+            );
+        }
+        assert!(!encrypted_profile_exists(&plain));
+        session
+            .handle(
+                json!({"action":"vault_create","passphrase":"abcd1234"}),
+                &|_| {},
+            )
+            .await
+            .unwrap();
+        let listed = session
+            .handle(json!({"action":"list"}), &|_| {})
+            .await
+            .unwrap();
+        assert_eq!(listed["hosts"], json!([]));
+        assert_eq!(listed["encrypted"], true);
+        assert!(!plain.exists() && !plain.with_extension("json").exists());
+        assert!(!session.status().unwrap().plaintext_exists);
     }
 
     #[tokio::test]
@@ -1194,9 +1282,24 @@ mod tests {
     }
 
     #[test]
-    fn passphrase_policy_does_not_accept_short_pin() {
+    fn passphrase_policy_needs_eight_characters_of_two_kinds() {
+        use PassphraseProblem::*;
         assert!(validate_passphrase(b"123456").is_err());
         assert!(validate_passphrase(FIRST).is_ok());
+        for (password, problem) in [
+            ("abc1234", Some(TooShort)),
+            ("12345678", Some(TooFewKinds)),
+            ("abcdefgh", Some(TooFewKinds)),
+            ("!@#$%^&*", Some(TooFewKinds)),
+            // Spaces neither count as a symbol nor make a passphrase invalid.
+            ("only letters here", Some(TooFewKinds)),
+            ("abcd1234", None),
+            ("abcd!@#$", None),
+            ("1234!@#$", None),
+            ("主機庫密碼12345", None),
+        ] {
+            assert_eq!(passphrase_problem(password), problem, "{password}");
+        }
     }
 
     #[tokio::test]
