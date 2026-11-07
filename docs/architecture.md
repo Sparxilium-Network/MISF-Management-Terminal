@@ -1,6 +1,6 @@
 # MISF Management Terminal 架構
 
-> 最後修改：2026-11-08 ｜ 基於 commit：`3c584eb`
+> 最後修改：2026-11-08 ｜ 基於 commit：`8d40cd3`
 
 > [!WARNING]
 > **本專案仍處於開發階段，請勿用於正式環境。** 相關安全保護機制尚未完善。
@@ -28,11 +28,12 @@ flowchart LR
 | 位置 | 職責 |
 | --- | --- |
 | `app/src/ui.rs` | 主視窗、主機編輯、結果卡片、批次作業、解鎖與設定畫面 |
-| `app/src/worker.rs` | 把請求交給背景執行緒與 Tokio runtime，回傳進度與結果 |
+| `app/src/worker.rs` | 把請求交給背景執行緒與 Tokio runtime，回傳進度與結果；批次中轉送每台結果與失敗詢問 |
 | `app/src/preferences.rs` | 未加密的 `ui-settings.json`（語言、外觀、清單與批次表格偏好） |
 | `app/src/i18n.rs`、`app/locales/` | 內嵌的 zh-tw／en-us 語系，以穩定 key 與命名參數取字 |
 | `app/src/theme.rs` | 淺色／深色配色 |
 | `core/src/lib.rs` | 主機請求的分派（下表） |
+| `core/src/batch.rs` | 批次作業：並行、逐台儲存與回報、失敗時暫停詢問 |
 | `core/src/session.rs` | GUI 與 CLI 共用的入口：寫稽核日誌、套用 debug 限制，再交給 StorageSession |
 | `core/src/vault.rs` | `StorageSession`：容器建立、解鎖、金鑰槽、備份、舊版明文轉入與刪除 |
 | `core/src/passkey.rs`、`core/src/windows_passkey.rs` | FIDO2／Windows WebAuthn 解鎖 |
@@ -83,7 +84,11 @@ UI 與 CLI 都送出 `{"action": …}` JSON 給 `Session::handle`。CLI 從 stdi
 
 ## 批次作業
 
-`{"action":"batch","operation":"check"|"upgrade","ids":[…]}` 去除重複 ID 後讀取主機快照，最多 256 台，以 Tokio JoinSet 與 Semaphore 最多 8 台並行，逐台回報進度，全部結束後一次寫回。任何 ID 不存在、套件管理器未偵測或彼此不同時整批拒絕；單台連線、指紋或 sudo 失敗只記在該主機。UI 依套件管理器分組，只能勾選同一組中已確認指紋的主機；升級前顯示主機清單、實際命令與風險，並要求勾選確認。
+`{"action":"batch","operation":"check"|"upgrade","ids":[…]}` 去除重複 ID 後讀取主機快照，最多 256 台，以 Tokio JoinSet 最多 8 台並行。任何 ID 不存在、套件管理器未偵測或彼此不同時整批拒絕。
+
+每台主機一完成就寫回主機庫，再透過 `batch::Observer::finished` 回報；中途關閉程式也保留已完成的主機。某台結果不是 `success`（含工作異常結束，記為失敗）時呼叫 `Observer::failed`，在得到 `Decision` 之前不開始新主機，但已在執行的主機繼續跑完並照常儲存與回報；等待期間的其他失敗排隊依序詢問。`Abort` 後不再開始任何主機，已在執行的不會中途停止（可能正在安裝套件），回應的 `skipped` 列出未執行的主機 ID，稽核日誌記為 `cancelled`。某台結果無法儲存時同樣停止開始新主機，等執行中的跑完後回傳錯誤。
+
+GUI 的 worker 把 `finished` 轉成即時更新表格列、把 `failed` 轉成無法略過的視窗（「中斷批次作業」／「繼續其他主機」）；視窗關閉或程式結束時視為中斷。CLI 與 `dispatch` 使用 `batch::Unattended`：不回報、遇到失敗一律繼續。UI 依套件管理器分組，只能勾選同一組中已確認指紋的主機；升級前顯示主機清單、實際命令與風險，並要求勾選確認。
 
 ## 本機儲存
 

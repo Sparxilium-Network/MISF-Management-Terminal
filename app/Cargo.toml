@@ -20,5 +20,5 @@ serde_json = "1.0.154"
 chrono = "0.4.45"
 zeroize = "1.9.1"
 tempfile = "3.27.0"
-tokio = { version = "1.54.1", features = ["rt-multi-thread"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "sync"] }
 image = { version = "0.25.10", default-features = false, features = ["png"], optional = true }

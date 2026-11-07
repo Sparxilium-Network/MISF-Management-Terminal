@@ -12,7 +12,7 @@ use eframe::egui::{self, Color32, RichText, Stroke};
 use misf_core::model::{CheckResult, ConnectionTest, Host, HostGroup};
 use misf_core::{
     audit::{Action, AuditLog, Outcome},
-    package_manager,
+    batch, package_manager,
     runtime::RuntimePaths,
     vault::{MIN_PASSPHRASE_CHARS, PassphraseProblem, passphrase_problem},
 };
@@ -186,6 +186,12 @@ struct UpgradeConfirm {
     batch: bool,
     acknowledged: bool,
 }
+/// A failed batch host the worker is waiting on: stop the batch or start the rest.
+struct BatchFailure {
+    name: String,
+    upgrade: bool,
+    error: String,
+}
 struct TrustDialog {
     host_id: String,
     address: String,
@@ -264,6 +270,7 @@ pub struct ManagementApp {
     /// The one package manager the batch selection may contain.
     batch_manager: String,
     upgrade_confirm: Option<UpgradeConfirm>,
+    batch_failure: Option<BatchFailure>,
     encrypted: bool,
     /// "sqlite" or "json" from the last host list; empty while locked.
     storage_format: String,
@@ -337,6 +344,7 @@ impl ManagementApp {
             batch_popup: false,
             batch_manager: String::new(),
             upgrade_confirm: None,
+            batch_failure: None,
             encrypted: false,
             storage_format: String::new(),
             schema_version: None,
@@ -801,8 +809,26 @@ impl ManagementApp {
         while let Ok(event) = self.worker.events.try_recv() {
             match event {
                 Event::Progress(message) => self.status = t.progress(&message),
+                Event::BatchHost { id, result } => {
+                    if let Some(host) = self.hosts.iter_mut().find(|h| h.id == id) {
+                        record_result(host, result);
+                    }
+                }
+                Event::BatchFailed { id, result } => {
+                    let name = self
+                        .hosts
+                        .iter()
+                        .find(|h| h.id == id)
+                        .map_or(id, |h| h.name.clone());
+                    self.batch_failure = Some(BatchFailure {
+                        name,
+                        upgrade: result.operation == "upgrade",
+                        error: result.error,
+                    });
+                }
                 Event::Done { action, result } => {
                     self.busy = false;
+                    self.batch_failure = None;
                     match result {
                         Ok(data) => self.received(&action, data),
                         Err(error) => {
@@ -1071,13 +1097,17 @@ impl ManagementApp {
                     }
                 }
                 self.prune_batch();
-                self.status = t.format(
-                    "status.batch_done",
-                    &[
-                        ("succeeded", succeeded.to_string()),
-                        ("failed", failed.to_string()),
-                    ],
-                );
+                let skipped = data["skipped"].as_array().map_or(0, Vec::len);
+                let mut counts = vec![
+                    ("succeeded", succeeded.to_string()),
+                    ("failed", failed.to_string()),
+                ];
+                self.status = if skipped == 0 {
+                    t.format("status.batch_done", &counts)
+                } else {
+                    counts.push(("skipped", skipped.to_string()));
+                    t.format("status.batch_aborted", &counts)
+                };
             }
             _ => {}
         }
@@ -2755,6 +2785,62 @@ impl ManagementApp {
         }
     }
 
+    /// Asks whether a batch keeps going after a host failed. It cannot be dismissed:
+    /// the worker starts no new host until one of the two answers is sent.
+    fn batch_failure_dialog(&mut self, ctx: &egui::Context) {
+        let Some(failure) = self.batch_failure.as_ref() else {
+            return;
+        };
+        let palette = Palette::for_context(ctx);
+        let t = Translator(self.preferences.language);
+        let mut decision = None;
+        egui::Modal::new(egui::Id::unique("batch_failure")).show(ctx, |ui| {
+            ui.set_width(560.0);
+            let operation = if failure.upgrade {
+                t.get("batch.operation_upgrade")
+            } else {
+                t.get("batch.operation_check")
+            };
+            ui.heading(t.format(
+                "batch_failure.title",
+                &[
+                    ("name", failure.name.clone()),
+                    ("operation", operation.into()),
+                ],
+            ));
+            ui.add_space(6.0);
+            if !failure.error.is_empty() {
+                egui::ScrollArea::vertical()
+                    .id_salt("batch_failure_error")
+                    .max_height(120.0)
+                    .show(ui, |ui| {
+                        ui.add(
+                            egui::Label::new(RichText::new(&failure.error).color(palette.error))
+                                .wrap()
+                                .selectable(true),
+                        );
+                    });
+            }
+            ui.label(t.get("batch_failure.paused"));
+            ui.colored_label(palette.warning, t.get("batch_failure.abort_notice"));
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if ui.add(danger(t.get("batch_failure.abort"))).clicked() {
+                    decision = Some(batch::Decision::Abort);
+                }
+                if ui.add(primary(t.get("batch_failure.continue"))).clicked() {
+                    decision = Some(batch::Decision::Continue);
+                }
+            });
+        });
+        if let Some(decision) = decision {
+            self.batch_failure = None;
+            if self.worker.decisions.send(decision).is_err() {
+                self.error = Some(t.get("status.worker_ended").into());
+            }
+        }
+    }
+
     /// Storage mode and path, right-aligned in the top bar.
     fn storage_location(&self, ui: &mut egui::Ui) {
         let palette = Palette::for_context(ui.ctx());
@@ -3813,6 +3899,7 @@ impl ManagementApp {
             }
         }
         self.upgrade_dialog(ctx);
+        self.batch_failure_dialog(ctx);
         self.vault_dialog(ctx);
         self.schema_upgrade_dialog(ctx);
         self.plaintext_delete_dialog(ctx);
@@ -4280,6 +4367,7 @@ mod tests {
             Worker {
                 requests,
                 events: results,
+                decisions: tokio::sync::mpsc::unbounded_channel().0,
             },
         );
         assert_eq!(commands.recv().unwrap()["action"], "storage_status");
@@ -4400,6 +4488,7 @@ mod tests {
             Worker {
                 requests,
                 events: results,
+                decisions: tokio::sync::mpsc::unbounded_channel().0,
             },
         );
         assert_eq!(commands.recv().unwrap()["action"], "storage_status");
@@ -4464,6 +4553,7 @@ mod tests {
             Worker {
                 requests,
                 events: results,
+                decisions: tokio::sync::mpsc::unbounded_channel().0,
             },
         );
         assert_eq!(commands.recv().unwrap()["action"], "storage_status");
@@ -4557,6 +4647,7 @@ mod tests {
             Worker {
                 requests,
                 events: results,
+                decisions: tokio::sync::mpsc::unbounded_channel().0,
             },
         );
         assert_eq!(commands.recv().unwrap()["action"], "storage_status");
@@ -4741,6 +4832,7 @@ mod tests {
             Worker {
                 requests,
                 events: results,
+                decisions: tokio::sync::mpsc::unbounded_channel().0,
             },
         );
         let host = |id: &str, group: &str, pending: usize, at: &str| {

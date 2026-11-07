@@ -1,7 +1,7 @@
 //! Mandatory LUKSbox storage. No mount driver and no plaintext extraction files.
 //! A profile without a vault has no usable host store until one is created.
 use crate::{
-    dispatch,
+    batch, dispatch_with,
     store::{Database, Store},
 };
 use anyhow::{Context, Result, ensure};
@@ -265,9 +265,14 @@ pub struct StorageSession {
     pending: Option<VaultFile>,
     encrypted: bool,
     warning: String,
+    /// Sees each batch host as it finishes and decides whether a failure stops the batch.
+    observer: Box<dyn batch::Observer + Send>,
 }
 
 impl StorageSession {
+    pub fn set_batch_observer(&mut self, observer: Box<dyn batch::Observer + Send>) {
+        self.observer = observer;
+    }
     pub(crate) fn host_for_audit(&self, id: &str) -> Result<crate::model::Host> {
         self.store.as_ref().context("Vault locked")?.host(id)
     }
@@ -280,6 +285,7 @@ impl StorageSession {
             pending: None,
             encrypted,
             warning: String::new(),
+            observer: Box::new(batch::Unattended),
         }
     }
 
@@ -463,7 +469,7 @@ impl StorageSession {
                     .store
                     .as_ref()
                     .context("主機庫已鎖定，請先輸入解鎖密碼")?;
-                dispatch(request, store, progress).await
+                dispatch_with(request, store, progress, self.observer.as_ref()).await
             }
         }
     }

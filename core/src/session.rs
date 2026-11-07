@@ -30,6 +30,10 @@ impl Session {
                 .unwrap_or_else(|_| paths.store.parent().unwrap().to_path_buf()),
         }
     }
+    /// Where batch hosts are reported as they finish; the default never stops a batch.
+    pub fn set_batch_observer(&mut self, observer: Box<dyn crate::batch::Observer + Send>) {
+        self.storage.set_batch_observer(observer);
+    }
     pub async fn handle(&mut self, request: Value, progress: &dyn Fn(&str)) -> Result<Value> {
         let name = request["action"].as_str().unwrap_or_default().to_owned();
         let Some(action) = Action::request(&name, request["operation"].as_str()) else {
@@ -39,7 +43,7 @@ impl Session {
         };
         let batch = name == "batch";
         let batch_ids = if batch {
-            crate::batch_ids(&request).unwrap_or_default()
+            crate::batch::ids(&request).unwrap_or_default()
         } else {
             vec![]
         };
@@ -98,16 +102,23 @@ impl Session {
         // Failure to persist the outcome is visible; do not silently claim complete auditing.
         let logged = if batch {
             targets.iter().try_for_each(|host| {
-                let succeeded = result.as_ref().is_ok_and(|value| {
-                    value["results"].as_array().is_some_and(|results| {
-                        results.iter().any(|entry| {
-                            entry["id"] == host.id.as_str()
-                                && entry["result"]["status"] == "success"
-                        })
+                let listed = |key: &str, matches: &dyn Fn(&Value) -> bool| {
+                    result.as_ref().is_ok_and(|value| {
+                        value[key]
+                            .as_array()
+                            .is_some_and(|entries| entries.iter().any(matches))
                     })
-                });
-                self.audit
-                    .record(action, outcome(succeeded), Some(host), None)
+                };
+                let id = host.id.as_str();
+                // Hosts an abort left unstarted were never contacted.
+                let outcome = if listed("skipped", &|entry| entry == id) {
+                    Outcome::Cancelled
+                } else {
+                    outcome(listed("results", &|entry| {
+                        entry["id"] == id && entry["result"]["status"] == "success"
+                    }))
+                };
+                self.audit.record(action, outcome, Some(host), None)
             })
         } else {
             let succeeded = result.as_ref().is_ok_and(|value| {

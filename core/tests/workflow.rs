@@ -1,6 +1,7 @@
 use misf_core::{
-    dispatch,
-    model::Host,
+    batch::{self, Decision},
+    dispatch, dispatch_with,
+    model::{CheckResult, Host},
     package_manager::{self, Manager, apt, dnf},
     ssh,
     store::Store,
@@ -586,6 +587,78 @@ async fn batch_runs_each_host_and_saves_per_host_results() {
         json!({"action":"batch","operation":"check","ids":["missing"]}),
     ] {
         assert!(dispatch(request, &store, &|_| {}).await.is_err());
+    }
+}
+
+/// Records what a batch reports and answers every failure the same way.
+struct Recorder {
+    decision: Decision,
+    finished: Mutex<Vec<(String, String)>>,
+    failed: Mutex<Vec<String>>,
+}
+impl batch::Observer for Recorder {
+    fn finished(&self, id: &str, result: &CheckResult) {
+        self.finished
+            .lock()
+            .unwrap()
+            .push((id.into(), result.status.clone()));
+    }
+    fn failed<'a>(&'a self, id: &str, _: &CheckResult) -> batch::Asking<'a> {
+        self.failed.lock().unwrap().push(id.into());
+        let decision = self.decision;
+        Box::pin(async move { decision })
+    }
+}
+
+#[tokio::test]
+async fn batch_reports_each_host_and_an_abort_skips_hosts_not_started() {
+    let fixture = fixture(false, false).await;
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::new(dir.path().join("hosts.db"));
+    let mut ids = vec![];
+    for index in 0..12 {
+        ids.push(register(&store, &fixture, &format!("host-{index}")).await);
+    }
+    // The first host fails fast on its changed key, while the rest are still checking.
+    dispatch(
+        json!({"action":"trust","id":ids[0],"fingerprint":"SHA256:changed-fingerprint-0000000"}),
+        &store,
+        &|_| {},
+    )
+    .await
+    .unwrap();
+    let recorder = Recorder {
+        decision: Decision::Abort,
+        finished: Mutex::new(vec![]),
+        failed: Mutex::new(vec![]),
+    };
+    let response = dispatch_with(
+        json!({"action":"batch","operation":"check","ids":ids}),
+        &store,
+        &|_| {},
+        &recorder,
+    )
+    .await
+    .unwrap();
+    let results = response["results"].as_array().unwrap();
+    let skipped = response["skipped"].as_array().unwrap();
+    assert!(!skipped.is_empty());
+    assert_eq!(results.len() + skipped.len(), ids.len());
+    assert_eq!(*recorder.failed.lock().unwrap(), [ids[0].clone()]);
+    // Every reported host was already saved when it was reported; skipped ones never ran.
+    let finished = recorder.finished.lock().unwrap();
+    assert_eq!(finished.len(), results.len());
+    for (id, status) in finished.iter() {
+        assert_eq!(store.host(id).unwrap().last_check.unwrap().status, *status);
+    }
+    for id in skipped {
+        assert!(
+            store
+                .host(id.as_str().unwrap())
+                .unwrap()
+                .last_check
+                .is_none()
+        );
     }
 }
 
