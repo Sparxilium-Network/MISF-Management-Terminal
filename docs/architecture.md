@@ -1,13 +1,13 @@
 # MISF Management Terminal 架構
 
-> 最後修改：2026-11-08 ｜ 基於 commit：`630cda6`
+> 最後修改：2026-11-08 ｜ 基於 commit：`3c584eb`
 
 > [!WARNING]
 > **本專案仍處於開發階段，請勿用於正式環境。** 相關安全保護機制尚未完善。
 >
 > 目前只有 **APT**（Debian／Ubuntu）在真實主機上測試過。DNF、YUM、pkg 等其他功能只通過 loopback 模擬伺服器的自動測試，不保證可用或安全。
 
-本文件描述目前的實作。建置、慣例與測試指令見 [開發說明](PROJECT-DEV.md)，加密容器的取捨見 [LUKSbox 加密儲存設計](luksbox-design.md)。
+本文件描述目前的實作；每個 `.rs` 檔案的職責見 [原始碼檔案說明](PROJECT-DEV-ARCH.md)。建置、慣例與測試指令見 [開發說明](PROJECT-DEV.md)，加密容器的取捨見 [LUKSbox 加密儲存設計](luksbox-design.md)。
 
 ## 概觀
 
