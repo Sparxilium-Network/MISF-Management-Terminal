@@ -143,7 +143,7 @@ pub(crate) fn load(conn: &Connection) -> Result<Database> {
             checked_at: row.get(1)?,
             // Read back from the saved transcript, so no column is needed for it.
             phased: if operation == "upgrade" {
-                crate::model::parse_phased(&output)
+                crate::package_manager::apt::parse_phased(&output)
             } else {
                 vec![]
             },

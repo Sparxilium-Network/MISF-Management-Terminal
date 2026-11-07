@@ -1,6 +1,6 @@
 # MISF Management Terminal 架構
 
-> 最後修改：2026-11-08 ｜ 基於 commit：`b794b0d`
+> 最後修改：2026-11-08 ｜ 基於 commit：`630cda6`
 
 > [!WARNING]
 > **本專案仍處於開發階段，請勿用於正式環境。** 相關安全保護機制尚未完善。
@@ -37,7 +37,8 @@ flowchart LR
 | `core/src/vault.rs` | `StorageSession`：容器建立、解鎖、金鑰槽、備份、舊版明文轉入與刪除 |
 | `core/src/passkey.rs`、`core/src/windows_passkey.rs` | FIDO2／Windows WebAuthn 解鎖 |
 | `core/src/store.rs`、`core/src/sqlite.rs`、`core/src/db_upgrade/` | 資料模型的讀寫、SQLite 強化與結構遷移 |
-| `core/src/ssh.rs`、`core/src/transcript.rs` | SSH 連線、系統偵測、套件命令與輸出清理 |
+| `core/src/ssh.rs`、`core/src/transcript.rs` | SSH 傳輸：主機指紋、認證、執行單一命令（含 sudo 提示）、測試連線；輸出清理 |
+| `core/src/package_manager/` | 套件管理：`mod.rs`（`Manager` 與分派）、`detect.rs`（系統偵測）、`operation.rs`（檢查／升級流程）、`apt.rs`、`dnf.rs`、`yum.rs`、`pkg.rs`（各自的固定命令、失敗判斷與解析）、`rpm.rs`（DNF／YUM 共用的清單解析） |
 | `core/src/model.rs` | `Host`、`SshKey`、`HostGroup`、`CheckResult`、`ConnectionTest` |
 | `core/src/audit.rs`、`core/src/runtime.rs` | 操作日誌；資料目錄與 `--debug.*` 參數 |
 
@@ -65,6 +66,8 @@ UI 與 CLI 都送出 `{"action": …}` JSON 給 `Session::handle`。CLI 從 stdi
 - **sudo**：一般帳號以 `sudo -S` 執行，密碼經 channel stdin 傳送且每個 channel 最多送一次；PTY 預設開啟。連線每 30 秒送 keepalive。
 
 ## 系統偵測與套件管理
+
+每個套件管理器一個檔案，命令一律是 `&'static str` 常數，不把主機紀錄中的任何值插入命令；確認視窗顯示的就是實際執行的字串。`Manager` 以 `match` 分派，新增套件管理器時編譯器會要求補齊每個操作。測試確認 root 命令不含 sudo、一般帳號的命令都使用相同的 `sudo -S -p` 提示標記。
 
 每次測試、檢查或升級先以 `sh -c` 執行 `uname -s`／`uname -r`、讀取 `/etc/os-release` 的 NAME／VERSION_ID（例如「Debian 13」「Ubuntu 26.04」），並列出可用的 apt、dnf、yum 與已初始化的 pkg。Linux 依 APT → DNF → YUM 選擇，FreeBSD／DragonFly 用 pkg，其餘只支援連線測試。使用者可在主機上指定套件管理器（`manager_choice`），但它必須確實存在。主機已有偵測紀錄時，執行時偵測結果不同即失敗，不執行套件命令，因為確認視窗顯示的是紀錄中的命令。
 

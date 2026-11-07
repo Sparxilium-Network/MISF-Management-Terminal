@@ -1,5 +1,11 @@
 # 全工作區檢查結果
 
+## 2026-11-08（拆分 package_manager 模組，基於 `630cda6`）
+
+- 純重構：`ssh.rs` 只留 SSH 傳輸；套件管理移到 `core/src/package_manager/`（apt／dnf／yum／pkg／rpm／detect／operation）。命令字串內容未改，只換位置。
+- fmt、Clippy（`--all-features -D warnings`）通過；`cargo test --workspace` 全部通過（22、10、54、20 項），新增 root／sudo 命令形式、ID 往返、套件管理器選擇與各管理器失敗判斷的單元測試。
+- 未對真實主機重新實測。
+
 ## 2026-11-08（測試連線資訊，基於 `2669c10`）
 
 - fmt、Clippy（`-D warnings`）通過；`cargo test --workspace` 全部通過（22、10、46、20 項）。

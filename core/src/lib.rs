@@ -4,6 +4,7 @@
 pub mod audit;
 mod db_upgrade;
 pub mod model;
+pub mod package_manager;
 mod passkey;
 pub mod runtime;
 pub mod session;
@@ -320,9 +321,9 @@ pub async fn dispatch(request: Value, store: &Store, progress: &dyn Fn(&str)) ->
         "check" | "upgrade" => {
             let host = store.host(id)?;
             let result = if action == "upgrade" {
-                ssh::upgrade(&host, progress).await
+                package_manager::upgrade(&host, progress).await
             } else {
-                ssh::check(&host, progress).await
+                package_manager::check(&host, progress).await
             };
             save_results(store, vec![(id.to_owned(), result.clone())])?;
             Ok(json!(result))
@@ -348,7 +349,7 @@ pub async fn dispatch(request: Value, store: &Store, progress: &dyn Fn(&str)) ->
                 let limit = limit.clone();
                 tasks.spawn(async move {
                     let _permit = limit.acquire_owned().await;
-                    let result = ssh::run_apt(&host, upgrade, &|_: &str| {}).await;
+                    let result = package_manager::run(&host, upgrade, &|_: &str| {}).await;
                     (host.id.clone(), result)
                 });
             }

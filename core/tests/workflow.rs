@@ -1,6 +1,7 @@
 use misf_core::{
     dispatch,
-    model::{Host, parse_packages},
+    model::Host,
+    package_manager::{self, Manager, apt, dnf},
     ssh,
     store::Store,
 };
@@ -37,9 +38,9 @@ struct State {
 impl State {
     fn reply(&self, command: &str) -> (String, u32) {
         let upgraded = self.upgraded.load(Ordering::SeqCst);
-        if command == ssh::DETECT {
+        if command == package_manager::DETECT {
             (self.detect.clone(), 0)
-        } else if command == ssh::LIST {
+        } else if command == apt::LIST {
             let held = "libc6/stable 2.36-9 amd64 [upgradable from: 2.36-8]\n";
             let listing = if upgraded {
                 format!("Listing...\n{held}")
@@ -49,7 +50,7 @@ impl State {
                 )
             };
             (listing, 0)
-        } else if [ssh::DNF_LIST, ssh::SUDO_DNF_LIST].contains(&command) {
+        } else if [dnf::LIST, dnf::SUDO_LIST].contains(&command) {
             // A long name wraps onto its own line, as yum and dnf do on narrow terminals.
             let held = "kernel-core-with-a-very-long-package-name.x86_64\r\n      5.14.0-503.el9   baseos\r\n";
             let fresh = if upgraded {
@@ -64,16 +65,16 @@ impl State {
                 100,
             )
         } else if [
-            ssh::UPGRADE,
-            ssh::SUDO_UPGRADE,
-            ssh::DNF_UPGRADE,
-            ssh::SUDO_DNF_UPGRADE,
+            apt::UPGRADE,
+            apt::SUDO_UPGRADE,
+            dnf::UPGRADE,
+            dnf::SUDO_UPGRADE,
         ]
         .contains(&command)
         {
             self.upgraded.store(true, Ordering::SeqCst);
             ("Setting up openssl (3.0.17) ...\r\n".into(), 0)
-        } else if [ssh::UPDATE, ssh::SUDO_UPDATE].contains(&command) {
+        } else if [apt::UPDATE, apt::SUDO_UPDATE].contains(&command) {
             if self.fail_update {
                 ("E: repository unavailable\n".into(), 100)
             } else {
@@ -82,7 +83,7 @@ impl State {
                     0,
                 )
             }
-        } else if [ssh::DNF_UPDATE, ssh::SUDO_DNF_UPDATE].contains(&command) {
+        } else if [dnf::UPDATE, dnf::SUDO_UPDATE].contains(&command) {
             if self.fail_update {
                 (
                     "Error: Failed to download metadata for repo 'baseos'\n".into(),
@@ -269,10 +270,10 @@ async fn fixture_on(detect: &str, fail_update: bool, wrong_sudo: bool) -> Fixtur
         sudo_password: "sudo-secret".into(),
         use_pty: true,
         fingerprint,
-        package_manager: ssh::parse_platform(detect)
+        package_manager: package_manager::parse_platform(detect)
             .unwrap()
             .manager
-            .map(ssh::Manager::id)
+            .map(Manager::id)
             .unwrap_or_default()
             .into(),
         ..Default::default()
@@ -298,7 +299,7 @@ async fn password_pty_sudo_and_packages_work_end_to_end() {
     assert_eq!(test.host_key_fingerprint, fixture.host.fingerprint);
     assert_eq!(test.auth_method, "password");
     assert!(test.client_key_algorithm.is_empty());
-    let check = ssh::check(&fixture.host, &|_| {}).await;
+    let check = package_manager::check(&fixture.host, &|_| {}).await;
     assert_eq!(check.status, "success", "{}", check.error);
     assert_eq!(check.packages.len(), 2);
     assert_eq!(check.packages[0].current_version, "3.0.16");
@@ -335,7 +336,7 @@ async fn password_pty_sudo_and_packages_work_end_to_end() {
 #[tokio::test]
 async fn sudo_upgrade_reports_installed_and_held_back_packages() {
     let fixture = fixture(false, false).await;
-    let result = ssh::upgrade(&fixture.host, &|_| {}).await;
+    let result = package_manager::upgrade(&fixture.host, &|_| {}).await;
     assert_eq!(result.status, "success", "{}", result.error);
     assert_eq!(result.operation, "upgrade");
     assert_eq!(result.upgraded.len(), 1);
@@ -346,7 +347,10 @@ async fn sudo_upgrade_reports_installed_and_held_back_packages() {
     assert!(!result.output.contains("sudo-secret"));
     assert_eq!(fixture.state.pty_count.load(Ordering::SeqCst), 2);
     let commands = fixture.state.commands.lock().unwrap();
-    assert_eq!(*commands, ssh::package_commands(&fixture.host, true));
+    assert_eq!(
+        *commands,
+        package_manager::package_commands(&fixture.host, true)
+    );
     assert!(
         commands
             .iter()
@@ -358,18 +362,18 @@ async fn sudo_upgrade_reports_installed_and_held_back_packages() {
 async fn root_upgrade_runs_without_sudo() {
     let mut fixture = fixture(false, false).await;
     fixture.host.username = "root".into();
-    let result = ssh::upgrade(&fixture.host, &|_| {}).await;
+    let result = package_manager::upgrade(&fixture.host, &|_| {}).await;
     assert_eq!(result.status, "success", "{}", result.error);
     assert_eq!(result.upgraded.len(), 1);
     let commands = fixture.state.commands.lock().unwrap();
-    assert!(commands.iter().any(|c| c == ssh::UPGRADE));
+    assert!(commands.iter().any(|c| c == apt::UPGRADE));
     assert!(!commands.iter().any(|c| c.contains("sudo")));
 }
 
 #[tokio::test]
 async fn failed_index_update_never_starts_an_upgrade() {
     let fixture = fixture(true, false).await;
-    let result = ssh::upgrade(&fixture.host, &|_| {}).await;
+    let result = package_manager::upgrade(&fixture.host, &|_| {}).await;
     assert_eq!(result.status, "failed");
     assert!(result.upgraded.is_empty());
     let commands = fixture.state.commands.lock().unwrap();
@@ -379,7 +383,7 @@ async fn failed_index_update_never_starts_an_upgrade() {
 #[tokio::test]
 async fn sudo_dnf_upgrade_parses_wrapped_rows_and_reports_held_back_packages() {
     let fixture = fixture_on(DNF_HOST, false, false).await;
-    let result = ssh::upgrade(&fixture.host, &|_| {}).await;
+    let result = package_manager::upgrade(&fixture.host, &|_| {}).await;
     assert_eq!(result.status, "success", "{}", result.error);
     assert_eq!(result.distro, "Rocky Linux 9.5");
     assert_eq!(result.package_manager, "dnf");
@@ -396,7 +400,10 @@ async fn sudo_dnf_upgrade_parses_wrapped_rows_and_reports_held_back_packages() {
     // Update, both listings and the upgrade all go through sudo.
     assert_eq!(fixture.state.pty_count.load(Ordering::SeqCst), 4);
     let commands = fixture.state.commands.lock().unwrap();
-    assert_eq!(*commands, ssh::package_commands(&fixture.host, true));
+    assert_eq!(
+        *commands,
+        package_manager::package_commands(&fixture.host, true)
+    );
     assert!(commands[1..].iter().all(|c| !c.contains("apt")));
 }
 
@@ -404,16 +411,22 @@ async fn sudo_dnf_upgrade_parses_wrapped_rows_and_reports_held_back_packages() {
 async fn recorded_manager_mismatch_and_unsupported_systems_never_touch_packages() {
     let mut fixture = fixture_on(DNF_HOST, false, false).await;
     fixture.host.package_manager = "apt".into();
-    let result = ssh::upgrade(&fixture.host, &|_| {}).await;
+    let result = package_manager::upgrade(&fixture.host, &|_| {}).await;
     assert_eq!(result.status, "failed");
     assert!(result.error.contains("測試連線"), "{}", result.error);
-    assert_eq!(*fixture.state.commands.lock().unwrap(), [ssh::DETECT]);
+    assert_eq!(
+        *fixture.state.commands.lock().unwrap(),
+        [package_manager::DETECT]
+    );
     let mut fixture = fixture_on("OpenBSD\n7.6\n", false, false).await;
     fixture.host.package_manager.clear();
-    let result = ssh::check(&fixture.host, &|_| {}).await;
+    let result = package_manager::check(&fixture.host, &|_| {}).await;
     assert_eq!(result.status, "unsupported");
     assert_eq!(result.distro, "OpenBSD 7.6");
-    assert_eq!(*fixture.state.commands.lock().unwrap(), [ssh::DETECT]);
+    assert_eq!(
+        *fixture.state.commands.lock().unwrap(),
+        [package_manager::DETECT]
+    );
 }
 
 #[tokio::test]
@@ -422,19 +435,22 @@ async fn chosen_package_manager_overrides_detection_only_when_installed() {
     let mut fixture = fixture_on(DNF_HOST, false, false).await;
     fixture.host.package_manager = "dnf".into();
     fixture.host.manager_choice = "yum".into();
-    let result = ssh::check(&fixture.host, &|_| {}).await;
+    let result = package_manager::check(&fixture.host, &|_| {}).await;
     let commands = fixture.state.commands.lock().unwrap().clone();
-    let expected = ssh::package_commands(&fixture.host, false);
+    let expected = package_manager::package_commands(&fixture.host, false);
     assert!(expected[1].contains("yum"), "{expected:?}");
     assert_eq!(commands[..2], expected[..2], "{}", result.error);
     // The detected manager is still recorded as detected.
     assert_eq!(result.package_manager, "dnf");
     let mut fixture = fixture_on(DNF_HOST, false, false).await;
     fixture.host.manager_choice = "apt".into();
-    let result = ssh::upgrade(&fixture.host, &|_| {}).await;
+    let result = package_manager::upgrade(&fixture.host, &|_| {}).await;
     assert_eq!(result.status, "failed");
     assert!(result.error.contains("找不到所選"), "{}", result.error);
-    assert_eq!(*fixture.state.commands.lock().unwrap(), [ssh::DETECT]);
+    assert_eq!(
+        *fixture.state.commands.lock().unwrap(),
+        [package_manager::DETECT]
+    );
 }
 
 /// Saves, trusts and detects a host the way the UI does before batching it.
@@ -598,7 +614,7 @@ async fn imported_private_key_authentication_works() {
 async fn root_check_executes_apt_without_sudo() {
     let mut fixture = fixture(false, false).await;
     fixture.host.username = "root".into();
-    let result = ssh::check(&fixture.host, &|_| {}).await;
+    let result = package_manager::check(&fixture.host, &|_| {}).await;
     assert_eq!(result.status, "success", "{}", result.error);
     let commands = fixture.state.commands.lock().unwrap();
     assert!(
@@ -635,7 +651,7 @@ async fn probe_never_submits_credentials_and_changed_key_blocks_authentication()
 #[tokio::test]
 async fn apt_update_failure_never_lists_stale_packages() {
     let fixture = fixture(true, false).await;
-    let check = ssh::check(&fixture.host, &|_| {}).await;
+    let check = package_manager::check(&fixture.host, &|_| {}).await;
     assert_eq!(check.status, "failed");
     assert!(check.packages.is_empty());
     assert!(check.error.contains("索引失敗"));
@@ -646,14 +662,14 @@ async fn apt_update_failure_never_lists_stale_packages() {
             .lock()
             .unwrap()
             .iter()
-            .any(|c| c == ssh::LIST)
+            .any(|c| c == apt::LIST)
     );
 }
 
 #[tokio::test]
 async fn repeated_sudo_prompt_fails_without_repeated_password_submission() {
     let fixture = fixture(false, true).await;
-    let check = ssh::check(&fixture.host, &|_| {}).await;
+    let check = package_manager::check(&fixture.host, &|_| {}).await;
     assert_eq!(check.status, "failed");
     assert!(check.error.contains("sudo 密碼錯誤"), "{}", check.error);
 }
@@ -667,7 +683,7 @@ async fn failed_authentication_is_reported_without_package_results() {
     assert_eq!(test.status, "failed");
     assert!(!test.kex.is_empty() && test.auth_method.is_empty());
     assert!(!test.error.contains("wrong"), "{}", test.error);
-    let check = ssh::check(&wrong, &|_| {}).await;
+    let check = package_manager::check(&wrong, &|_| {}).await;
     assert_eq!(check.status, "failed");
     assert!(check.packages.is_empty() && check.distro.is_empty());
     assert!(fixture.state.commands.lock().unwrap().is_empty());
@@ -739,9 +755,9 @@ fn malformed_store_is_preserved_and_unparseable_apt_output_is_not_success() {
             .is_err()
     );
     assert_eq!(std::fs::read_to_string(path).unwrap(), "damaged-data");
-    assert!(parse_packages("Listing...\n").unwrap().is_empty());
-    assert!(parse_packages("unexpected localized output").is_err());
-    assert!(parse_packages("package/repo missing-fields").is_err());
+    assert!(apt::parse_pending("Listing...\n").unwrap().is_empty());
+    assert!(apt::parse_pending("unexpected localized output").is_err());
+    assert!(apt::parse_pending("package/repo missing-fields").is_err());
 }
 
 #[tokio::test]

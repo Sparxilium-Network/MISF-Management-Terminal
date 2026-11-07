@@ -12,8 +12,8 @@ use eframe::egui::{self, Color32, RichText, Stroke};
 use misf_core::model::{CheckResult, ConnectionTest, Host, HostGroup};
 use misf_core::{
     audit::{Action, AuditLog, Outcome},
+    package_manager,
     runtime::RuntimePaths,
-    ssh,
     vault::{MIN_PASSPHRASE_CHARS, PassphraseProblem, passphrase_problem},
 };
 use serde_json::{Value, json};
@@ -1894,7 +1894,7 @@ impl ManagementApp {
                 test,
                 t,
                 t.get("hint.test_title"),
-                &[ssh::DETECT],
+                &[package_manager::DETECT],
                 t.get("hint.test_effect"),
                 t.get("hint.test_risk"),
             )
@@ -1916,7 +1916,7 @@ impl ManagementApp {
                 self.after_trust = None;
                 self.send(json!({"action":"probe","id":self.selected}));
             }
-            let detected = ssh::Manager::from_id(host.manager());
+            let detected = package_manager::Manager::from_id(host.manager());
             let manager = [("manager", manager_label(t, host.manager()).to_owned())];
             let (check_label, upgrade_label, check_effect) = match detected {
                 Some(_) => (
@@ -1939,7 +1939,7 @@ impl ManagementApp {
                 check,
                 t,
                 &t.format("hint.check_title", &manager),
-                &ssh::package_commands(&host, false),
+                &package_manager::package_commands(&host, false),
                 &check_effect,
                 t.get("hint.check_risk"),
             )
@@ -1953,7 +1953,7 @@ impl ManagementApp {
                 upgrade.on_disabled_hover_text(t.get("apt.upgrade_needs_detect")),
                 t,
                 &t.format("hint.upgrade_title", &manager),
-                &ssh::package_commands(&host, true),
+                &package_manager::package_commands(&host, true),
                 t.get("hint.upgrade_effect"),
                 t.get("hint.upgrade_risk"),
             )
@@ -2192,8 +2192,8 @@ impl ManagementApp {
         });
         let manager = [("manager", manager_label(t, &self.batch_manager).to_owned())];
         let commands = |upgrade| {
-            ssh::Manager::from_id(&self.batch_manager)
-                .map(|m| ssh::manager_commands(m, false, upgrade))
+            package_manager::Manager::from_id(&self.batch_manager)
+                .map(|m| package_manager::manager_commands(m, false, upgrade))
                 .unwrap_or_default()
         };
         let (check_commands, upgrade_commands) = (commands(false), commands(true));
@@ -2684,9 +2684,9 @@ impl ManagementApp {
             .collect();
         // A batch shares one manager; root targets simply skip sudo.
         let commands = match targets.first() {
-            Some(host) if !confirm.batch => ssh::package_commands(host, true),
-            Some(host) => ssh::Manager::from_id(host.manager())
-                .map(|m| ssh::manager_commands(m, false, true))
+            Some(host) if !confirm.batch => package_manager::package_commands(host, true),
+            Some(host) => package_manager::Manager::from_id(host.manager())
+                .map(|m| package_manager::manager_commands(m, false, true))
                 .unwrap_or_default(),
             None => vec![],
         };
@@ -3979,7 +3979,7 @@ fn danger(text: &str) -> egui::Button<'_> {
 }
 /// Batch operations need a confirmed fingerprint and a detected, supported package manager.
 fn batch_ready(host: &Host) -> bool {
-    !host.fingerprint.is_empty() && ssh::Manager::from_id(host.manager()).is_some()
+    !host.fingerprint.is_empty() && package_manager::Manager::from_id(host.manager()).is_some()
 }
 /// Batch-ready package managers with their host counts, most hosts first.
 fn batch_managers(hosts: &[Host]) -> Vec<(String, usize)> {
@@ -4111,8 +4111,8 @@ fn connection_panel(ui: &mut egui::Ui, t: Translator, test: Option<&ConnectionTe
 }
 
 fn manager_label(t: Translator, id: &str) -> &'static str {
-    ssh::Manager::from_id(id)
-        .map(ssh::Manager::label)
+    package_manager::Manager::from_id(id)
+        .map(package_manager::Manager::label)
         .unwrap_or(t.get("manager.none"))
 }
 /// "Ubuntu 26.04 · APT" once detected, otherwise the OS family chosen in the editor.
@@ -4533,7 +4533,7 @@ mod tests {
             app.prompt_upgrade(vec!["trusted".into()], true);
             let text = rendered_text(&ctx, |ui| app.upgrade_dialog(ui.ctx()));
             assert!(text.contains("host-trusted"));
-            assert!(text.contains(ssh::SUDO_UPGRADE));
+            assert!(text.contains(package_manager::apt::SUDO_UPGRADE));
             assert!(app.upgrade_confirm.is_some());
         }
         assert!(commands.try_recv().is_err());
