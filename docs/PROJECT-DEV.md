@@ -1,6 +1,6 @@
 # MISF Management Terminal 開發說明
 
-> 最後修改：2026-11-07 ｜ 基於 commit：`af2c75e`
+> 最後修改：2026-11-07 ｜ 基於 commit：`7415de8`
 
 一般使用方式見 [README](../README.md) 與 [使用指南](user-guide.md)。本文件是開發文件的入口，給開發者與維護者，記錄建置、儲存格式、安全設計細節與測試方式。
 
@@ -12,8 +12,19 @@
 | --- | --- |
 | [架構](architecture.md) | 目前實作架構、資料表與 JSON 協定 |
 | [依賴更新與安全公告](dependency-updates.md) | 依賴版本、更新紀錄與尚未修補的公告 |
-| [LUKSbox 整合評估](luksbox-evaluation.md) | 加密主機庫的評估、整合方式與限制 |
+| [LUKSbox 加密儲存設計](luksbox-design.md) | 加密主機庫的實作決定、限制與測試範圍 |
 | [Passkey 實體測試](passkey-testing.md) | 以實體驗證器測試 Passkey 的程序 |
+
+## 專案慣例
+
+- 專案名稱統一為 **MISF Management Terminal**；程式、套件與環境變數使用 `misf`／`MISF` 命名。
+- 遠端儲存庫：`https://github.com/Sparxilium-Network/MISF-Management-Terminal.git`。
+- 完成一個功能（可以建置，相關測試與檢查通過）就建立本機 commit，不留下未提交的變更，也不把不相關的修改放在同一個 commit。
+- 只以明確路徑 `git add` 相關檔案，不使用 `git add -A`／`git add .`；保留與任務無關的既有變更。建置產物依 `.gitignore` 排除。
+- commit message 標題行寫英文，空一行後寫繁體中文說明。
+- 禁止 `git push`（含 force push、推送 tag）或以其他工具、API 把本機變更送到遠端，也不發布套件、建立 release 或觸發部署用的 workflow；除非使用者明確要求，且該要求只對該次操作有效。
+- 修改並提交後執行 `.\package.ps1`，確認 `dist\MISF\misf.exe` 為最新建置再交付。`package.ps1` 不會先清空 `dist\MISF\docs`，文件改名或刪除後需手動移除舊檔。
+- AI Agent 的工作紀錄（已確認的決策、測試與檢查結果、推論過程）放在 [`.cowork/`](../.cowork/INDEX.md)，不寫進 `docs/`。
 
 ## 結構
 
@@ -40,7 +51,7 @@
 
 圖示素材放在 [`assets/icons/`](../assets/icons/)，已納入版本控制。Windows 執行檔與程式視窗均內嵌圖示；Linux 套件另附選單項目與各尺寸圖示，安裝方式見 [`assets/README.md`](../assets/README.md)。
 
-Linux／macOS 可使用 `cargo run --locked -p misf`，須在對應平台建置；Linux 建置需要 OpenGL、X11／Wayland、fontconfig 與檔案對話框相關開發套件，Passkey 另需 `clang libclang-dev libfido2-dev`。此版本已在 Windows 建置與驗證。
+Linux／macOS 可使用 `cargo run --locked -p misf`，須在對應平台建置；Linux 建置需要 OpenGL、X11／Wayland、fontconfig 與檔案對話框相關開發套件，Passkey 另需 `clang libclang-dev libfido2-dev`。
 
 ## 自動建置與 Pre-release
 
@@ -55,7 +66,7 @@ Linux／macOS 可使用 `cargo run --locked -p misf`，須在對應平台建置�
 
 建置環境使用 GitHub 的 `ubuntu-latest`／`windows-latest` 和每次安裝的最新 **Rust stable**（不是 nightly）。Actions 使用目前最新穩定版的固定 commit；Dependabot 每日檢查 Actions 與 Cargo 依賴並提出更新 PR，通過驗證及合併後才進入發布。套件使用已提交的 `Cargo.lock` 與 `--locked`，不在發布時偷偷改變依賴；LUKSbox 仍固定在已驗證的版本。Linux 的 glibc 相容性下限會隨 `ubuntu-latest` 映像更新。
 
-本機也可用 PowerShell 7 在對應平台執行 `./package.ps1 -Archive`，產生相同壓縮檔及校驗檔。GitHub Actions 僅發布套件，不會提交原始碼；本機操作仍遵循 AGENTS.md 的禁止 push 規則。
+本機也可用 PowerShell 7 在對應平台執行 `./package.ps1 -Archive`，產生相同壓縮檔及校驗檔。GitHub Actions 僅發布套件，不會提交原始碼；本機操作仍遵循上方[專案慣例](#專案慣例)的禁止 push 規則。
 
 ## 資料儲存
 
@@ -84,7 +95,7 @@ Linux／macOS 可使用 `cargo run --locked -p misf`，須在對應平台建置�
 
 ## LUKSbox 加密儲存
 
-使用 LUKSbox v0.6.1（固定 commit `69448f708f1328d672deb595e359579d630cb0b0`）的 core／format／VFS 函式庫；FIDO2 使用有修改紀錄的本機相容性副本，將 P-256 等依賴更新至新版。不掛載磁碟、不需要 WinFsp 或 TPM 整合。加密為 AES-256-GCM-SIV；密碼採 Argon2id（256 MiB、3 次、4 lanes）。這不是 LUKS2 磁碟格式。版本與仍未修補的 RSA 公告見 [依賴更新與安全公告](dependency-updates.md)，整合評估見 [LUKSbox 整合評估](luksbox-evaluation.md)。
+使用 LUKSbox v0.6.1（固定 commit `69448f708f1328d672deb595e359579d630cb0b0`）的 core／format／VFS 函式庫；FIDO2 使用有修改紀錄的本機相容性副本，將 P-256 等依賴更新至新版。不掛載磁碟、不需要 WinFsp 或 TPM 整合。加密為 AES-256-GCM-SIV；密碼採 Argon2id（256 MiB、3 次、4 lanes）。這不是 LUKS2 磁碟格式。版本與仍未修補的 RSA 公告見 [依賴更新與安全公告](dependency-updates.md)，設計與限制見 [LUKSbox 加密儲存設計](luksbox-design.md)。
 
 - 第一次啟動即要求建立容器：將資料直接從記憶體寫入，再關閉並重新解鎖驗證。有舊版 `hosts.db` 時先保留，再詢問是否刪除；全新設定檔不會產生任何明文主機庫檔。
 - 新解鎖密碼（建立與新增備援）至少 8 個字元，須含數字、字母、符號其中至少兩種，空白只計長度（`vault::passphrase_problem`）。既有金鑰槽照常解鎖。
@@ -147,4 +158,4 @@ LUKSbox 測試使用暫存資料，涵蓋未建立容器時拒絕主機操作且
 
 開發用畫面擷取可使用 `cargo build -p misf --features capture`，以 `MISF_SCREENSHOT_TO` 指定 PNG 路徑，並以 `--debug.dir` 指定測試資料。`MISF_OPEN_EDITOR=1`／`MISF_OPEN_SETTINGS=1`／`MISF_OPEN_PASSKEY=1`／`MISF_OPEN_BATCH=1`／`MISF_OPEN_KEYS=1` 可預先開啟對應畫面；旗標只有明確設為 `1` 才啟用；`MISF_OPEN_SETTINGS=about`／`MISF_OPEN_SETTINGS=preferences` 直接開啟「關於」／「偏好設定」頁。debug 模式的 Passkey 按鈕停用，擷取不操作硬體。正式 release 預設不啟用擷取功能。
 
-`.daybrake` 不是 daybreak 拼錯，是故意的。
+`.daybrake/` 保存 DayBrake 儲存安全測試的任務書、報告與已知安全問題（`.daybrake/Know.md`）。`.daybrake` 不是 daybreak 拼錯，是故意的。
