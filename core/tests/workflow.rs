@@ -283,10 +283,21 @@ async fn fixture_on(detect: &str, fail_update: bool, wrong_sudo: bool) -> Fixtur
 #[tokio::test]
 async fn password_pty_sudo_and_packages_work_end_to_end() {
     let fixture = fixture(false, false).await;
-    let platform = ssh::test_connection(&fixture.host).await.unwrap();
-    assert_eq!(platform.kernel, "Linux");
-    assert_eq!(platform.distro, "Debian 13");
-    assert_eq!(platform.manager, Some(ssh::Manager::Apt));
+    let test = ssh::test_connection(&fixture.host).await;
+    assert_eq!(test.status, "success", "{}", test.error);
+    assert_eq!(test.kernel, "Linux");
+    assert_eq!(test.distro, "Debian 13");
+    assert_eq!(test.package_managers, ["apt"]);
+    assert!(
+        test.server_version.starts_with("SSH-2.0-"),
+        "{}",
+        test.server_version
+    );
+    assert!(!test.kex.is_empty() && !test.cipher.is_empty() && !test.client_mac.is_empty());
+    assert_eq!(test.host_key_algorithm, "ssh-ed25519");
+    assert_eq!(test.host_key_fingerprint, fixture.host.fingerprint);
+    assert_eq!(test.auth_method, "password");
+    assert!(test.client_key_algorithm.is_empty());
     let check = ssh::check(&fixture.host, &|_| {}).await;
     assert_eq!(check.status, "success", "{}", check.error);
     assert_eq!(check.packages.len(), 2);
@@ -573,10 +584,14 @@ async fn imported_private_key_authentication_works() {
         .to_string();
     fixture.host.password.clear();
     fixture.host.validate().unwrap();
+    let test = ssh::test_connection(&fixture.host).await;
     assert_eq!(
-        ssh::test_connection(&fixture.host).await.unwrap().kernel,
-        "Linux"
+        (test.status.as_str(), test.kernel.as_str()),
+        ("success", "Linux")
     );
+    assert_eq!(test.auth_method, "publickey");
+    assert_eq!(test.client_key_algorithm, "ssh-ed25519");
+    assert!(test.client_key_fingerprint.starts_with("SHA256:"));
 }
 
 #[tokio::test]
@@ -605,20 +620,16 @@ async fn probe_never_submits_credentials_and_changed_key_blocks_authentication()
     assert_eq!(fixture.state.auth_attempts.load(Ordering::SeqCst), 0);
     let mut changed = fixture.host.clone();
     changed.fingerprint = "SHA256:wrong".into();
-    let error = ssh::test_connection(&changed)
-        .await
-        .unwrap_err()
-        .to_string();
-    assert!(error.contains("指紋已變更"), "{error}");
+    let test = ssh::test_connection(&changed).await;
+    assert_eq!(test.status, "failed");
+    assert!(test.error.contains("指紋已變更"), "{}", test.error);
+    // What the server actually presented is kept, and no sign-in was recorded.
+    assert_eq!(test.host_key_fingerprint, fixture.host.fingerprint);
+    assert!(test.auth_method.is_empty() && test.distro.is_empty());
     assert_eq!(fixture.state.auth_attempts.load(Ordering::SeqCst), 0);
     changed.fingerprint.clear();
-    assert!(
-        ssh::test_connection(&changed)
-            .await
-            .unwrap_err()
-            .to_string()
-            .contains("先確認")
-    );
+    let test = ssh::test_connection(&changed).await;
+    assert!(test.error.contains("先確認"), "{}", test.error);
 }
 
 #[tokio::test]
@@ -652,7 +663,10 @@ async fn failed_authentication_is_reported_without_package_results() {
     let fixture = fixture(false, false).await;
     let mut wrong = fixture.host.clone();
     wrong.password = "wrong".into();
-    assert!(ssh::test_connection(&wrong).await.is_err());
+    let test = ssh::test_connection(&wrong).await;
+    assert_eq!(test.status, "failed");
+    assert!(!test.kex.is_empty() && test.auth_method.is_empty());
+    assert!(!test.error.contains("wrong"), "{}", test.error);
     let check = ssh::check(&wrong, &|_| {}).await;
     assert_eq!(check.status, "failed");
     assert!(check.packages.is_empty() && check.distro.is_empty());

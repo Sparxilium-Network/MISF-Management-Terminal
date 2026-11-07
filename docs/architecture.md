@@ -1,6 +1,6 @@
 # MISF Management Terminal：全 Rust 原生桌面
 
-> 最後修改：2026-11-08 ｜ 基於 commit：`b63645b`
+> 最後修改：2026-11-08 ｜ 基於 commit：`2669c10`
 
 > [!WARNING]
 > **本專案仍處於開發階段，請勿用於正式環境。**
@@ -21,7 +21,9 @@ flowchart LR
 
 首次連線先取得 SHA-256 指紋，使用者確認後才提交認證。指紋變更即阻擋連線，可明確重新核對。變更目標位址或埠時，會清除既存信任及檢查結果。
 
-每次檢查或升級先以 `sh -c` 執行偵測命令：`uname -s`／`uname -r`、讀取 `/etc/os-release` 的 NAME／VERSION_ID（Debian 的「GNU/Linux」省略，例如「Debian 13」「Ubuntu 26.04」），並列出可用的 apt、dnf、yum 與已初始化的 pkg。Linux 依 APT → DNF → YUM 選擇，FreeBSD／DragonFly 使用 pkg，其餘系統標為不支援。偵測結果（`distro`、`package_manager`）寫入檢查結果與主機紀錄；測試連線也會更新，儲存主機時一律沿用伺服器端舊值，位址或埠變更則清除。舊紀錄沒有 `package_manager` 但曾成功檢查者視為 APT。主機已有紀錄時，偵測結果不同即失敗且不執行套件命令，因為確認視窗顯示的是紀錄中的命令。
+每次檢查或升級先以 `sh -c` 執行偵測命令：`uname -s`／`uname -r`、讀取 `/etc/os-release` 的 NAME／VERSION_ID（Debian 的「GNU/Linux」省略，例如「Debian 13」「Ubuntu 26.04」），並列出可用的 apt、dnf、yum 與已初始化的 pkg。Linux 依 APT → DNF → YUM 選擇，FreeBSD／DragonFly 使用 pkg，其餘系統標為不支援。偵測結果（`distro`、`package_manager`）寫入檢查結果與主機紀錄；測試連線也會更新，儲存主機時一律沿用伺服器端舊值，位址或埠變更則清除。
+
+測試連線另存一筆 `ConnectionTest`（成功或失敗都存，每台主機只留最後一次）：`client::Handler::kex_done` 取得的伺服器版本字串（移除控制字元、最多 255 字）、金鑰交換、主機金鑰演算法與指紋、加密演算法、雙向 MAC（AEAD 為 `none`）、是否啟用 OpenSSH 嚴格金鑰交換，認證成功後的登入方式與用戶端公鑰演算法／指紋，以及偵測到的核心、發行版與所有可用套件管理器。不含密碼、私鑰或任何遠端輸出；錯誤訊息經 `Host::redact`。UI 在結果卡片的「連線資訊」分頁顯示；測試失敗時 UI 重新載入主機清單以顯示已記錄的部分。位址或埠變更時清除。舊紀錄沒有 `package_manager` 但曾成功檢查者視為 APT。主機已有紀錄時，偵測結果不同即失敗且不執行套件命令，因為確認視窗顯示的是紀錄中的命令。
 
 APT 檢查：root 直接執行 apt-get update，一般帳號透過 sudo 執行。可要求 PTY，sudo 密碼透過 channel 的 stdin 傳送，不放在命令列。APT 更新使用 `-q=1` 紀錄模式，停用會持續重畫的下載進度並保留來源、摘要與錯誤。SSH 收到的 CRLF 統一為換行，單獨 CR 也另起一行以保留診斷訊息；ANSI 顏色／游標及終端控制字串不進入儲存結果。執行輸出以可選取的等寬文字呈現，保留換行並支援水平與垂直捲動，顯示舊紀錄時也清理控制碼。已被舊版串接的歷史進度無法還原，需重新執行檢查。索引更新成功後以固定英文 locale 列出待更新套件；檢查只列清單。索引更新失敗不讀取舊套件清單。
 
@@ -35,7 +37,7 @@ APT 升級在相同流程後追加 `apt-get -y upgrade`：一般帳號以 `sudo 
 
 左上角「設定」按鈕開啟集中管理語言與外觀的視窗，並顯示版本資訊：MISF 程式版本（取自 Cargo 套件版本，目前 0.1.0）、主機庫格式（SQLite 或尚未轉換的舊版 JSON，以及是否 LUKSbox 加密）與資料庫結構版本（讀自檔頭 `user_version`）；格式為 JSON 時下方顯示「轉換為 SQLite 資料庫」按鈕，送出 `convert_storage` 寫回一次未變更的主機資料，容器內的 `/hosts.json` 便在同一次提交中換成 SQLite，不必等下一次編輯；這些值隨 `list` 回應更新，鎖定時不顯示。介面語系由 `app/locales/zh-tw.json`／`en-us.json` 提供，內嵌進執行檔，透過穩定 key 與命名參數即時切換。`app/src/theme.rs` 統一管理淺色／深色配色及系統主題選項，涵蓋卡片、輸入框、對話框與警告。非敏感偏好以獨立、未加密的 `ui-settings.json` 保存，不進入主機資料／加密容器，因此鎖定主機庫也可讀取語言及外觀；使用暫存檔原子替換，寫入失敗會顯示錯誤。
 
-主機資料存於使用者目錄 `.misf-management/hosts.lbx` 內的 SQLite 映像，以 MISF_DATA_DIR 可更改位置；下述檢查也套用在建立容器時讀取的舊版明文 `hosts.db`。主機資料使用 SQLite（靜態連結 bundled SQLite 3.54.1，`core/src/sqlite.rs`），資料表為 `hosts`、`check_results`、`packages`（STRICT，以 position 保留順序），v2 起另有 `key_slots`（LUKSbox 金鑰槽名稱）與 `hosts.manager_choice`（使用者指定的套件管理器，空字串為自動偵測），v3 起另有 `ssh_keys`（共用 SSH 金鑰）與 `hosts.key_id`（空字串為主機自帶私鑰），v4 起另有 `host_groups`（側欄分類名稱、順序與收合狀態）與 `hosts.group_id`（空字串為未分類）。檔頭 `application_id` 固定為 `0x4D495346`（"MISF"），`user_version` 是結構版本槽；`MIGRATIONS[n]` 把 vN 升到 vN+1，只能追加、不得修改已發佈的版本。
+主機資料存於使用者目錄 `.misf-management/hosts.lbx` 內的 SQLite 映像，以 MISF_DATA_DIR 可更改位置；下述檢查也套用在建立容器時讀取的舊版明文 `hosts.db`。主機資料使用 SQLite（靜態連結 bundled SQLite 3.54.1，`core/src/sqlite.rs`），資料表為 `hosts`、`check_results`、`packages`（STRICT，以 position 保留順序），v2 起另有 `key_slots`（LUKSbox 金鑰槽名稱）與 `hosts.manager_choice`（使用者指定的套件管理器，空字串為自動偵測），v3 起另有 `ssh_keys`（共用 SSH 金鑰）與 `hosts.key_id`（空字串為主機自帶私鑰），v4 起另有 `host_groups`（側欄分類名稱、順序與收合狀態）與 `hosts.group_id`（空字串為未分類），v5 起另有 `connection_tests`（每台主機最後一次測試連線的協商結果，`package_managers` 以逗號分隔）。檔頭 `application_id` 固定為 `0x4D495346`（"MISF"），`user_version` 是結構版本槽；`MIGRATIONS[n]` 把 vN 升到 vN+1，只能追加、不得修改已發佈的版本。
 
 開檔前先拒絕 WAL：資料庫旁有 `-wal`／`-shm`，或檔頭讀寫格式位元組不是 rollback journal，就不交給 SQLite，避免 SQLite 在任何檢查之前重放 WAL 或改寫檔頭。每次開啟先強化連線：DEFENSIVE、關閉 trusted_schema、停用 trigger／view、ATTACH 上限 0、rollback journal（不用 WAL）、secure_delete、temp_store=MEMORY、mmap_size=0、cell_size_check；未編入 load_extension。接著執行 quick_check，核對 application_id 與版本，再把 sqlite_schema 與同版本遷移在記憶體重建的參考結構逐列比對；多出的 trigger、view、index 或改過的欄位定義都會拒絕。版本較新時拒絕開啟，不降級寫入；版本較舊時明文檔先複製為 `hosts.v<N>.bak.db`，再於單一交易執行遷移並更新 user_version。遷移每一步一個檔案，放在 `core/src/db_upgrade/vN_vM.rs`，依序串接，所以任何舊版本都會逐步升到目前版本（例如 v1 會依序執行 v1→v2、v2→v3…）；新增版本只要加一個檔案並附加到 `MIGRATIONS`，已發布的步驟不得修改。加密容器解鎖後若資料庫是舊版本，主機庫維持鎖定（`pending_upgrade`），先詢問使用者：同意才送出 `vault_upgrade` 寫回目前版本並開啟，取消則送出 `vault_upgrade_cancel` 關閉容器，檔案保持原版本。所有 SQL 為固定語句與綁定參數。
 

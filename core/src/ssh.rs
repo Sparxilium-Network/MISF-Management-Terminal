@@ -1,5 +1,5 @@
 use crate::model::{
-    CheckResult, Host, Package, decode_private_key, parse_packages, parse_phased,
+    CheckResult, ConnectionTest, Host, Package, decode_private_key, parse_packages, parse_phased,
     parse_pkg_packages, parse_rpm_packages,
 };
 use anyhow::{Context, Result, bail, ensure};
@@ -167,9 +167,13 @@ pub fn parse_platform(output: &str) -> Result<Platform> {
     })
 }
 
+type Details = Arc<Mutex<ConnectionTest>>;
+
 struct Verifier {
     expected: Option<String>,
     observed: Arc<Mutex<Option<String>>>,
+    /// Filled in as the handshake goes, so a failed test still shows how far it got.
+    details: Details,
 }
 
 impl client::Handler for Verifier {
@@ -180,14 +184,43 @@ impl client::Handler for Verifier {
     ) -> Result<bool, Self::Error> {
         let fingerprint = key.public_key().fingerprint(HashAlg::Sha256).to_string();
         *self.observed.lock().unwrap() = Some(fingerprint.clone());
+        self.details.lock().unwrap().host_key_fingerprint = fingerprint.clone();
         Ok(self
             .expected
             .as_ref()
             .is_none_or(|expected| *expected == fingerprint))
     }
+
+    async fn kex_done(
+        &mut self,
+        _shared_secret: Option<&[u8]>,
+        names: &russh::Names,
+        session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        let mut details = self.details.lock().unwrap();
+        details.server_version = server_version(session.remote_sshid());
+        details.kex = names.kex.as_ref().into();
+        details.host_key_algorithm = names.key.as_str().into();
+        details.cipher = names.cipher.as_ref().into();
+        details.client_mac = names.client_mac.as_ref().into();
+        details.server_mac = names.server_mac.as_ref().into();
+        details.strict_kex = names.strict_kex();
+        Ok(())
+    }
 }
 
-async fn connect(host: &Host, probe: bool) -> Result<client::Handle<Verifier>> {
+/// The server picks this text, so control characters go and it stays within RFC 4253's 255.
+fn server_version(raw: &[u8]) -> String {
+    String::from_utf8_lossy(raw)
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(255)
+        .collect::<String>()
+        .trim()
+        .to_owned()
+}
+
+async fn connect(host: &Host, probe: bool, details: &Details) -> Result<client::Handle<Verifier>> {
     if !probe {
         ensure!(!host.fingerprint.is_empty(), "請先確認並信任 SSH 主機指紋");
     }
@@ -211,6 +244,7 @@ async fn connect(host: &Host, probe: bool) -> Result<client::Handle<Verifier>> {
                     Some(host.fingerprint.clone())
                 },
                 observed: observed.clone(),
+                details: details.clone(),
             },
         ),
     )
@@ -257,6 +291,7 @@ pub async fn probe(host: &Host) -> Result<String> {
             Verifier {
                 expected: None,
                 observed: observed.clone(),
+                details: Details::default(),
             },
         ),
     )
@@ -275,13 +310,21 @@ pub async fn probe(host: &Host) -> Result<String> {
     Ok(fingerprint)
 }
 
-async fn authenticate(host: &Host) -> Result<client::Handle<Verifier>> {
+async fn authenticate(host: &Host, details: &Details) -> Result<client::Handle<Verifier>> {
     let key = if host.auth_type == "password" {
         None
     } else {
         Some(decode_private_key(&host.private_key, host.passphrase())?)
     };
-    let mut session = connect(host, false).await?;
+    let (method, key_algorithm, key_fingerprint) = match &key {
+        None => ("password", String::new(), String::new()),
+        Some(key) => (
+            "publickey",
+            key.algorithm().as_str().to_owned(),
+            key.public_key().fingerprint(HashAlg::Sha256).to_string(),
+        ),
+    };
+    let mut session = connect(host, false, details).await?;
     let auth = timeout(Duration::from_secs(20), async {
         match key {
             None => {
@@ -304,6 +347,11 @@ async fn authenticate(host: &Host) -> Result<client::Handle<Verifier>> {
     .context("SSH 認證逾時")?
     .context("SSH 認證失敗")?;
     ensure!(auth.success(), "SSH 帳號、密碼或私鑰認證失敗");
+    let mut details = details.lock().unwrap();
+    details.auth_method = method.into();
+    details.client_key_algorithm = key_algorithm;
+    details.client_key_fingerprint = key_fingerprint;
+    drop(details);
     Ok(session)
 }
 
@@ -371,16 +419,41 @@ async fn execute(
     .context("遠端命令逾時；請確認目標主機上的 APT 狀態")?
 }
 
-pub async fn test_connection(host: &Host) -> Result<Platform> {
-    let session = authenticate(host).await?;
-    let result = execute(&session, DETECT, false, "", 20).await;
-    session
-        .disconnect(Disconnect::ByApplication, "", "")
-        .await
-        .ok();
-    let (code, output) = result?;
-    ensure!(code == 0, "無法辨識遠端作業系統");
-    parse_platform(&output)
+/// Signs in, runs DETECT and records what was negotiated; failures are recorded, not returned.
+pub async fn test_connection(host: &Host) -> ConnectionTest {
+    let tested_at = Utc::now().to_rfc3339();
+    let details = Details::default();
+    let result: Result<Platform> = async {
+        let session = authenticate(host, &details).await?;
+        let result = execute(&session, DETECT, false, "", 20).await;
+        session
+            .disconnect(Disconnect::ByApplication, "", "")
+            .await
+            .ok();
+        let (code, output) = result?;
+        ensure!(code == 0, "無法辨識遠端作業系統");
+        parse_platform(&output)
+    }
+    .await;
+    let mut test = details.lock().unwrap().clone();
+    test.tested_at = tested_at;
+    match result {
+        Ok(platform) => {
+            test.status = "success".into();
+            test.kernel = platform.kernel;
+            test.distro = platform.distro;
+            test.package_managers = platform
+                .available
+                .iter()
+                .map(|m| m.id().to_owned())
+                .collect();
+        }
+        Err(error) => {
+            test.status = "failed".into();
+            test.error = host.redact(&format!("{error:#}"));
+        }
+    }
+    test
 }
 
 /// The commands an operation with this manager runs, in order.
@@ -421,7 +494,7 @@ pub(crate) async fn run_apt<P: Fn(&str) + ?Sized>(
     let mut platform = None;
     let result: Result<(Vec<Package>, Vec<Package>, Vec<String>)> = async {
         progress("正在連線並驗證 SSH 主機指紋…");
-        let session = authenticate(host).await?;
+        let session = authenticate(host, &Details::default()).await?;
         let operation = async {
             let (code, output) = execute(&session, DETECT, false, "", 20).await?;
             ensure!(code == 0, "無法辨識遠端作業系統");

@@ -2,7 +2,7 @@
 //! slot and `application_id` marks the file as MISF's, so opening or importing an older
 //! database detects its version and upgrades it, while foreign or newer files are refused.
 use crate::db_upgrade::{MIGRATIONS, Migration};
-use crate::model::{CheckResult, Host, HostGroup, Package, SshKey};
+use crate::model::{CheckResult, ConnectionTest, Host, HostGroup, Package, SshKey};
 use crate::store::Database;
 use anyhow::{Context, Result, ensure};
 use rusqlite::{Connection, MAIN_DB, config::DbConfig, limits::Limit, params};
@@ -158,6 +158,43 @@ pub(crate) fn load(conn: &Connection) -> Result<Database> {
         };
         results.insert(id, result);
     }
+    let mut tests = HashMap::new();
+    let mut statement = conn.prepare(
+        "SELECT host_id, tested_at, status, error, server_version, kex, host_key_algorithm,
+                host_key_fingerprint, cipher, client_mac, server_mac, strict_kex, auth_method,
+                client_key_algorithm, client_key_fingerprint, kernel, distro, package_managers
+         FROM connection_tests",
+    )?;
+    let mut rows = statement.query([])?;
+    while let Some(row) = rows.next()? {
+        let managers: String = row.get(17)?;
+        tests.insert(
+            row.get::<_, String>(0)?,
+            ConnectionTest {
+                tested_at: row.get(1)?,
+                status: row.get(2)?,
+                error: row.get(3)?,
+                server_version: row.get(4)?,
+                kex: row.get(5)?,
+                host_key_algorithm: row.get(6)?,
+                host_key_fingerprint: row.get(7)?,
+                cipher: row.get(8)?,
+                client_mac: row.get(9)?,
+                server_mac: row.get(10)?,
+                strict_kex: row.get(11)?,
+                auth_method: row.get(12)?,
+                client_key_algorithm: row.get(13)?,
+                client_key_fingerprint: row.get(14)?,
+                kernel: row.get(15)?,
+                distro: row.get(16)?,
+                package_managers: managers
+                    .split(',')
+                    .filter(|m| !m.is_empty())
+                    .map(str::to_owned)
+                    .collect(),
+            },
+        );
+    }
     let mut statement = conn.prepare(
         "SELECT id, name, address, port, username, os, auth_type, password, private_key,
                 key_passphrase, sudo_password, use_pty, fingerprint, notes, distro, package_manager,
@@ -170,6 +207,7 @@ pub(crate) fn load(conn: &Connection) -> Result<Database> {
         let id: String = row.get(0)?;
         hosts.push(Host {
             last_check: results.remove(&id),
+            last_test: tests.remove(&id),
             id,
             name: row.get(1)?,
             address: row.get(2)?,
@@ -235,7 +273,8 @@ pub(crate) fn load(conn: &Connection) -> Result<Database> {
 pub(crate) fn save(conn: &mut Connection, db: &Database) -> Result<()> {
     let tx = conn.transaction()?;
     tx.execute_batch(
-        "DELETE FROM packages; DELETE FROM check_results; DELETE FROM hosts;
+        "DELETE FROM packages; DELETE FROM check_results; DELETE FROM connection_tests;
+         DELETE FROM hosts;
          DELETE FROM key_slots; DELETE FROM ssh_keys; DELETE FROM host_groups;",
     )?;
     {
@@ -278,6 +317,14 @@ pub(crate) fn save(conn: &mut Connection, db: &Database) -> Result<()> {
                  package_manager, output, error)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         )?;
+        let mut test_row = tx.prepare(
+            "INSERT INTO connection_tests (host_id, tested_at, status, error, server_version, kex,
+                 host_key_algorithm, host_key_fingerprint, cipher, client_mac, server_mac,
+                 strict_kex, auth_method, client_key_algorithm, client_key_fingerprint, kernel,
+                 distro, package_managers)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
+                 ?18)",
+        )?;
         let mut slot_row = tx.prepare("INSERT INTO key_slots (slot, name) VALUES (?1, ?2)")?;
         for (slot, name) in &db.slot_names {
             slot_row.execute(params![slot, name])?;
@@ -312,6 +359,28 @@ pub(crate) fn save(conn: &mut Connection, db: &Database) -> Result<()> {
                     host.group_id,
                 ])
                 .with_context(|| format!("無法寫入主機 {}；主機 ID 可能重複", host.name))?;
+            if let Some(test) = &host.last_test {
+                test_row.execute(params![
+                    host.id,
+                    test.tested_at,
+                    test.status,
+                    test.error,
+                    test.server_version,
+                    test.kex,
+                    test.host_key_algorithm,
+                    test.host_key_fingerprint,
+                    test.cipher,
+                    test.client_mac,
+                    test.server_mac,
+                    test.strict_kex,
+                    test.auth_method,
+                    test.client_key_algorithm,
+                    test.client_key_fingerprint,
+                    test.kernel,
+                    test.distro,
+                    test.package_managers.join(","),
+                ])?;
+            }
             let Some(result) = &host.last_check else {
                 continue;
             };
@@ -416,6 +485,23 @@ pub(crate) mod tests {
                             name: "openssl".into(),
                             ..Default::default()
                         }],
+                        ..Default::default()
+                    }),
+                    last_test: Some(ConnectionTest {
+                        tested_at: "2026-11-08T00:00:00Z".into(),
+                        status: "success".into(),
+                        server_version: "SSH-2.0-OpenSSH_9.9".into(),
+                        kex: "mlkem768x25519-sha256".into(),
+                        host_key_algorithm: "ssh-ed25519".into(),
+                        host_key_fingerprint: "SHA256:host".into(),
+                        cipher: "chacha20-poly1305@openssh.com".into(),
+                        client_mac: "none".into(),
+                        server_mac: "none".into(),
+                        strict_kex: true,
+                        auth_method: "password".into(),
+                        kernel: "Linux".into(),
+                        distro: "Debian 13".into(),
+                        package_managers: vec!["apt".into(), "yum".into()],
                         ..Default::default()
                     }),
                     ..Default::default()

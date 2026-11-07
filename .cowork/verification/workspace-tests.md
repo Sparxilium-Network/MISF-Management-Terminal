@@ -1,5 +1,12 @@
 # 全工作區檢查結果
 
+## 2026-11-08（測試連線資訊，基於 `2669c10`）
+
+- fmt、Clippy（`-D warnings`）通過；`cargo test --workspace` 全部通過（22、10、46、20 項）。
+- 整合測試在 loopback 伺服器驗證：成功時記錄伺服器版本、kex、cipher、MAC、主機金鑰 `ssh-ed25519` 與指紋、密碼／公鑰登入；指紋不符與密碼錯誤時狀態為 failed、仍保留已協商資訊、未記錄登入方式，錯誤不含密碼。
+- SQLite 往返測試涵蓋 `connection_tests`（v5）。
+- 未在執行中的 app 目視確認「連線資訊」分頁排版；未對真實伺服器實測。
+
 ## 2026-11-08（移除 RSA，基於 `b63645b`）
 
 - fmt、Clippy（`-D warnings`）通過；`cargo test --workspace` 全部通過（22、9、46、20 項），新增 `rsa_private_keys_are_rejected_in_both_formats`。

@@ -152,6 +152,7 @@ pub async fn dispatch(request: Value, store: &Store, progress: &dyn Fn(&str)) ->
                         host.distro.clear();
                         host.package_manager.clear();
                         host.last_check = None;
+                        host.last_test = None;
                     } else {
                         // Detection results only ever come from the host itself.
                         host.distro = old.distro.clone();
@@ -162,6 +163,7 @@ pub async fn dispatch(request: Value, store: &Store, progress: &dyn Fn(&str)) ->
                         } else {
                             None
                         };
+                        host.last_test = old.last_test.clone();
                     }
                     // Only dragging in the sidebar moves a host between groups.
                     host.group_id = old.group_id.clone();
@@ -174,6 +176,7 @@ pub async fn dispatch(request: Value, store: &Store, progress: &dyn Fn(&str)) ->
                     host.distro.clear();
                     host.package_manager.clear();
                     host.last_check = None;
+                    host.last_test = None;
                     db.hosts.push(host.clone());
                 }
                 Ok(())
@@ -293,18 +296,26 @@ pub async fn dispatch(request: Value, store: &Store, progress: &dyn Fn(&str)) ->
             Ok(json!({"trusted": true}))
         }
         "test" => {
-            let platform = ssh::test_connection(&store.host(id)?).await?;
-            let manager = platform.manager.map(ssh::Manager::id).unwrap_or_default();
+            let test = ssh::test_connection(&store.host(id)?).await;
+            let succeeded = test.status == "success";
+            let manager = test.package_managers.first().cloned().unwrap_or_default();
             store.update(|db| {
                 if let Some(host) = db.hosts.iter_mut().find(|h| h.id == id) {
-                    host.distro = platform.distro.clone();
-                    host.package_manager = manager.into();
+                    if succeeded {
+                        host.distro = test.distro.clone();
+                        host.package_manager = manager.clone();
+                    }
+                    host.last_test = Some(test.clone());
                 }
                 Ok(())
             })?;
-            Ok(
-                json!({"os": platform.kernel, "distro": platform.distro, "package_manager": manager}),
-            )
+            ensure!(succeeded, "{}", test.error);
+            Ok(json!({
+                "os": test.kernel,
+                "distro": test.distro,
+                "package_manager": manager,
+                "test": test,
+            }))
         }
         "check" | "upgrade" => {
             let host = store.host(id)?;

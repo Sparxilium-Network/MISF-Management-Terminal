@@ -44,6 +44,38 @@ pub struct Host {
     /// Package manager chosen in the editor; empty means use the detected one.
     pub manager_choice: String,
     pub last_check: Option<CheckResult>,
+    /// What the last "test connection" negotiated and found, successful or not.
+    pub last_test: Option<ConnectionTest>,
+}
+
+/// One "test connection" run: the negotiated SSH algorithms, how this client signed in
+/// and what the host reported. Holds no secrets; failed runs keep what was learned first.
+#[derive(Clone, Default, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(default)]
+pub struct ConnectionTest {
+    pub tested_at: String,
+    /// "success" or "failed".
+    pub status: String,
+    pub error: String,
+    /// The server's identification line, e.g. "SSH-2.0-OpenSSH_9.6p1"; control characters removed.
+    pub server_version: String,
+    pub kex: String,
+    pub host_key_algorithm: String,
+    pub host_key_fingerprint: String,
+    pub cipher: String,
+    /// "none" when the cipher is an AEAD that authenticates by itself.
+    pub client_mac: String,
+    pub server_mac: String,
+    /// OpenSSH strict key exchange, which closes the Terrapin prefix-truncation attack.
+    pub strict_kex: bool,
+    /// "password" or "publickey"; empty when the handshake failed first.
+    pub auth_method: String,
+    pub client_key_algorithm: String,
+    pub client_key_fingerprint: String,
+    pub kernel: String,
+    pub distro: String,
+    /// Supported package managers on the host, preferred first.
+    pub package_managers: Vec<String>,
 }
 
 impl Host {

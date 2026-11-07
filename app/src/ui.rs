@@ -9,7 +9,7 @@ use crate::{
 };
 use chrono::{DateTime, Local};
 use eframe::egui::{self, Color32, RichText, Stroke};
-use misf_core::model::{CheckResult, Host, HostGroup};
+use misf_core::model::{CheckResult, ConnectionTest, Host, HostGroup};
 use misf_core::{
     audit::{Action, AuditLog, Outcome},
     runtime::RuntimePaths,
@@ -809,7 +809,8 @@ impl ManagementApp {
                             self.status = t.get("status.failed").into();
                             self.error = Some(error);
                             // The sidebar showed this change before it was saved.
-                            if action == "arrange" || action == "group_collapse" {
+                            if action == "arrange" || action == "group_collapse" || action == "test"
+                            {
                                 self.send(json!({"action":"list"}));
                             }
                             if action == "vault_create" {
@@ -1015,9 +1016,11 @@ impl ManagementApp {
             "test" => {
                 let distro = data["distro"].as_str().unwrap_or_default();
                 let manager = data["package_manager"].as_str().unwrap_or_default();
+                let test = serde_json::from_value::<ConnectionTest>(data["test"].clone()).ok();
                 if let Some(host) = self.hosts.iter_mut().find(|h| h.id == self.selected) {
                     host.distro = distro.into();
                     host.package_manager = manager.into();
+                    host.last_test = test;
                 }
                 self.prune_batch();
                 let os = if distro.is_empty() {
@@ -2014,11 +2017,20 @@ impl ManagementApp {
                 ui.selectable_value(&mut self.tab, 0, t.get("apt.packages"));
                 ui.selectable_value(&mut self.tab, 1, t.get("apt.upgraded"));
                 ui.selectable_value(&mut self.tab, 2, t.get("apt.output"));
+                ui.selectable_value(&mut self.tab, 3, t.get("conn.tab"));
                 if before != self.tab {
                     self.log(Action::ResultTab, Outcome::Succeeded);
                 }
             });
             ui.separator();
+            if self.tab == 3 {
+                egui::ScrollArea::vertical()
+                    .id_salt("connection_info")
+                    .max_height(available)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| connection_panel(ui, t, host.last_test.as_ref()));
+                return;
+            }
             if self.tab == 2 {
                 egui::ScrollArea::both()
                     .id_salt("apt_output")
@@ -3981,6 +3993,123 @@ fn batch_managers(hosts: &[Host]) -> Vec<(String, usize)> {
     counts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     counts
 }
+/// Label and value rows for the last "test connection"; empty strings mean not reached.
+fn connection_rows(t: Translator, test: &ConnectionTest) -> Vec<(&'static str, String)> {
+    let or_dash = |value: &str| {
+        if value.is_empty() {
+            "—".to_owned()
+        } else {
+            value.to_owned()
+        }
+    };
+    let with_fingerprint = |algorithm: &str, fingerprint: &str| match (algorithm, fingerprint) {
+        ("", "") => "—".to_owned(),
+        (algorithm, "") => algorithm.to_owned(),
+        ("", fingerprint) => fingerprint.to_owned(),
+        (algorithm, fingerprint) => format!("{algorithm}\n{fingerprint}"),
+    };
+    let negotiated = !test.kex.is_empty();
+    let kex = if test.kex.contains("mlkem") || test.kex.contains("sntrup") {
+        format!("{}  ·  {}", test.kex, t.get("conn.post_quantum"))
+    } else {
+        or_dash(&test.kex)
+    };
+    // AEAD ciphers authenticate by themselves, so SSH negotiates no separate MAC.
+    let mac = match (test.client_mac.as_str(), test.server_mac.as_str()) {
+        ("", "") => "—".to_owned(),
+        ("none", "none") => t.get("conn.mac_aead").to_owned(),
+        (client, server) if client == server => client.to_owned(),
+        (client, server) => t.format(
+            "conn.mac_split",
+            &[("client", client.into()), ("server", server.into())],
+        ),
+    };
+    let strict = match (negotiated, test.strict_kex) {
+        (false, _) => "—".to_owned(),
+        (true, true) => t.get("conn.strict_yes").to_owned(),
+        (true, false) => t.get("conn.strict_no").to_owned(),
+    };
+    let auth = match test.auth_method.as_str() {
+        "password" => t.get("conn.auth_password").to_owned(),
+        "publickey" => format!(
+            "{}\n{}",
+            t.format(
+                "conn.auth_key",
+                &[("algorithm", test.client_key_algorithm.clone())]
+            ),
+            test.client_key_fingerprint
+        ),
+        _ => "—".to_owned(),
+    };
+    let system = match (test.distro.as_str(), test.kernel.as_str()) {
+        ("", kernel) => or_dash(kernel),
+        (distro, "") => distro.to_owned(),
+        (distro, kernel) => format!("{distro}  ·  {kernel}"),
+    };
+    let managers = if test.package_managers.is_empty() {
+        "—".to_owned()
+    } else {
+        test.package_managers
+            .iter()
+            .map(|id| manager_label(t, id))
+            .collect::<Vec<_>>()
+            .join("、")
+    };
+    vec![
+        (t.get("conn.server"), or_dash(&test.server_version)),
+        (
+            t.get("conn.host_key"),
+            with_fingerprint(&test.host_key_algorithm, &test.host_key_fingerprint),
+        ),
+        (t.get("conn.kex"), kex),
+        (t.get("conn.cipher"), or_dash(&test.cipher)),
+        (t.get("conn.mac"), mac),
+        (t.get("conn.strict"), strict),
+        (t.get("conn.auth"), auth),
+        (t.get("conn.system"), system),
+        (t.get("conn.managers"), managers),
+    ]
+}
+
+/// The connection details tab: how the last test connected and what it found.
+fn connection_panel(ui: &mut egui::Ui, t: Translator, test: Option<&ConnectionTest>) {
+    let palette = Palette::for_context(ui.ctx());
+    let Some(test) = test else {
+        ui.label(RichText::new(t.get("conn.not_run")).color(palette.muted));
+        return;
+    };
+    let succeeded = test.status == "success";
+    let time = [("time", format_time(&test.tested_at))];
+    ui.label(
+        RichText::new(if succeeded {
+            t.format("conn.succeeded", &time)
+        } else {
+            t.format("conn.failed", &time)
+        })
+        .color(if succeeded {
+            palette.muted
+        } else {
+            palette.error
+        }),
+    );
+    if !succeeded && !test.error.is_empty() {
+        ui.add(egui::Label::new(RichText::new(&test.error).color(palette.error)).selectable(true));
+    }
+    ui.add_space(8.0);
+    egui::Grid::new("connection_rows")
+        .num_columns(2)
+        .striped(true)
+        .min_col_width(130.0)
+        .spacing([24.0, 12.0])
+        .show(ui, |ui| {
+            for (label, value) in connection_rows(t, test) {
+                ui.label(RichText::new(label).strong().color(palette.muted));
+                ui.add(egui::Label::new(RichText::new(value).monospace()).selectable(true));
+                ui.end_row();
+            }
+        });
+}
+
 fn manager_label(t: Translator, id: &str) -> &'static str {
     ssh::Manager::from_id(id)
         .map(ssh::Manager::label)
@@ -4096,6 +4225,40 @@ fn format_time(value: &str) -> String {
 mod tests {
     use super::*;
     use std::sync::mpsc;
+
+    #[test]
+    fn connection_rows_explain_aead_post_quantum_and_unreached_steps() {
+        let t = Translator(Language::ZhTw);
+        let value = |rows: &[(&str, String)], key: &str| {
+            rows.iter().find(|(k, _)| *k == key).unwrap().1.clone()
+        };
+        let test = ConnectionTest {
+            status: "success".into(),
+            kex: "mlkem768x25519-sha256".into(),
+            cipher: "chacha20-poly1305@openssh.com".into(),
+            client_mac: "none".into(),
+            server_mac: "none".into(),
+            strict_kex: true,
+            auth_method: "publickey".into(),
+            client_key_algorithm: "ecdsa-sha2-nistp521".into(),
+            client_key_fingerprint: "SHA256:abc".into(),
+            package_managers: vec!["dnf".into(), "yum".into()],
+            ..Default::default()
+        };
+        let rows = connection_rows(t, &test);
+        assert!(value(&rows, t.get("conn.kex")).contains(t.get("conn.post_quantum")));
+        assert_eq!(value(&rows, t.get("conn.mac")), t.get("conn.mac_aead"));
+        assert_eq!(value(&rows, t.get("conn.strict")), t.get("conn.strict_yes"));
+        assert!(value(&rows, t.get("conn.auth")).contains("ecdsa-sha2-nistp521"));
+        assert_eq!(value(&rows, t.get("conn.managers")), "DNF、YUM");
+        // A test that failed before key exchange shows dashes, not "not strict".
+        let failed = ConnectionTest {
+            status: "failed".into(),
+            ..Default::default()
+        };
+        let rows = connection_rows(t, &failed);
+        assert!(rows.iter().all(|(_, value)| value == "—"), "{rows:?}");
+    }
 
     #[test]
     fn plaintext_prompt_reappears_after_unlock_and_renders_full_path_in_both_languages() {
