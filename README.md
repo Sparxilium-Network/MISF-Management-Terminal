@@ -1,12 +1,14 @@
 # MISF Management Terminal
 
-> 最後修改：2026-11-08 ｜ 基於 commit：`2669c10`
+> 最後修改：2026-11-08 ｜ 基於 commit：`b794b0d`
 
 [GitHub 儲存庫](https://github.com/Sparxilium-Network/MISF-Management-Terminal)
 
 > [!WARNING]
 > **本專案仍處於開發階段，請勿用於正式環境。**
 > 相關安全保護機制尚未完善。
+>
+> 目前只有 **APT**（Debian／Ubuntu）在真實主機上測試過；DNF、YUM、pkg 等其他功能不保證可用或安全。
 
 MISF 是一個桌面程式，用來集中管理多台 Linux／BSD 伺服器的套件更新：透過 SSH 連上主機，檢查有哪些套件可以更新，並在你確認後升級。不需要安裝 Java、瀏覽器或另外架設管理伺服器。
 
@@ -39,13 +41,13 @@ MISF 是一個桌面程式，用來集中管理多台 Linux／BSD 伺服器的�
 
 ### 支援的系統
 
-| 系統 | 套件管理器 | 支援程度 |
-| --- | --- | --- |
-| Debian、Ubuntu | APT | 檢查與升級 |
-| Fedora、RHEL 8 以上 | DNF | 檢查與升級 |
-| CentOS 7 等 | YUM | 檢查與升級 |
-| FreeBSD、DragonFly | pkg | 檢查與升級 |
-| OpenBSD、NetBSD | — | 只支援連線測試 |
+| 系統 | 套件管理器 | 支援程度 | 實機測試 |
+| --- | --- | --- | --- |
+| Debian、Ubuntu | APT | 檢查與升級 | 已測試 |
+| Fedora、RHEL 8 以上 | DNF | 檢查與升級 | 未測試，不保證可用或安全 |
+| CentOS 7 等 | YUM | 檢查與升級 | 未測試，不保證可用或安全 |
+| FreeBSD、DragonFly | pkg | 檢查與升級 | 未測試，不保證可用或安全 |
+| OpenBSD、NetBSD | — | 只支援連線測試 | 未測試 |
 
 程式會自動偵測套件管理器；若同一台主機裝了多種（例如同時有 DNF 與 YUM），可在「編輯主機」手動指定。
 

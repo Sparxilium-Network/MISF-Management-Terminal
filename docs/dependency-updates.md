@@ -1,6 +1,6 @@
 # 依賴更新與安全公告
 
-> 最後修改：2026-11-08 ｜ 基於 commit：`b63645b`
+> 最後修改：2026-11-08 ｜ 基於 commit：`b794b0d`
 
 依賴的實際版本以已提交的 `Cargo.lock` 為準；建置與發布一律使用 `--locked`，不在建置時改變依賴。Dependabot 每日檢查 Actions 與 Cargo 依賴並提出更新 PR，通過驗證及合併後才進入發布。
 
@@ -13,16 +13,16 @@ LUKSbox 最新發布仍為 v0.6.1，主分支也停在既有固定 commit。為�
 維持原固定來源，沒有變更加密容器或金鑰槽格式。詳見
 [修改紀錄](../third_party/LUKSbox/PATCHES.md)。
 
-## RSA 與 RUSTSEC-2023-0071
+## 不支援 RSA
 
-- [RUSTSEC-2023-0071](https://rustsec.org/advisories/RUSTSEC-2023-0071)（`rsa`
-  套件的 Marvin Attack）沒有任何已修補版本，而 `russh 0.65.0` 精確要求
-  `rsa =0.10.0-rc.18`。因此 `core/Cargo.toml` 不啟用 russh 的 `rsa` 功能，
-  `rsa` 不在依賴樹中，`cargo audit` 不再命中此公告。
-- 代價是不支援 RSA：RSA 私鑰在匯入與連線時都會被拒絕（OpenSSH 格式的 RSA
-  私鑰即使能解碼也無法簽章），只提供 RSA 主機金鑰的伺服器無法連線。
-  支援的金鑰為 Ed25519 與 ECDSA（nistp256／nistp384／nistp521）。
-- 不可為了相容性重新啟用 `rsa` 功能，除非上游發布已修補的 `rsa` 且 russh 允許使用它。
+`core/Cargo.toml` 以 `default-features = false, features = ["ring"]` 引用 russh，
+不啟用 `rsa` 功能，`rsa` 套件不在依賴樹中。支援的金鑰為 Ed25519 與 ECDSA
+（nistp256／nistp384／nistp521）；RSA 私鑰在匯入與連線時都會被拒絕，只提供
+RSA 主機金鑰的伺服器無法連線。
+
+`rsa` 套件的 Marvin Attack 公告
+[RUSTSEC-2023-0071](https://rustsec.org/advisories/RUSTSEC-2023-0071) 沒有已修補版本，
+russh 又精確鎖定其 pre-release 版本。除非上游發布修補且 russh 允許使用，否則不可為了相容性重新啟用。
 
 其他受上游限制的例子：`crypto-common 0.1.7` 精確要求
 `generic-array =0.14.7`，不能僅靠 lockfile 更新取代。LUKSbox 容器仍需要它原本的

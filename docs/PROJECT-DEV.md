@@ -1,8 +1,11 @@
 # MISF Management Terminal 開發說明
 
-> 最後修改：2026-11-08 ｜ 基於 commit：`2669c10`
+> 最後修改：2026-11-08 ｜ 基於 commit：`b794b0d`
 
 一般使用方式見 [README](../README.md) 與 [使用指南](user-guide.md)。本文件是開發文件的入口，給開發者與維護者，記錄建置、儲存格式、安全設計細節與測試方式。
+
+> [!WARNING]
+> 目前只有 **APT**（Debian／Ubuntu）在真實主機上測試過；DNF、YUM、pkg 等其他功能不保證可用或安全。
 
 全 Rust 原生桌面客戶端，以 eframe／egui 繪製畫面，內建 Rust SSH 核心。畫面與核心編譯成同一個執行檔，不需要 Java、瀏覽器或管理伺服器。
 
@@ -11,7 +14,7 @@
 | 文件 | 內容 |
 | --- | --- |
 | [架構](architecture.md) | 目前實作架構、資料表與 JSON 協定 |
-| [依賴更新與安全公告](dependency-updates.md) | 依賴版本、更新紀錄與尚未修補的公告 |
+| [依賴更新與安全公告](dependency-updates.md) | 依賴版本、上游限制與授權清單維護 |
 | [LUKSbox 加密儲存設計](luksbox-design.md) | 加密主機庫的實作決定、限制與測試範圍 |
 | [Passkey 實體測試](passkey-testing.md) | 以實體驗證器測試 Passkey 的程序 |
 
@@ -91,6 +94,7 @@ Linux／macOS 可使用 `cargo run --locked -p misf`，須在對應平台建置�
 - APT 升級輸出中「Not upgrading yet due to phasing:」或舊版「The following upgrades have been deferred due to phasing:」之下縮排列出的套件，記為該次結果的 `phased`。它不另存欄位，載入時從保存的升級輸出重新解析，因此資料庫結構不變。
 - FreeBSD／DragonFly 的偵測命令以 `sh -c` 包裝，`pkg` 命令以 `env` 設定環境變數，csh 登入 shell 也能執行。
 - sudo 密碼以 SSH channel 標準輸入傳送，不放在命令列。PTY 預設開啟（類似 `ssh -t`）。
+- 只有 APT 經過實機測試；DNF、YUM、pkg 只有 loopback 模擬伺服器或輸出解析的自動測試。
 - 批次作業最多 8 台並行、單次最多 256 台；核心拒絕混合套件管理器的批次，執行時偵測到的套件管理器若與紀錄不同，該主機失敗而不執行。
 
 ## LUKSbox 加密儲存

@@ -141,7 +141,8 @@ jobs:
           fi
           {
             printf '%s\n\n' '> **開發階段，請勿用於正式環境。此版本為 Pre-release。**'
-            printf '%s\n\n' '未啟用 LUKSbox 時，密碼與 SSH 私鑰以明文儲存；啟用後仍保留原明文副本。'
+            printf '%s\n\n' '目前只有 APT（Debian／Ubuntu）在真實主機上測試過；DNF、YUM、pkg 等其他功能不保證可用或安全。'
+            printf '%s\n\n' '主機資料一律以 LUKSbox 加密儲存，第一次啟動需設定解鎖密碼。從舊版升級時，原本未加密的 hosts.db 會轉入加密主機庫，並詢問是否刪除原檔。'
             printf '%s\n\n' 'Windows x86_64：解壓 ZIP 後執行 misf.exe。Linux x86_64：解壓 tar.gz 後執行 ./misf；需要圖形桌面與系統函式庫，詳見內附 README。'
             printf 'Commit: `%s`\n\n' "$COMMIT_SHA"
             printf '[Build log](%s)\n' "$RUN_URL"
