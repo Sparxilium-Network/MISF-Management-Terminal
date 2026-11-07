@@ -1,6 +1,6 @@
 # MISF Management Terminal：全 Rust 原生桌面
 
-> 最後修改：2026-11-07 ｜ 基於 commit：`7415de8`
+> 最後修改：2026-11-08 ｜ 基於 commit：`b63645b`
 
 > [!WARNING]
 > **本專案仍處於開發階段，請勿用於正式環境。**
@@ -17,7 +17,7 @@ flowchart LR
 
 ## 已實作
 
-主機新增、編輯、刪除、搜尋；保存位址、埠、SSH 帳號、系統類型與備註。支援 SSH 密碼認證，或匯入 OpenSSH／PEM 私鑰與私鑰密語；私鑰也可存成共用金鑰（`ssh_keys`），主機以 `key_id` 引用，連線時才由背景核心填入，UI 只收到名稱、演算法與指紋。仍被主機引用的金鑰拒絕刪除。側欄主機清單可分組：`group_add`／`group_rename`／`group_collapse`／`group_delete` 管理分類（刪除分類只把主機改回未分類），拖曳後 UI 先即時顯示，再送出 `arrange`，帶齊全部分類 ID 與每台主機的 `{id, group_id}` 新順序；核心要求兩份清單與主機庫完全一致，否則整筆拒絕並由 UI 重新載入。編輯主機不會改變其分類。程式自帶 russh，不執行系統 ssh，不讀取本機 SSH config、known_hosts、agent 或系統私鑰。
+主機新增、編輯、刪除、搜尋；保存位址、埠、SSH 帳號、系統類型與備註。支援 SSH 密碼認證，或匯入 OpenSSH／PEM 私鑰與私鑰密語（Ed25519 或 ECDSA nistp256／384／521；不支援 RSA，見[依賴更新](dependency-updates.md#rsa-與-rustsec-2023-0071)）；私鑰也可存成共用金鑰（`ssh_keys`），主機以 `key_id` 引用，連線時才由背景核心填入，UI 只收到名稱、演算法與指紋。仍被主機引用的金鑰拒絕刪除。側欄主機清單可分組：`group_add`／`group_rename`／`group_collapse`／`group_delete` 管理分類（刪除分類只把主機改回未分類），拖曳後 UI 先即時顯示，再送出 `arrange`，帶齊全部分類 ID 與每台主機的 `{id, group_id}` 新順序；核心要求兩份清單與主機庫完全一致，否則整筆拒絕並由 UI 重新載入。編輯主機不會改變其分類。程式自帶 russh，不執行系統 ssh，不讀取本機 SSH config、known_hosts、agent 或系統私鑰。
 
 首次連線先取得 SHA-256 指紋，使用者確認後才提交認證。指紋變更即阻擋連線，可明確重新核對。變更目標位址或埠時，會清除既存信任及檢查結果。
 
@@ -63,4 +63,4 @@ UI 經工作佇列交給背景執行緒與 Tokio runtime 執行 SSH／磁碟操�
 
 測試 SSH 伺服器在 loopback 驗證密碼／私鑰、指紋變更阻擋、PTY、拆包 sudo 提示、系統偵測、APT 與 DNF 檢查／升級、套件管理器不符、混合批次、APT 失敗、不支援系統及儲存流程。原生 UI 可用開發用擷取功能檢查排版與中文顯示。
 
-目前只保存最近一次檢查或升級，不支援 full-upgrade、任意命令、互動終端、排程、滾動升級順序或 Ansible。尚未支援主金鑰輪替、TPM 或閒置自動鎖定；詳細取捨見 [LUKSbox 加密儲存設計](luksbox-design.md)。FIDO2 依賴的本機相容性修改、版本與仍存在的 RSA 公告見 [依賴更新](dependency-updates.md)。
+目前只保存最近一次檢查或升級，不支援 full-upgrade、任意命令、互動終端、排程、滾動升級順序或 Ansible。尚未支援主金鑰輪替、TPM 或閒置自動鎖定；詳細取捨見 [LUKSbox 加密儲存設計](luksbox-design.md)。FIDO2 依賴的本機相容性修改、版本與移除 RSA 的原因見 [依賴更新](dependency-updates.md)。

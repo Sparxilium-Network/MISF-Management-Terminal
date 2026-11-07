@@ -1,6 +1,6 @@
 use crate::model::{
-    CheckResult, Host, Package, parse_packages, parse_phased, parse_pkg_packages,
-    parse_rpm_packages,
+    CheckResult, Host, Package, decode_private_key, parse_packages, parse_phased,
+    parse_pkg_packages, parse_rpm_packages,
 };
 use anyhow::{Context, Result, bail, ensure};
 use chrono::Utc;
@@ -226,7 +226,23 @@ async fn connect(host: &Host, probe: bool) -> Result<client::Handle<Verifier>> {
             actual
         );
     }
-    result.context("無法建立 SSH 連線；請確認位址、埠及網路")
+    result.map_err(|error| handshake_error(error, "無法建立 SSH 連線；請確認位址、埠及網路"))
+}
+
+/// Names the cause when the server offers only host keys this build cannot verify, e.g. RSA.
+fn handshake_error(error: russh::Error, fallback: &'static str) -> anyhow::Error {
+    if let russh::Error::NoCommonAlgo {
+        kind: russh::AlgorithmKind::Key,
+        theirs,
+        ..
+    } = &error
+    {
+        return anyhow::anyhow!(
+            "伺服器只提供不支援的主機金鑰類型（{}）；MISF 不支援 RSA，請在伺服器啟用 Ed25519 或 ECDSA 主機金鑰",
+            theirs.join("、")
+        );
+    }
+    anyhow::Error::new(error).context(fallback)
 }
 
 pub async fn probe(host: &Host) -> Result<String> {
@@ -246,7 +262,7 @@ pub async fn probe(host: &Host) -> Result<String> {
     )
     .await
     .context("讀取主機指紋逾時")?
-    .context("無法讀取 SSH 主機指紋")?;
+    .map_err(|error| handshake_error(error, "無法讀取 SSH 主機指紋"))?;
     session
         .disconnect(Disconnect::ByApplication, "", "")
         .await
@@ -260,22 +276,28 @@ pub async fn probe(host: &Host) -> Result<String> {
 }
 
 async fn authenticate(host: &Host) -> Result<client::Handle<Verifier>> {
+    let key = if host.auth_type == "password" {
+        None
+    } else {
+        Some(decode_private_key(&host.private_key, host.passphrase())?)
+    };
     let mut session = connect(host, false).await?;
     let auth = timeout(Duration::from_secs(20), async {
-        if host.auth_type == "password" {
-            session
-                .authenticate_password(&host.username, &host.password)
-                .await
-        } else {
-            let key = russh::keys::decode_secret_key(&host.private_key, host.passphrase())
-                .map_err(|_| russh::Error::CouldNotReadKey)?;
-            let algorithm = session.best_supported_rsa_hash().await?.flatten();
-            session
-                .authenticate_publickey(
-                    &host.username,
-                    PrivateKeyWithHashAlg::new(Arc::new(key), algorithm),
-                )
-                .await
+        match key {
+            None => {
+                session
+                    .authenticate_password(&host.username, &host.password)
+                    .await
+            }
+            // RSA keys are rejected above, so no signature hash needs choosing.
+            Some(key) => {
+                session
+                    .authenticate_publickey(
+                        &host.username,
+                        PrivateKeyWithHashAlg::new(Arc::new(key), None),
+                    )
+                    .await
+            }
         }
     })
     .await

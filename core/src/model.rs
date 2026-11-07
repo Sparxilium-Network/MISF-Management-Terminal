@@ -1,6 +1,21 @@
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
+pub const RSA_UNSUPPORTED: &str =
+    "不支援 RSA 金鑰；請改用 Ed25519 或 ECDSA（nistp256／nistp384／nistp521）金鑰";
+
+/// Decodes a private key and rejects RSA, which this build cannot sign with.
+pub fn decode_private_key(text: &str, passphrase: Option<&str>) -> Result<russh::keys::PrivateKey> {
+    ensure!(!text.contains("BEGIN RSA PRIVATE KEY"), RSA_UNSUPPORTED);
+    let key = russh::keys::decode_secret_key(text, passphrase)
+        .map_err(|_| anyhow::anyhow!("SSH 私鑰格式或私鑰密語不正確"))?;
+    ensure!(
+        !matches!(key.algorithm(), russh::keys::Algorithm::Rsa { .. }),
+        RSA_UNSUPPORTED
+    );
+    Ok(key)
+}
+
 #[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Host {
@@ -62,8 +77,7 @@ impl Host {
             self.password.clear();
         } else if self.auth_type == "key" {
             ensure!(!self.private_key.trim().is_empty(), "請匯入 SSH 私鑰");
-            russh::keys::decode_secret_key(&self.private_key, self.passphrase())
-                .map_err(|_| anyhow::anyhow!("SSH 私鑰格式或私鑰密語不正確"))?;
+            decode_private_key(&self.private_key, self.passphrase())?;
             self.password.clear();
         } else {
             ensure!(!self.password.is_empty(), "請填寫 SSH 密碼");
@@ -177,11 +191,10 @@ impl SshKey {
             "SSH 金鑰名稱不可包含控制字元"
         );
         ensure!(!private_key.trim().is_empty(), "請匯入 SSH 私鑰");
-        let key = russh::keys::decode_secret_key(
+        let key = decode_private_key(
             &private_key,
             (!passphrase.is_empty()).then_some(passphrase.as_str()),
-        )
-        .map_err(|_| anyhow::anyhow!("SSH 私鑰格式或私鑰密語不正確"))?;
+        )?;
         Ok(Self {
             id: uuid::Uuid::new_v4().to_string(),
             name: name.into(),
@@ -415,6 +428,41 @@ __MISF_INSTALLED__
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn rsa_private_keys_are_rejected_in_both_formats() {
+        use russh::keys::ssh_key::{
+            LineEnding, Mpint, PrivateKey,
+            private::{KeypairData, RsaKeypair, RsaPrivateKey},
+            public::RsaPublicKey,
+        };
+        let pem = "-----BEGIN RSA PRIVATE KEY-----\nMIIB\n-----END RSA PRIVATE KEY-----\n";
+        let error = decode_private_key(pem, None).err().unwrap().to_string();
+        assert_eq!(error, RSA_UNSUPPORTED);
+
+        // Fabricated numbers: only the key type matters, the key never signs.
+        let int = |byte: u8| Mpint::from_positive_bytes(&[byte; 256]);
+        let keypair = RsaKeypair::new(
+            RsaPublicKey::new(Mpint::from_positive_bytes(&[1, 0, 1]), int(0xC1)).unwrap(),
+            RsaPrivateKey::new(int(0x51), int(0x31), int(0xA1), int(0xB1)).unwrap(),
+        )
+        .unwrap();
+        let openssh = PrivateKey::new(KeypairData::Rsa(keypair), "test")
+            .unwrap()
+            .to_openssh(LineEnding::LF)
+            .unwrap();
+        let error = decode_private_key(&openssh, None)
+            .err()
+            .unwrap()
+            .to_string();
+        assert_eq!(error, RSA_UNSUPPORTED);
+
+        let ed25519 = PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519)
+            .unwrap()
+            .to_openssh(LineEnding::LF)
+            .unwrap();
+        assert!(decode_private_key(&ed25519, None).is_ok());
     }
 
     #[test]

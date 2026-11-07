@@ -1,5 +1,11 @@
 # 全工作區檢查結果
 
+## 2026-11-08（移除 RSA，基於 `b63645b`）
+
+- fmt、Clippy（`-D warnings`）通過；`cargo test --workspace` 全部通過（22、9、46、20 項），新增 `rsa_private_keys_are_rejected_in_both_formats`。
+- `cargo audit`：退出碼 0，RUSTSEC-2023-0071 不再命中；`cargo tree -i rsa` 找不到套件。
+- 未對只提供 RSA 主機金鑰的真實伺服器實測錯誤訊息。
+
 ## 2026-11-07（commit `af2c75e`，強制加密）
 
 - `cargo fmt --all -- --check`：通過。
