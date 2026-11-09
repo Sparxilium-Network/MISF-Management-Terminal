@@ -1,5 +1,11 @@
 # 全工作區檢查結果
 
+## 2026-11-09（記憶體 LOG 與匯出，基於 `c68612e`）
+
+- 新增 `app/src/session_log.rs`，在「設定 > LOG」匯出；稽核新增 `log_export`。
+- fmt、Clippy（`--all-features -D warnings`）通過；`cargo test --workspace` 全部通過（22、14、56、23 項）。新增：請求只保留非機密欄位、結果附輸出、超過上限捨棄最舊、匯出檔內容，以及 UI 層以解鎖密碼／主機密碼送入後 LOG 不含任何機密。
+- 未在執行中的 app 目視確認 LOG 設定頁與存檔對話框。
+
 ## 2026-11-09（APT 重啟提示與重新開機，基於 `aeb97d1`）
 
 - APT root 在檢查／升級後執行唯讀 `apt::STATUS`（reboot-required＋`needrestart -r l -b`）；一般帳號不執行。新增 `reboot` 請求（`shutdown -r +1`，只限 APT），UI 兩次確認。SQLite v6：`restart_status`、`restart_items`。

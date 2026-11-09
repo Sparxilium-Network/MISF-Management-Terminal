@@ -4,6 +4,7 @@ use crate::{
         BatchColumn, BatchDetail, BatchOrder, Density, HostDetail, Preferences, SETTINGS_DEFAULT,
         SETTINGS_MIN, UnlockMethod, WindowSize,
     },
+    session_log::SessionLog,
     theme::{self, Appearance, Palette},
     worker::{Event, Worker},
 };
@@ -173,6 +174,7 @@ enum SettingsPage {
     Vault,
     Preferences,
     Language,
+    Log,
     About,
 }
 #[derive(Clone, Copy, PartialEq)]
@@ -281,6 +283,10 @@ pub struct ManagementApp {
     upgrade_confirm: Option<UpgradeConfirm>,
     batch_failure: Option<BatchFailure>,
     reboot_confirm: Option<RebootConfirm>,
+    /// This run's full log; memory only, gone when the app closes.
+    session_log: SessionLog,
+    /// The error last copied into [`Self::session_log`], so each is logged once.
+    logged_error: Option<String>,
     encrypted: bool,
     /// "sqlite" or "json" from the last host list; empty while locked.
     storage_format: String,
@@ -356,6 +362,8 @@ impl ManagementApp {
             upgrade_confirm: None,
             batch_failure: None,
             reboot_confirm: None,
+            session_log: SessionLog::new(),
+            logged_error: None,
             encrypted: false,
             storage_format: String::new(),
             schema_version: None,
@@ -445,6 +453,7 @@ impl ManagementApp {
             (SettingsPage::Vault, t.get("settings.nav_vault")),
             (SettingsPage::Preferences, t.get("settings.nav_preferences")),
             (SettingsPage::Language, t.get("settings.nav_language")),
+            (SettingsPage::Log, t.get("settings.nav_log")),
             (SettingsPage::About, t.get("settings.about")),
         ];
         let shown = egui::Window::new(t.get("settings.title"))
@@ -495,6 +504,7 @@ impl ManagementApp {
                                         );
                                     });
                             }
+                            SettingsPage::Log => self.log_settings(ui),
                             SettingsPage::About => {
                                 if self.about_section(ui) {
                                     self.send(json!({"action":"convert_storage"}));
@@ -797,6 +807,18 @@ impl ManagementApp {
         } else {
             None
         };
+        let name = |value: Value| value.as_str().unwrap_or("?").to_owned();
+        let mut entry = format!(
+            "{} {}",
+            name(serde_json::to_value(action).unwrap_or_default()),
+            name(serde_json::to_value(outcome).unwrap_or_default())
+        );
+        if let Some(host) = host {
+            entry.push_str(&format!(" host={:?}", host.name));
+        }
+        if let Some(slot) = slot {
+            entry.push_str(&format!(" slot={slot}"));
+        }
         if self.audit.record(action, outcome, host, slot).is_err() {
             self.error = Some(
                 Translator(self.preferences.language)
@@ -804,8 +826,10 @@ impl ManagementApp {
                     .into(),
             );
         }
+        self.session_log.add("UI", &entry, "");
     }
     fn send(&mut self, request: Value) {
+        self.session_log.request(&request);
         let t = Translator(self.preferences.language);
         self.busy = true;
         self.status = t.get("status.working").into();
@@ -819,8 +843,13 @@ impl ManagementApp {
         let t = Translator(self.preferences.language);
         while let Ok(event) = self.worker.events.try_recv() {
             match event {
-                Event::Progress(message) => self.status = t.progress(&message),
+                Event::Progress(message) => {
+                    self.session_log.add("PROGRESS", &message, "");
+                    self.status = t.progress(&message);
+                }
                 Event::BatchHost { id, result } => {
+                    let name = self.host_name(&id);
+                    self.session_log.result("BATCH", &name, &result);
                     if let Some(host) = self.hosts.iter_mut().find(|h| h.id == id) {
                         record_result(host, result);
                     }
@@ -831,6 +860,11 @@ impl ManagementApp {
                         .iter()
                         .find(|h| h.id == id)
                         .map_or(id, |h| h.name.clone());
+                    self.session_log.add(
+                        "BATCH",
+                        &format!("{name}: {}, waiting for a decision", result.status),
+                        "",
+                    );
                     self.batch_failure = Some(BatchFailure {
                         name,
                         upgrade: result.operation == "upgrade",
@@ -840,6 +874,7 @@ impl ManagementApp {
                 Event::Done { action, result } => {
                     self.busy = false;
                     self.batch_failure = None;
+                    self.log_done(&action, &result);
                     match result {
                         Ok(data) => self.received(&action, data),
                         Err(error) => {
@@ -2961,6 +2996,8 @@ impl ManagementApp {
             });
         });
         if let Some(decision) = decision {
+            self.session_log
+                .add("UI", &format!("batch_decision {decision:?}"), "");
             self.batch_failure = None;
             if self.worker.decisions.send(decision).is_err() {
                 self.error = Some(t.get("status.worker_ended").into());
@@ -3347,6 +3384,135 @@ impl ManagementApp {
                 &[("slot", index.to_string()), ("name", slot.name.clone())],
             ),
             _ => format!("#{index}"),
+        }
+    }
+
+    fn host_name(&self, id: &str) -> String {
+        self.hosts
+            .iter()
+            .find(|h| h.id == id)
+            .map_or_else(|| id.to_owned(), |h| h.name.clone())
+    }
+
+    /// Copies a finished request into the session log; secrets never appear in responses
+    /// logged here, and host lists are only counted.
+    fn log_done(&mut self, action: &str, result: &Result<Value, String>) {
+        let data = match result {
+            Ok(data) => data,
+            // The message itself is logged once as an ERROR entry.
+            Err(_) => {
+                return self
+                    .session_log
+                    .add("RESULT", &format!("{action} failed"), "");
+            }
+        };
+        let name = self.host_name(&self.selected);
+        match action {
+            "check" | "upgrade" => match serde_json::from_value::<CheckResult>(data.clone()) {
+                Ok(check) => self.session_log.result("RESULT", &name, &check),
+                Err(_) => self
+                    .session_log
+                    .add("RESULT", &format!("{action} unreadable"), ""),
+            },
+            "test" => {
+                let test = &data["test"];
+                self.session_log.add(
+                    "RESULT",
+                    &format!(
+                        "{name}: test {} distro={} manager={} server={} kex={} cipher={} auth={}",
+                        test["status"],
+                        data["distro"],
+                        data["package_manager"],
+                        test["server_version"],
+                        test["kex"],
+                        test["cipher"],
+                        test["auth_method"]
+                    ),
+                    test["error"].as_str().unwrap_or_default(),
+                );
+            }
+            "batch" => {
+                let results = data["results"].as_array().map_or(&[][..], Vec::as_slice);
+                let succeeded = results
+                    .iter()
+                    .filter(|entry| entry["result"]["status"] == "success")
+                    .count();
+                let skipped = data["skipped"].as_array().map_or(0, Vec::len);
+                self.session_log.add(
+                    "RESULT",
+                    &format!(
+                        "batch finished: succeeded={succeeded} failed={} skipped={skipped}",
+                        results.len() - succeeded
+                    ),
+                    "",
+                );
+            }
+            "reboot" => self.session_log.add(
+                "RESULT",
+                &format!("{name}: reboot scheduled"),
+                data["output"].as_str().unwrap_or_default(),
+            ),
+            "list" => self.session_log.add(
+                "RESULT",
+                &format!(
+                    "list: hosts={} keys={} groups={} format={} schema={}",
+                    data["hosts"].as_array().map_or(0, Vec::len),
+                    data["keys"].as_array().map_or(0, Vec::len),
+                    data["groups"].as_array().map_or(0, Vec::len),
+                    data["format"],
+                    data["schema_version"]
+                ),
+                "",
+            ),
+            _ => self.session_log.add("RESULT", &format!("{action} ok"), ""),
+        }
+    }
+
+    /// The LOG settings page: what the in-memory log holds and how to export it.
+    fn log_settings(&mut self, ui: &mut egui::Ui) {
+        let palette = Palette::for_context(ui.ctx());
+        let t = Translator(self.preferences.language);
+        ui.label(t.get("log.description"));
+        ui.add_space(6.0);
+        ui.label(t.format(
+            "log.size",
+            &[
+                ("count", self.session_log.len().to_string()),
+                (
+                    "size",
+                    format!("{:.1}", self.session_log.bytes() as f64 / 1024.0),
+                ),
+            ],
+        ));
+        ui.add_space(6.0);
+        ui.colored_label(palette.warning, t.get("log.warning"));
+        ui.add_space(10.0);
+        if ui.add(primary(t.get("log.export"))).clicked() {
+            self.export_log();
+        }
+    }
+
+    fn export_log(&mut self) {
+        let t = Translator(self.preferences.language);
+        self.log(Action::LogExport, Outcome::Started);
+        let file_name = format!("misf-log-{}.txt", Local::now().format("%Y%m%d-%H%M%S"));
+        let Some(path) = rfd::FileDialog::new()
+            .set_title(t.get("log.export_title"))
+            .set_file_name(&file_name)
+            .add_filter("Text", &["txt", "log"])
+            .save_file()
+        else {
+            return self.log(Action::LogExport, Outcome::Cancelled);
+        };
+        match self.session_log.export(&path) {
+            Ok(()) => {
+                self.log(Action::LogExport, Outcome::Succeeded);
+                self.status = t.format("log.exported", &[("path", path.display().to_string())]);
+            }
+            Err(error) => {
+                self.log(Action::LogExport, Outcome::Failed);
+                self.error = Some(t.format("log.export_failed", &[("error", error.to_string())]));
+            }
         }
     }
 
@@ -4034,6 +4200,12 @@ impl ManagementApp {
         // After the editor, so it opens on top when chosen from there.
         self.key_dialog(ctx);
         self.group_dialog(ctx);
+        if self.error != self.logged_error {
+            if let Some(error) = &self.error {
+                self.session_log.add("ERROR", error, "");
+            }
+            self.logged_error = self.error.clone();
+        }
         if let Some(error) = self.error.clone() {
             let mut close = false;
             egui::Modal::new(egui::Id::unique("error")).show(ctx, |ui| {
@@ -4738,6 +4910,64 @@ mod tests {
         app.received("storage_status", locked);
         assert_eq!(app.vault_dialog.as_ref().unwrap().mode, VaultMode::Unlock);
         assert!(commands.try_recv().is_err());
+    }
+
+    #[test]
+    fn session_log_records_the_run_without_any_secret() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = RuntimePaths {
+            store: directory.path().join("hosts.db"),
+            debug: true,
+            debug_allow_passkey: false,
+        };
+        let ctx = egui::Context::default();
+        let audit = AuditLog::new(directory.path()).unwrap();
+        let (requests, _commands) = mpsc::channel();
+        let (events, results) = mpsc::channel();
+        let mut app = ManagementApp::initialize(
+            &ctx,
+            paths,
+            audit,
+            Worker {
+                requests,
+                events: results,
+                decisions: tokio::sync::mpsc::unbounded_channel().0,
+            },
+        );
+        app.send(json!({"action":"vault_unlock","passphrase":"unlock-secret"}));
+        let list = json!({"hosts":[{"id":"h","name":"web","password":"ssh-secret",
+            "sudo_password":"sudo-secret","private_key":"key-body"}],"keys":[],"groups":[]});
+        events
+            .send(Event::Progress("正在解鎖 LUKSbox…".into()))
+            .unwrap();
+        events
+            .send(Event::Done {
+                action: "list".into(),
+                result: Ok(list),
+            })
+            .unwrap();
+        events
+            .send(Event::Done {
+                action: "check".into(),
+                result: Err("無法連線".into()),
+            })
+            .unwrap();
+        app.process_events();
+        let mut frame = ctx.run_ui(Default::default(), |ui| app.dialogs(&ui.ctx().clone()));
+        frame.textures_delta.clear();
+        let text = app.session_log.render();
+        for secret in ["unlock-secret", "ssh-secret", "sudo-secret", "key-body"] {
+            assert!(!text.contains(secret), "{secret}");
+        }
+        for expected in [
+            "[REQUEST] vault_unlock\n",
+            "[PROGRESS] 正在解鎖 LUKSbox…",
+            "[RESULT] list: hosts=1",
+            "[RESULT] check failed",
+            "[ERROR] 無法連線",
+        ] {
+            assert!(text.contains(expected), "{expected}\n{}", text.as_str());
+        }
     }
 
     fn rendered_text(ctx: &egui::Context, mut draw: impl FnMut(&mut egui::Ui)) -> String {

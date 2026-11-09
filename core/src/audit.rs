@@ -54,6 +54,7 @@ pub enum Action {
     Reboot,
     RebootPrompt,
     RebootCancel,
+    LogExport,
     MainTab,
     BatchSelect,
     VaultCreate,

@@ -1,6 +1,6 @@
 # MISF Management Terminal 架構
 
-> 最後修改：2026-11-08 ｜ 基於 commit：`aeb97d1`
+> 最後修改：2026-11-08 ｜ 基於 commit：`c68612e`
 
 > [!WARNING]
 > **本專案仍處於開發階段，請勿用於正式環境。** 相關安全保護機制尚未完善。
@@ -28,6 +28,7 @@ flowchart LR
 | 位置 | 職責 |
 | --- | --- |
 | `app/src/ui.rs` | 主視窗、主機編輯、結果卡片、批次作業、解鎖與設定畫面 |
+| `app/src/session_log.rs` | 只存在記憶體的工作階段 LOG，可在設定中匯出 |
 | `app/src/worker.rs` | 把請求交給背景執行緒與 Tokio runtime，回傳進度與結果；批次中轉送每台結果與失敗詢問 |
 | `app/src/preferences.rs` | 未加密的 `ui-settings.json`（語言、外觀、清單與批次表格偏好） |
 | `app/src/i18n.rs`、`app/locales/` | 內嵌的 zh-tw／en-us 語系，以穩定 key 與命名參數取字 |
@@ -150,6 +151,8 @@ Passkey 只使用 `Fido2HmacSecret` 包裝槽。Windows 透過 `windows_passkey.
 ## 操作日誌與 debug 模式
 
 `core/src/audit.rs` 只接受固定的動作／結果列舉、可選的主機顯示名稱與槽號，不接受原始請求或錯誤字串；以程序內互斥與跨程序檔案鎖追加 UTC 每日 JSONL 並同步磁碟。開始紀錄寫入失敗時不執行操作；結果無法記錄時明確告知狀態可能已改變。日誌沒有防竄改或自動清理。
+
+工作階段 LOG（`app/src/session_log.rs`）只存在記憶體、關閉程式即消失，在「設定 > LOG」匯出成明文文字檔。內容包括 UI 操作、送出的請求、進度、結果與錯誤；檢查／升級結果附上核心已遮蔽的遠端輸出。請求只記錄 `action` 與 `id`、`ids`、`operation`、`slot` 這幾個不含機密的欄位，主機清單回應只記數量，因此不含密碼、sudo 密碼、私鑰或解鎖密碼。超過 16 MiB 時捨棄最舊的紀錄；匯出寫入 `log_export` 稽核紀錄。
 
 `RuntimePaths` 在啟動時解析 `--debug.dir`，以明確路徑注入偏好、日誌與 worker，不修改程序環境，失敗不回退正式資料。debug 模式只允許 loopback IP 的 SSH、禁止真實 Passkey 操作、備份限於測試目錄，UI 持續顯示 DEBUG。`--debug.allow-passkey` 須與 `--debug.dir` 同時使用，才開放實體驗證器，SSH 與備份限制不變。
 

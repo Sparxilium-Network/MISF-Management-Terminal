@@ -1,6 +1,6 @@
 # 原始碼檔案說明
 
-> 最後修改：2026-11-08 ｜ 基於 commit：`aeb97d1`
+> 最後修改：2026-11-08 ｜ 基於 commit：`c68612e`
 
 每個 `.rs` 檔案負責什麼。整體設計與資料流見 [架構](architecture.md)，建置與慣例見 [開發說明](PROJECT-DEV.md)。新增、改名或刪除 `.rs` 檔案時，請一併更新本文件。
 
@@ -70,7 +70,8 @@ Workspace 有三個 crate：`core`（`misf-core`，核心函式庫與 JSON CLI�
 | --- | --- |
 | `app/build.rs` | Windows 建置時嵌入程式圖示與版本資訊資源。 |
 | `app/src/main.rs` | GUI 執行檔入口：處理 `--help`、解析 `RuntimePaths`、開啟稽核日誌、設定視窗與圖示後啟動 eframe；release 版不開主控台視窗。 |
-| `app/src/ui.rs` | 主視窗 `ManagementApp`：側欄主機清單（分類、拖曳、收合、搜尋）、主機編輯、結果卡片（套件、已升級、重啟提示、執行輸出、連線資訊分頁）、批次作業表格（逐台更新）與批次失敗詢問、重新開機的兩次確認、升級確認、解鎖與金鑰管理、設定與關於、明文副本與結構升級詢問。只送出請求並顯示結果，不直接連線或讀寫檔案。 |
+| `app/src/ui.rs` | 主視窗 `ManagementApp`：側欄主機清單（分類、拖曳、收合、搜尋）、主機編輯、結果卡片（套件、已升級、重啟提示、執行輸出、連線資訊分頁）、批次作業表格（逐台更新）與批次失敗詢問、重新開機的兩次確認、升級確認、解鎖與金鑰管理、設定與關於、明文副本與結構升級詢問、設定中的 LOG 頁與匯出。只送出請求並顯示結果，不直接連線或讀寫檔案。 |
+| `app/src/session_log.rs` | 只存在記憶體的工作階段 LOG：UI 操作、請求（只留 `action`、`id`、`ids`、`operation`、`slot`）、進度、結果與遠端輸出、錯誤；超過 16 MiB 捨棄最舊的；`export` 寫成文字檔。以 `Zeroizing` 保存，關閉程式即消失。 |
 | `app/src/worker.rs` | 背景執行緒與 Tokio runtime：從佇列取出請求交給 `Session`，以 `Event` 回傳進度與結果並喚醒畫面；`Relay` 是批次觀察者，轉送每台結果與失敗詢問，並等待 UI 經 `decisions` 送回的決定。 |
 | `app/src/preferences.rs` | 未加密的 `ui-settings.json`：語言、外觀、視窗大小、主機清單顯示、批次排序／欄位／明細位置、預設解鎖方式；以暫存檔原子替換寫入。 |
 | `app/src/i18n.rs` | 語系：內嵌 `app/locales/*.json`，以 key 與 `{name}` 參數取字，缺字時回退繁體中文；測試檢查 UI 用到的 key 在兩種語言都存在且參數一致。 |

@@ -2,6 +2,7 @@
 
 mod i18n;
 mod preferences;
+mod session_log;
 mod theme;
 mod ui;
 mod worker;
