@@ -1,6 +1,6 @@
 # MISF Management Terminal 架構
 
-> 最後修改：2026-11-08 ｜ 基於 commit：`c68612e`
+> 最後修改：2026-11-08 ｜ 基於 commit：`c5bfe1e`
 
 > [!WARNING]
 > **本專案仍處於開發階段，請勿用於正式環境。** 相關安全保護機制尚未完善。
@@ -152,7 +152,7 @@ Passkey 只使用 `Fido2HmacSecret` 包裝槽。Windows 透過 `windows_passkey.
 
 `core/src/audit.rs` 只接受固定的動作／結果列舉、可選的主機顯示名稱與槽號，不接受原始請求或錯誤字串；以程序內互斥與跨程序檔案鎖追加 UTC 每日 JSONL 並同步磁碟。開始紀錄寫入失敗時不執行操作；結果無法記錄時明確告知狀態可能已改變。日誌沒有防竄改或自動清理。
 
-工作階段 LOG（`app/src/session_log.rs`）只存在記憶體、關閉程式即消失，在「設定 > LOG」匯出成明文文字檔。內容包括 UI 操作、送出的請求、進度、結果與錯誤；檢查／升級結果附上核心已遮蔽的遠端輸出。請求只記錄 `action` 與 `id`、`ids`、`operation`、`slot` 這幾個不含機密的欄位，主機清單回應只記數量，因此不含密碼、sudo 密碼、私鑰或解鎖密碼。超過 16 MiB 時捨棄最舊的紀錄；匯出寫入 `log_export` 稽核紀錄。
+工作階段 LOG（`app/src/session_log.rs`）是刻意完整的紀錄，只存在記憶體、關閉程式即消失，在「設定 > LOG」匯出成明文文字檔。每次遠端操作（批次、檢查、升級、測試連線、指紋、重新開機）先寫一段以 `********` 框起的標題，例如「使用者 進行批次 APT 升級（3 台）」；每台主機的結果是一個區塊，從主機名稱開始、到 `END OF <主機名稱>` 結束，內含主機 ID、帳號@位址:埠、主機指紋、系統、待更新／已升級套件、重啟狀態、錯誤與遠端原始輸出（核心只替換其中的密碼，並移除終端控制字元）。其餘請求與回應完整記錄。只有名為 `password`、`sudo_password`、`key_passphrase`、`passphrase`、`private_key`、`pin` 的欄位在任何層級一律遮蔽；回應中的 `output` 改記長度，避免與主機區塊重複。超過 16 MiB 時捨棄最舊的紀錄；匯出寫入 `log_export` 稽核紀錄。
 
 `RuntimePaths` 在啟動時解析 `--debug.dir`，以明確路徑注入偏好、日誌與 worker，不修改程序環境，失敗不回退正式資料。debug 模式只允許 loopback IP 的 SSH、禁止真實 Passkey 操作、備份限於測試目錄，UI 持續顯示 DEBUG。`--debug.allow-passkey` 須與 `--debug.dir` 同時使用，才開放實體驗證器，SSH 與備份限制不變。
 

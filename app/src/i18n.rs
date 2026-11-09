@@ -128,7 +128,11 @@ mod tests {
             );
             assert_eq!(placeholders(value), placeholders(&en[key]), "{key}");
         }
-        for source in [include_str!("ui.rs"), include_str!("theme.rs")] {
+        for source in [
+            include_str!("ui.rs"),
+            include_str!("theme.rs"),
+            include_str!("session_log.rs"),
+        ] {
             for function in ["t.get(", "t.format("] {
                 for part in source.split(function).skip(1) {
                     let key = part

@@ -829,6 +829,7 @@ impl ManagementApp {
         self.session_log.add("UI", &entry, "");
     }
     fn send(&mut self, request: Value) {
+        self.log_operation(&request);
         self.session_log.request(&request);
         let t = Translator(self.preferences.language);
         self.busy = true;
@@ -849,7 +850,8 @@ impl ManagementApp {
                 }
                 Event::BatchHost { id, result } => {
                     let name = self.host_name(&id);
-                    self.session_log.result("BATCH", &name, &result);
+                    let host = self.hosts.iter().find(|h| h.id == id);
+                    self.session_log.host(t, &name, host, &result);
                     if let Some(host) = self.hosts.iter_mut().find(|h| h.id == id) {
                         record_result(host, result);
                     }
@@ -3394,9 +3396,10 @@ impl ManagementApp {
             .map_or_else(|| id.to_owned(), |h| h.name.clone())
     }
 
-    /// Copies a finished request into the session log; secrets never appear in responses
-    /// logged here, and host lists are only counted.
+    /// Copies a finished request into the session log: check and upgrade results as host
+    /// blocks with their remote output, everything else in full with secrets masked.
     fn log_done(&mut self, action: &str, result: &Result<Value, String>) {
+        let t = Translator(self.preferences.language);
         let data = match result {
             Ok(data) => data,
             // The message itself is logged once as an ERROR entry.
@@ -3406,66 +3409,87 @@ impl ManagementApp {
                     .add("RESULT", &format!("{action} failed"), "");
             }
         };
-        let name = self.host_name(&self.selected);
         match action {
             "check" | "upgrade" => match serde_json::from_value::<CheckResult>(data.clone()) {
-                Ok(check) => self.session_log.result("RESULT", &name, &check),
-                Err(_) => self
-                    .session_log
-                    .add("RESULT", &format!("{action} unreadable"), ""),
+                Ok(check) => {
+                    let name = self.host_name(&self.selected);
+                    let host = self.hosts.iter().find(|h| h.id == self.selected);
+                    self.session_log.host(t, &name, host, &check);
+                }
+                Err(_) => self.session_log.response(action, data),
             },
-            "test" => {
-                let test = &data["test"];
-                self.session_log.add(
-                    "RESULT",
-                    &format!(
-                        "{name}: test {} distro={} manager={} server={} kex={} cipher={} auth={}",
-                        test["status"],
-                        data["distro"],
-                        data["package_manager"],
-                        test["server_version"],
-                        test["kex"],
-                        test["cipher"],
-                        test["auth_method"]
-                    ),
-                    test["error"].as_str().unwrap_or_default(),
-                );
-            }
             "batch" => {
                 let results = data["results"].as_array().map_or(&[][..], Vec::as_slice);
                 let succeeded = results
                     .iter()
                     .filter(|entry| entry["result"]["status"] == "success")
                     .count();
-                let skipped = data["skipped"].as_array().map_or(0, Vec::len);
                 self.session_log.add(
                     "RESULT",
                     &format!(
-                        "batch finished: succeeded={succeeded} failed={} skipped={skipped}",
-                        results.len() - succeeded
+                        "batch finished: succeeded={succeeded} failed={} skipped={}",
+                        results.len() - succeeded,
+                        data["skipped"]
                     ),
                     "",
                 );
             }
             "reboot" => self.session_log.add(
                 "RESULT",
-                &format!("{name}: reboot scheduled"),
+                &format!("reboot id={:?}", self.selected),
                 data["output"].as_str().unwrap_or_default(),
             ),
-            "list" => self.session_log.add(
-                "RESULT",
-                &format!(
-                    "list: hosts={} keys={} groups={} format={} schema={}",
-                    data["hosts"].as_array().map_or(0, Vec::len),
-                    data["keys"].as_array().map_or(0, Vec::len),
-                    data["groups"].as_array().map_or(0, Vec::len),
-                    data["format"],
-                    data["schema_version"]
-                ),
-                "",
-            ),
-            _ => self.session_log.add("RESULT", &format!("{action} ok"), ""),
+            _ => self.session_log.response(action, data),
         }
+    }
+
+    /// Opens a titled section in the session log for an operation on remote hosts.
+    fn log_operation(&mut self, request: &Value) {
+        let t = Translator(self.preferences.language);
+        let action = request["action"].as_str().unwrap_or_default();
+        let name = self.host_name(request["id"].as_str().unwrap_or_default());
+        let operation = |upgrade: bool| {
+            if upgrade {
+                t.get("batch.operation_upgrade")
+            } else {
+                t.get("batch.operation_check")
+            }
+            .to_owned()
+        };
+        let title = match action {
+            "batch" => t.format(
+                "log.title_batch",
+                &[
+                    ("manager", manager_label(t, &self.batch_manager).to_owned()),
+                    ("operation", operation(request["operation"] == "upgrade")),
+                    (
+                        "count",
+                        request["ids"].as_array().map_or(0, Vec::len).to_string(),
+                    ),
+                ],
+            ),
+            "check" | "upgrade" => {
+                let manager = self
+                    .hosts
+                    .iter()
+                    .find(|h| request["id"] == h.id.as_str())
+                    .map_or("", |h| h.manager());
+                t.format(
+                    "log.title_single",
+                    &[
+                        ("manager", manager_label(t, manager).to_owned()),
+                        ("operation", operation(action == "upgrade")),
+                        ("name", name),
+                    ],
+                )
+            }
+            "test" => t.format("log.title_test", &[("name", name)]),
+            "probe" => t.format("log.title_probe", &[("name", name)]),
+            "trust" => t.format("log.title_trust", &[("name", name)]),
+            "reboot" => t.format("log.title_reboot", &[("name", name)]),
+            _ => return,
+        };
+        self.session_log.banner(&title);
     }
 
     /// The LOG settings page: what the in-memory log holds and how to export it.
@@ -4955,16 +4979,48 @@ mod tests {
         app.process_events();
         let mut frame = ctx.run_ui(Default::default(), |ui| app.dialogs(&ui.ctx().clone()));
         frame.textures_delta.clear();
+
+        // A batch opens a titled section, and each host gets its own framed block.
+        app.hosts = vec![Host {
+            id: "u1".into(),
+            name: "UBUNTU1".into(),
+            address: "10.0.0.5".into(),
+            port: 22,
+            username: "deploy".into(),
+            password: "ssh-secret".into(),
+            package_manager: "apt".into(),
+            ..Default::default()
+        }];
+        app.batch_manager = "apt".into();
+        app.send(json!({"action":"batch","operation":"upgrade","ids":["u1"]}));
+        events
+            .send(Event::BatchHost {
+                id: "u1".into(),
+                result: CheckResult {
+                    operation: "upgrade".into(),
+                    status: "success".into(),
+                    output: "Setting up openssl (3.0.17) ...\n".into(),
+                    ..Default::default()
+                },
+            })
+            .unwrap();
+        app.process_events();
+
         let text = app.session_log.render();
         for secret in ["unlock-secret", "ssh-secret", "sudo-secret", "key-body"] {
             assert!(!text.contains(secret), "{secret}");
         }
         for expected in [
-            "[REQUEST] vault_unlock\n",
+            r#"[REQUEST] vault_unlock {"action":"vault_unlock","passphrase":"[已遮蔽]"}"#,
             "[PROGRESS] 正在解鎖 LUKSbox…",
-            "[RESULT] list: hosts=1",
+            r#""name":"web""#,
             "[RESULT] check failed",
             "[ERROR] 無法連線",
+            "\n********\n使用者 進行批次 APT 升級（1 台）  (",
+            r#"[REQUEST] batch {"action":"batch","ids":["u1"],"operation":"upgrade"}"#,
+            "\n********\nUBUNTU1\n********\n主機 ID: u1\n連線: deploy@10.0.0.5:22\n",
+            "遠端原始輸出:\nSetting up openssl (3.0.17) ...\n",
+            "\n********\nEND OF UBUNTU1\n********\n",
         ] {
             assert!(text.contains(expected), "{expected}\n{}", text.as_str());
         }
