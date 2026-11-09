@@ -177,7 +177,7 @@ enum SettingsPage {
     Log,
     About,
 }
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum View {
     Host,
     Batch,
@@ -287,6 +287,9 @@ pub struct ManagementApp {
     batch_selected: BTreeSet<String>,
     /// Whether the chosen host's packages are open in a window ([`BatchDetail::Popup`]).
     batch_popup: bool,
+    /// Whether the host page's advanced menu is open; kept here, not in egui's single popup
+    /// slot, so an item's right-click copy menu does not close it.
+    advanced_open: bool,
     /// The one package manager the batch selection may contain.
     batch_manager: String,
     upgrade_confirm: Option<UpgradeConfirm>,
@@ -369,6 +372,7 @@ impl ManagementApp {
             view: View::Host,
             batch_selected: BTreeSet::new(),
             batch_popup: false,
+            advanced_open: false,
             batch_manager: String::new(),
             upgrade_confirm: None,
             batch_failure: None,
@@ -2047,60 +2051,55 @@ impl ManagementApp {
             {
                 self.start_connection_action("check");
             }
-            // An upgrade confirmation must show real commands, so it waits for detection.
-            let upgrade = ui.add_enabled(detected.is_some(), danger(&upgrade_label));
-            if hint(
-                upgrade.on_disabled_hover_text(t.get("apt.upgrade_needs_detect")),
-                t,
-                &t.format("hint.upgrade_title", &manager),
-                &package_manager::package_commands(&host, package_manager::Mode::Upgrade),
-                t.get("hint.upgrade_effect"),
-                t.get("hint.upgrade_risk"),
-            )
-            .clicked()
-            {
-                self.prompt_upgrade(vec![host.id.clone()], false, package_manager::Mode::Upgrade);
+            // Upgrades and the reboot change the host, so they sit in one menu. It closes only on
+            // a click outside, so each item keeps its hover hint and right-click copy menu.
+            let advanced = ui.add(danger(t.get("advanced.button")));
+            if advanced.clicked() {
+                self.advanced_open = !self.advanced_open;
             }
-            // APT only: may install new packages and remove installed ones.
-            let dist = ui.add_enabled(host.manager() == "apt", danger(t.get("apt.dist_upgrade")));
-            if hint(
-                dist.on_disabled_hover_text(t.get("apt.dist_upgrade_needs_apt")),
-                t,
-                t.get("hint.dist_upgrade_title"),
-                &package_manager::package_commands(&host, package_manager::Mode::DistUpgrade),
-                t.get("hint.dist_upgrade_effect"),
-                t.get("hint.dist_upgrade_risk"),
-            )
-            .clicked()
-            {
-                self.prompt_upgrade(
+            let mut chosen = None;
+            egui::Popup::menu(&advanced)
+                .open_bool(&mut self.advanced_open)
+                .close_behavior(egui::PopupCloseBehavior::IgnoreClicks)
+                .show(|ui| {
+                    ui.set_min_width(220.0);
+                    chosen = advanced_items(ui, t, &host, &upgrade_label, &manager);
+                    // A right-click's copy menu opens under the pointer, so only a left click
+                    // outside the menu and its button closes it.
+                    let menu = ui.min_rect();
+                    let outside = ui.input(|i| {
+                        i.pointer.primary_clicked()
+                            && i.pointer.interact_pos().is_some_and(|pos| {
+                                !menu.contains(pos) && !advanced.rect.contains(pos)
+                            })
+                    });
+                    if chosen.is_some() || outside {
+                        ui.close();
+                    }
+                });
+            match chosen {
+                Some(Advanced::Upgrade) => self.prompt_upgrade(
+                    vec![host.id.clone()],
+                    false,
+                    package_manager::Mode::Upgrade,
+                ),
+                Some(Advanced::DistUpgrade) => self.prompt_upgrade(
                     vec![host.id.clone()],
                     false,
                     package_manager::Mode::DistUpgrade,
-                );
-            }
-            // Only APT hosts with a confirmed key; the command is fixed per account type.
-            let can_reboot = host.manager() == "apt" && !host.fingerprint.is_empty();
-            let reboot = ui.add_enabled(can_reboot, danger(t.get("reboot.button")));
-            if hint(
-                reboot.on_disabled_hover_text(t.get("reboot.needs_apt")),
-                t,
-                t.get("hint.reboot_title"),
-                &[misf_core::reboot::command(&host)],
-                t.get("hint.reboot_effect"),
-                t.get("hint.reboot_risk"),
-            )
-            .clicked()
-            {
-                self.reboot_confirm = Some(RebootConfirm {
-                    id: host.id.clone(),
-                    name: host.name.clone(),
-                    address: host.address.clone(),
-                    command: misf_core::reboot::command(&host),
-                    acknowledged: false,
-                    final_step: false,
-                });
-                self.log(Action::RebootPrompt, Outcome::Succeeded);
+                ),
+                Some(Advanced::Reboot) => {
+                    self.reboot_confirm = Some(RebootConfirm {
+                        id: host.id.clone(),
+                        name: host.name.clone(),
+                        address: host.address.clone(),
+                        command: misf_core::reboot::command(&host),
+                        acknowledged: false,
+                        final_step: false,
+                    });
+                    self.log(Action::RebootPrompt, Outcome::Succeeded);
+                }
+                None => {}
             }
             if ui.button(t.get("common.reload")).clicked() {
                 self.send(json!({"action":"list"}));
@@ -2765,16 +2764,31 @@ impl ManagementApp {
                     BatchColumn::Host => {
                         let button = egui::Button::selectable(self.selected == data.id, text);
                         let popup = self.preferences.batch_detail == BatchDetail::Popup;
-                        let mut response = cell.add(button.truncate());
-                        if popup {
-                            response = response.on_hover_text(t.get("batch_detail.open_hint"));
-                        }
+                        let response = cell.add(button.truncate()).on_hover_text(if popup {
+                            t.get("batch_detail.open_hint")
+                        } else {
+                            t.get("batch.host_hint")
+                        });
                         if response.clicked() {
                             self.selected = data.id.clone();
                             self.log(Action::HostSelect, Outcome::Succeeded);
                         }
-                        if popup && response.double_clicked() {
-                            self.batch_popup = true;
+                        let mut open_host = response.double_clicked();
+                        response.context_menu(|ui| {
+                            if ui.button(t.get("batch.open_host")).clicked() {
+                                open_host = true;
+                            }
+                            if popup && ui.button(t.get("batch_detail.open")).clicked() {
+                                self.selected = data.id.clone();
+                                self.batch_popup = true;
+                            }
+                        });
+                        // Double-click jumps to the host's page in the main view.
+                        if open_host {
+                            self.selected = data.id.clone();
+                            self.batch_popup = false;
+                            self.view = View::Host;
+                            self.log(Action::MainTab, Outcome::Succeeded);
                         }
                     }
                     BatchColumn::Status => {
@@ -4897,6 +4911,71 @@ fn status_label(t: Translator, host: &Host) -> &'static str {
         None => t.get("apt.not_checked"),
     }
 }
+/// An item of the host page's advanced menu.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Advanced {
+    Upgrade,
+    DistUpgrade,
+    Reboot,
+}
+/// The advanced menu's items, each with its hover hint and right-click copy menu.
+fn advanced_items(
+    ui: &mut egui::Ui,
+    t: Translator,
+    host: &Host,
+    upgrade_label: &str,
+    manager: &[(&str, String)],
+) -> Option<Advanced> {
+    let red = Palette::for_context(ui.ctx()).error;
+    let item = |text: &str| egui::Button::new(RichText::new(text).color(red));
+    let mut chosen = None;
+    // An upgrade confirmation must show real commands, so it waits for detection.
+    let detected = package_manager::Manager::from_id(host.manager()).is_some();
+    let upgrade = ui.add_enabled(detected, item(upgrade_label));
+    if hint(
+        upgrade.on_disabled_hover_text(t.get("apt.upgrade_needs_detect")),
+        t,
+        &t.format("hint.upgrade_title", manager),
+        &package_manager::package_commands(host, package_manager::Mode::Upgrade),
+        t.get("hint.upgrade_effect"),
+        t.get("hint.upgrade_risk"),
+    )
+    .clicked()
+    {
+        chosen = Some(Advanced::Upgrade);
+    }
+    // APT only: may install new packages and remove installed ones.
+    let dist = ui.add_enabled(host.manager() == "apt", item(t.get("apt.dist_upgrade")));
+    if hint(
+        dist.on_disabled_hover_text(t.get("apt.dist_upgrade_needs_apt")),
+        t,
+        t.get("hint.dist_upgrade_title"),
+        &package_manager::package_commands(host, package_manager::Mode::DistUpgrade),
+        t.get("hint.dist_upgrade_effect"),
+        t.get("hint.dist_upgrade_risk"),
+    )
+    .clicked()
+    {
+        chosen = Some(Advanced::DistUpgrade);
+    }
+    ui.separator();
+    // Only APT hosts with a confirmed key; the command is fixed per account type.
+    let can_reboot = host.manager() == "apt" && !host.fingerprint.is_empty();
+    let reboot = ui.add_enabled(can_reboot, item(t.get("reboot.button")));
+    if hint(
+        reboot.on_disabled_hover_text(t.get("reboot.needs_apt")),
+        t,
+        t.get("hint.reboot_title"),
+        &[misf_core::reboot::command(host)],
+        t.get("hint.reboot_effect"),
+        t.get("hint.reboot_risk"),
+    )
+    .clicked()
+    {
+        chosen = Some(Advanced::Reboot);
+    }
+    chosen
+}
 /// After the style's tooltip delay, explains what a sensitive control runs and risks.
 fn hint(
     response: egui::Response,
@@ -5619,6 +5698,127 @@ mod tests {
     }
 
     #[test]
+    fn advanced_menu_keeps_hints_and_copy_menus() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = RuntimePaths {
+            store: directory.path().join("hosts.db"),
+            debug: true,
+            debug_allow_passkey: false,
+        };
+        let ctx = egui::Context::default();
+        let (requests, _commands) = mpsc::channel();
+        let (_events, results) = mpsc::channel();
+        let mut app = ManagementApp::initialize(
+            &ctx,
+            paths,
+            AuditLog::new(directory.path()).unwrap(),
+            Worker {
+                requests,
+                events: results,
+                decisions: tokio::sync::mpsc::unbounded_channel().0,
+            },
+        );
+        app.preferences.language = Language::EnUs;
+        app.received(
+            "list",
+            json!({"hosts": [{"id": "u1", "name": "ubuntu1", "address": "10.0.0.5", "port": 22,
+                "username": "ops", "os": "Linux", "package_manager": "apt",
+                "fingerprint": "SHA256:abc"}]}),
+        );
+        app.selected = "u1".into();
+        let t = Translator(Language::EnUs);
+        let frame = |app: &mut ManagementApp, events: Vec<egui::Event>| {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200.0, 800.0),
+                )),
+                events,
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| app.workspace(ui, 800.0));
+            output.textures_delta.clear();
+            let mut labels = Vec::new();
+            for clipped in output.shapes {
+                if let egui::epaint::Shape::Text(text) = clipped.shape {
+                    labels.push((text.galley.job.text.clone(), text.visual_bounding_rect()));
+                }
+            }
+            labels
+        };
+        let find = |labels: &[(String, egui::Rect)], text: &str| {
+            labels
+                .iter()
+                .find(|(drawn, _)| drawn == text)
+                .map(|(_, rect)| rect.center())
+        };
+        let click = |pos, button, pressed| egui::Event::PointerButton {
+            pos,
+            button,
+            pressed,
+            modifiers: Default::default(),
+        };
+        let press = |app: &mut ManagementApp, pos, button| {
+            frame(app, vec![egui::Event::PointerMoved(pos)]);
+            frame(app, vec![click(pos, button, true)]);
+            frame(app, vec![click(pos, button, false)]);
+            frame(app, vec![]);
+            frame(app, vec![])
+        };
+        frame(&mut app, vec![]);
+        let labels = frame(&mut app, vec![]);
+        // The three host-changing actions are only in the menu.
+        let dist = t.get("apt.dist_upgrade");
+        assert!(find(&labels, dist).is_none());
+        let menu = find(&labels, t.get("advanced.button")).expect("advanced button");
+        let labels = press(&mut app, menu, egui::PointerButton::Primary);
+        let item = find(&labels, dist).expect("dist-upgrade in the menu");
+        assert!(find(&labels, t.get("reboot.button")).is_some());
+        // A right-click on an item opens its copy menu and leaves the menu open.
+        let labels = press(&mut app, item, egui::PointerButton::Secondary);
+        assert!(find(&labels, dist).is_some());
+        let copy = find(&labels, t.get("hint.copy_commands")).expect("copy menu");
+        let mut copied = None;
+        frame(&mut app, vec![egui::Event::PointerMoved(copy)]);
+        frame(
+            &mut app,
+            vec![click(copy, egui::PointerButton::Primary, true)],
+        );
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1200.0, 800.0),
+            )),
+            events: vec![click(copy, egui::PointerButton::Primary, false)],
+            ..Default::default()
+        };
+        let output = ctx.run_ui(input, |ui| app.workspace(ui, 800.0));
+        for command in output.platform_output.commands {
+            if let egui::OutputCommand::CopyText(text) = command {
+                copied = Some(text);
+            }
+        }
+        let copied = copied.expect("commands copied");
+        assert!(copied.contains("dist-upgrade"), "{copied}");
+        assert!(app.upgrade_confirm.is_none());
+        // The menu stays open after copying; a left-click on an item opens its confirmation
+        // and closes the menu.
+        let labels = frame(&mut app, vec![]);
+        assert!(app.advanced_open);
+        let item = find(&labels, dist).unwrap();
+        let labels = press(&mut app, item, egui::PointerButton::Primary);
+        assert!(app.upgrade_confirm.is_some());
+        assert!(!app.advanced_open);
+        assert!(find(&labels, t.get("reboot.button")).is_none());
+        // A left-click elsewhere closes it too.
+        let labels = press(&mut app, menu, egui::PointerButton::Primary);
+        assert!(app.advanced_open);
+        let elsewhere = find(&labels, t.get("app.host_overview")).unwrap();
+        press(&mut app, elsewhere, egui::PointerButton::Primary);
+        assert!(!app.advanced_open);
+    }
+
+    #[test]
     fn batch_table_follows_the_chosen_order() {
         let directory = tempfile::tempdir().unwrap();
         let paths = RuntimePaths {
@@ -5746,7 +5946,7 @@ mod tests {
         let saved = crate::preferences::Preferences::load(&app.settings_path).unwrap();
         assert!(saved.batch_columns.weights[0] > 2.5);
 
-        // In popup mode the packages wait for a double-click and Escape closes them.
+        // In popup mode the packages open from the right-click menu and Escape closes them.
         let title = |name: &str| t.format("batch.detail", &[("name", name.into())]);
         let drawn = |labels: &[(String, egui::Rect)], text: &str| {
             labels.iter().any(|(drawn, _)| drawn == text)
@@ -5761,10 +5961,20 @@ mod tests {
                 .any(|(text, _)| text.starts_with("Packages on"))
         );
         let host = find(&labels, "bravo").center();
+        let secondary = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Secondary,
+            pressed,
+            modifiers: Default::default(),
+        };
         frame(&mut app, vec![egui::Event::PointerMoved(host)]);
-        for pressed in [true, false, true, false] {
-            frame(&mut app, vec![button(host, pressed)]);
-        }
+        frame(&mut app, vec![secondary(host, true)]);
+        frame(&mut app, vec![secondary(host, false)]);
+        let labels = frame(&mut app, vec![]);
+        let open = find(&labels, t.get("batch_detail.open")).center();
+        frame(&mut app, vec![egui::Event::PointerMoved(open)]);
+        frame(&mut app, vec![button(open, true)]);
+        frame(&mut app, vec![button(open, false)]);
         frame(&mut app, vec![]);
         let labels = frame(&mut app, vec![]);
         assert_eq!(app.selected, "bravo");
@@ -5780,5 +5990,17 @@ mod tests {
         let labels = frame(&mut app, vec![]);
         assert!(!app.batch_popup);
         assert!(!drawn(&labels, &title("bravo")));
+
+        // A double-click on a host opens its page in the main view.
+        app.selected = "alpha".into();
+        let labels = frame(&mut app, vec![]);
+        let host = find(&labels, "bravo").center();
+        frame(&mut app, vec![egui::Event::PointerMoved(host)]);
+        for pressed in [true, false, true, false] {
+            frame(&mut app, vec![button(host, pressed)]);
+        }
+        assert_eq!(app.selected, "bravo");
+        assert_eq!(app.view, View::Host);
+        assert!(!app.batch_popup);
     }
 }
