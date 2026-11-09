@@ -7,6 +7,7 @@ mod db_upgrade;
 pub mod model;
 pub mod package_manager;
 mod passkey;
+pub mod reboot;
 pub mod runtime;
 pub mod session;
 pub mod sqlite;
@@ -313,6 +314,11 @@ pub async fn dispatch_with(
             Ok(json!(result))
         }
         "batch" => batch::run(&request, store, progress, observer).await,
+        "reboot" => {
+            let host = store.host(id)?;
+            let output = reboot::reboot(&host, progress).await?;
+            Ok(json!({"output": output}))
+        }
         _ => anyhow::bail!("不支援的操作"),
     }
 }

@@ -9,7 +9,7 @@ use crate::{
 };
 use chrono::{DateTime, Local};
 use eframe::egui::{self, Color32, RichText, Stroke};
-use misf_core::model::{CheckResult, ConnectionTest, Host, HostGroup};
+use misf_core::model::{CheckResult, ConnectionTest, Host, HostGroup, RestartStatus};
 use misf_core::{
     audit::{Action, AuditLog, Outcome},
     batch, package_manager,
@@ -186,6 +186,15 @@ struct UpgradeConfirm {
     batch: bool,
     acknowledged: bool,
 }
+/// A reboot awaiting two confirmations: the risks first, then a final yes.
+struct RebootConfirm {
+    id: String,
+    name: String,
+    address: String,
+    command: &'static str,
+    acknowledged: bool,
+    final_step: bool,
+}
 /// A failed batch host the worker is waiting on: stop the batch or start the rest.
 struct BatchFailure {
     name: String,
@@ -271,6 +280,7 @@ pub struct ManagementApp {
     batch_manager: String,
     upgrade_confirm: Option<UpgradeConfirm>,
     batch_failure: Option<BatchFailure>,
+    reboot_confirm: Option<RebootConfirm>,
     encrypted: bool,
     /// "sqlite" or "json" from the last host list; empty while locked.
     storage_format: String,
@@ -345,6 +355,7 @@ impl ManagementApp {
             batch_manager: String::new(),
             upgrade_confirm: None,
             batch_failure: None,
+            reboot_confirm: None,
             encrypted: false,
             storage_format: String::new(),
             schema_version: None,
@@ -1061,6 +1072,10 @@ impl ManagementApp {
                         ("manager", manager_label(t, manager).into()),
                     ],
                 )
+            }
+            "reboot" => {
+                let name = self.current().map(|h| h.name.clone()).unwrap_or_default();
+                self.status = t.format("reboot.scheduled", &[("name", name)]);
             }
             "check" | "upgrade" => match serde_json::from_value::<CheckResult>(data) {
                 Ok(result) => {
@@ -1991,6 +2006,29 @@ impl ManagementApp {
             {
                 self.prompt_upgrade(vec![host.id.clone()], false);
             }
+            // Only APT hosts with a confirmed key; the command is fixed per account type.
+            let can_reboot = host.manager() == "apt" && !host.fingerprint.is_empty();
+            let reboot = ui.add_enabled(can_reboot, danger(t.get("reboot.button")));
+            if hint(
+                reboot.on_disabled_hover_text(t.get("reboot.needs_apt")),
+                t,
+                t.get("hint.reboot_title"),
+                &[misf_core::reboot::command(&host)],
+                t.get("hint.reboot_effect"),
+                t.get("hint.reboot_risk"),
+            )
+            .clicked()
+            {
+                self.reboot_confirm = Some(RebootConfirm {
+                    id: host.id.clone(),
+                    name: host.name.clone(),
+                    address: host.address.clone(),
+                    command: misf_core::reboot::command(&host),
+                    acknowledged: false,
+                    final_step: false,
+                });
+                self.log(Action::RebootPrompt, Outcome::Succeeded);
+            }
             if ui.button(t.get("common.reload")).clicked() {
                 self.send(json!({"action":"list"}));
             }
@@ -2030,6 +2068,15 @@ impl ManagementApp {
                     .unwrap_or("—".into()),
             );
         });
+        if let Some(restart) = result.and_then(|r| r.restart.as_ref())
+            && let Some(summary) = restart_summary(t, restart)
+        {
+            ui.add_space(10.0);
+            ui.colored_label(
+                palette.warning,
+                t.format("restart.banner", &[("summary", summary)]),
+            );
+        }
         ui.add_space(16.0);
         self.result_panel(ui, &host, (viewport_height - 500.0).max(100.0));
     }
@@ -2046,6 +2093,7 @@ impl ManagementApp {
                 let before = self.tab;
                 ui.selectable_value(&mut self.tab, 0, t.get("apt.packages"));
                 ui.selectable_value(&mut self.tab, 1, t.get("apt.upgraded"));
+                ui.selectable_value(&mut self.tab, 4, t.get("restart.tab"));
                 ui.selectable_value(&mut self.tab, 2, t.get("apt.output"));
                 ui.selectable_value(&mut self.tab, 3, t.get("conn.tab"));
                 if before != self.tab {
@@ -2053,6 +2101,14 @@ impl ManagementApp {
                 }
             });
             ui.separator();
+            if self.tab == 4 {
+                egui::ScrollArea::vertical()
+                    .id_salt("restart_info")
+                    .max_height(available)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| restart_panel(ui, t, host));
+                return;
+            }
             if self.tab == 3 {
                 egui::ScrollArea::vertical()
                     .id_salt("connection_info")
@@ -2341,6 +2397,11 @@ impl ManagementApp {
                     BatchColumn::Checked => {
                         result.map_or_else(dash, |r| format_time(&r.checked_at))
                     }
+                    BatchColumn::Restart => match result.and_then(|r| r.restart.as_ref()) {
+                        Some(restart) => restart_summary(t, restart)
+                            .unwrap_or_else(|| t.get("restart.none").to_owned()),
+                        None => dash(),
+                    },
                 });
                 BatchRow {
                     id: h.id.clone(),
@@ -2782,6 +2843,72 @@ impl ManagementApp {
             self.log(Action::UpgradeCancel, Outcome::Cancelled);
         } else {
             self.upgrade_confirm = Some(confirm);
+        }
+    }
+
+    /// Two confirmations before a reboot: the risks with an acknowledgement, then a final yes.
+    fn reboot_dialog(&mut self, ctx: &egui::Context) {
+        let Some(mut confirm) = self.reboot_confirm.take() else {
+            return;
+        };
+        let palette = Palette::for_context(ctx);
+        let t = Translator(self.preferences.language);
+        let (mut proceed, mut back, mut cancel) = (false, false, false);
+        let name = [("name", confirm.name.clone())];
+        egui::Modal::new(egui::Id::unique("reboot_confirm")).show(ctx, |ui| {
+            ui.set_width(560.0);
+            if confirm.final_step {
+                ui.heading(t.get("reboot.final_title"));
+                ui.add_space(6.0);
+                ui.label(t.format(
+                    "reboot.final_question",
+                    &[
+                        ("name", confirm.name.clone()),
+                        ("address", confirm.address.clone()),
+                    ],
+                ));
+                ui.colored_label(palette.warning, t.get("reboot.cancel_hint"));
+            } else {
+                ui.heading(t.format("reboot.title", &name));
+                ui.add_space(6.0);
+                ui.label(t.get("hint.reboot_effect"));
+                ui.colored_label(palette.warning, t.get("hint.reboot_risk"));
+                ui.label(RichText::new(t.get("hint.commands")).strong());
+                ui.add(
+                    egui::Label::new(RichText::new(confirm.command).monospace().size(11.0))
+                        .wrap()
+                        .selectable(true),
+                );
+                ui.checkbox(&mut confirm.acknowledged, t.get("reboot.ack"));
+            }
+            ui.add_space(6.0);
+            ui.add_enabled_ui(!self.busy, |ui| {
+                ui.horizontal(|ui| {
+                    if confirm.final_step {
+                        proceed = ui.add(danger(t.get("reboot.confirm"))).clicked();
+                        back = ui.button(t.get("reboot.back")).clicked();
+                    } else {
+                        proceed = ui
+                            .add_enabled(confirm.acknowledged, danger(t.get("reboot.next")))
+                            .clicked();
+                    }
+                    cancel = ui.button(t.get("common.cancel")).clicked();
+                });
+            });
+        });
+        if cancel {
+            self.log(Action::RebootCancel, Outcome::Cancelled);
+        } else if back {
+            confirm.final_step = false;
+            self.reboot_confirm = Some(confirm);
+        } else if proceed && !confirm.final_step {
+            confirm.final_step = true;
+            self.reboot_confirm = Some(confirm);
+        } else if proceed {
+            self.selected = confirm.id.clone();
+            self.send(json!({"action":"reboot","id":confirm.id}));
+        } else {
+            self.reboot_confirm = Some(confirm);
         }
     }
 
@@ -3900,6 +4027,7 @@ impl ManagementApp {
         }
         self.upgrade_dialog(ctx);
         self.batch_failure_dialog(ctx);
+        self.reboot_dialog(ctx);
         self.vault_dialog(ctx);
         self.schema_upgrade_dialog(ctx);
         self.plaintext_delete_dialog(ctx);
@@ -4217,6 +4345,107 @@ fn pending_count(host: &Host) -> usize {
         .filter(|r| r.status == "success")
         .map_or(0, |r| r.packages.len())
 }
+/// A short line of what needs restarting, or `None` when nothing does.
+fn restart_summary(t: Translator, restart: &RestartStatus) -> Option<String> {
+    let mut parts = vec![];
+    if restart.reboot_required {
+        parts.push(t.get("restart.reboot_short").to_owned());
+    }
+    let count = restart.services.len() + restart.containers.len();
+    if count > 0 {
+        parts.push(t.format("restart.services_short", &[("count", count.to_string())]));
+    }
+    (!parts.is_empty()).then(|| parts.join(t.get("restart.separator")))
+}
+
+/// The restart tab: why there is nothing to show, or what needs a reboot or restart.
+fn restart_panel(ui: &mut egui::Ui, t: Translator, host: &Host) {
+    let palette = Palette::for_context(ui.ctx());
+    let muted = |ui: &mut egui::Ui, text: &str| {
+        ui.label(RichText::new(text).color(palette.muted));
+    };
+    if host.manager() != "apt" {
+        return muted(ui, t.get("restart.apt_only"));
+    }
+    if host.username != "root" {
+        return muted(ui, t.get("restart.root_only"));
+    }
+    let Some((checked_at, restart)) = host
+        .last_check
+        .as_ref()
+        .and_then(|r| r.restart.as_ref().map(|s| (&r.checked_at, s)))
+    else {
+        return muted(ui, t.get("restart.not_read"));
+    };
+    ui.label(
+        RichText::new(t.format("restart.read_at", &[("time", format_time(checked_at))]))
+            .size(11.0)
+            .color(palette.muted),
+    );
+    ui.add_space(6.0);
+    if restart.reboot_required {
+        ui.colored_label(palette.warning, t.get("restart.reboot_required"));
+    } else {
+        ui.label(t.get("restart.no_reboot"));
+    }
+    egui::Grid::new("restart_kernel")
+        .num_columns(2)
+        .spacing([20.0, 8.0])
+        .show(ui, |ui| {
+            if !restart.running_kernel.is_empty() {
+                ui.label(RichText::new(t.get("restart.running_kernel")).color(palette.muted));
+                ui.label(&restart.running_kernel);
+                ui.end_row();
+            }
+            if !restart.expected_kernel.is_empty() {
+                ui.label(RichText::new(t.get("restart.expected_kernel")).color(palette.muted));
+                ui.label(&restart.expected_kernel);
+                ui.end_row();
+            }
+        });
+    let list = |ui: &mut egui::Ui, title: String, names: &[String]| {
+        if names.is_empty() {
+            return;
+        }
+        ui.add_space(8.0);
+        ui.label(RichText::new(title).strong());
+        for name in names {
+            ui.add(egui::Label::new(format!("•  {name}")).selectable(true));
+        }
+    };
+    let count = |names: &[String]| [("count", names.len().to_string())];
+    list(
+        ui,
+        t.format("restart.packages", &count(&restart.reboot_packages)),
+        &restart.reboot_packages,
+    );
+    if !restart.needrestart {
+        ui.add_space(8.0);
+        return muted(ui, t.get("restart.no_needrestart"));
+    }
+    list(
+        ui,
+        t.format("restart.services", &count(&restart.services)),
+        &restart.services,
+    );
+    list(
+        ui,
+        t.format("restart.containers", &count(&restart.containers)),
+        &restart.containers,
+    );
+    list(
+        ui,
+        t.format("restart.sessions", &count(&restart.sessions)),
+        &restart.sessions,
+    );
+    ui.add_space(8.0);
+    if restart.services.is_empty() && restart.containers.is_empty() && restart.sessions.is_empty() {
+        ui.label(t.get("restart.no_services"));
+    } else {
+        muted(ui, t.get("restart.manual"));
+    }
+}
+
 fn record_result(host: &mut Host, result: CheckResult) {
     if !result.distro.is_empty() {
         host.distro = result.distro.clone();
@@ -4284,7 +4513,7 @@ struct BatchRow {
     /// Why the host cannot be selected, when it cannot.
     reason: Option<String>,
     /// Indexed like [`BatchColumn::ALL`].
-    cells: [String; 10],
+    cells: [String; 11],
     failed: bool,
     /// The phased package names, for the phased count's tooltip.
     phased: Option<String>,

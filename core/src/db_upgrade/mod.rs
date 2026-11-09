@@ -10,6 +10,7 @@ mod v1_v2;
 mod v2_v3;
 mod v3_v4;
 mod v4_v5;
+mod v5_v6;
 
 pub(crate) type Migration = fn(&Connection) -> Result<()>;
 
@@ -20,4 +21,5 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
     v2_v3::upgrade,
     v3_v4::upgrade,
     v4_v5::upgrade,
+    v5_v6::upgrade,
 ];

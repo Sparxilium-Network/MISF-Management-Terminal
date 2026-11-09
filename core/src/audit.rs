@@ -51,6 +51,9 @@ pub enum Action {
     BatchUpgrade,
     UpgradePrompt,
     UpgradeCancel,
+    Reboot,
+    RebootPrompt,
+    RebootCancel,
     MainTab,
     BatchSelect,
     VaultCreate,
@@ -93,6 +96,7 @@ impl Action {
             "test" => Self::Test,
             "check" => Self::Check,
             "upgrade" => Self::Upgrade,
+            "reboot" => Self::Reboot,
             "batch" => match operation {
                 Some("check") => Self::BatchCheck,
                 Some("upgrade") => Self::BatchUpgrade,

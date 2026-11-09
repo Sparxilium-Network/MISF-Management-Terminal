@@ -217,10 +217,12 @@ pub enum BatchColumn {
     Phased,
     Upgraded,
     Checked,
+    /// Reboot or service restarts still needed (APT as root).
+    Restart,
 }
 
 impl BatchColumn {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::Host,
         Self::User,
         Self::Address,
@@ -231,6 +233,7 @@ impl BatchColumn {
         Self::Phased,
         Self::Upgraded,
         Self::Checked,
+        Self::Restart,
     ];
 
     fn code(self) -> &'static str {
@@ -245,6 +248,7 @@ impl BatchColumn {
             Self::Phased => "phased",
             Self::Upgraded => "upgraded",
             Self::Checked => "checked",
+            Self::Restart => "restart",
         }
     }
 
@@ -260,6 +264,7 @@ impl BatchColumn {
             Self::Phased => t.get("batch.phased"),
             Self::Upgraded => t.get("batch.upgraded_count"),
             Self::Checked => t.get("apt.last_check"),
+            Self::Restart => t.get("batch.restart"),
         }
     }
 
@@ -270,7 +275,7 @@ impl BatchColumn {
             Self::Address => 1.4,
             Self::System => 1.4,
             Self::Checked => 1.1,
-            Self::Status | Self::User => 1.0,
+            Self::Status | Self::User | Self::Restart => 1.0,
             Self::Pending | Self::Phased => 0.9,
             Self::Operation | Self::Upgraded => 0.8,
         }
@@ -281,8 +286,8 @@ impl BatchColumn {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BatchColumns {
     /// Indexed like [`BatchColumn::ALL`]; the host column is always shown.
-    pub shown: [bool; 10],
-    pub weights: [f32; 10],
+    pub shown: [bool; 11],
+    pub weights: [f32; 11],
 }
 
 impl BatchColumns {
@@ -305,7 +310,14 @@ impl BatchColumns {
         let mut columns = Self::default();
         if let Some(shown) = value["shown"].as_array() {
             for (i, column) in BatchColumn::ALL.into_iter().enumerate() {
-                columns.shown[i] = shown.iter().any(|code| code == column.code());
+                // Files saved before the restart column existed list every older
+                // column's weight but not its own; it keeps its default visibility there.
+                let weights = &value["weights"];
+                let older_file =
+                    weights.get("checked").is_some() && weights.get("restart").is_none();
+                if !(column == BatchColumn::Restart && older_file) {
+                    columns.shown[i] = shown.iter().any(|code| code == column.code());
+                }
             }
         }
         for (i, column) in BatchColumn::ALL.into_iter().enumerate() {
@@ -680,5 +692,21 @@ mod tests {
         assert_eq!(columns.visible(), [(0, BatchColumn::Host)]);
         assert_eq!(columns.weights[0], 10.0);
         assert_eq!(columns.weights[1], BatchColumn::User.weight());
+        // A file saved before the restart column existed still shows it by default.
+        std::fs::write(
+            &path,
+            json!({"version": 1, "batch_columns": {"shown": ["status"], "weights": {"host": 1.0, "checked": 1.0}}})
+                .to_string(),
+        )
+        .unwrap();
+        let columns = Preferences::load(&path).unwrap().batch_columns;
+        assert_eq!(
+            columns.visible(),
+            [
+                (0, BatchColumn::Host),
+                (5, BatchColumn::Status),
+                (10, BatchColumn::Restart)
+            ]
+        );
     }
 }

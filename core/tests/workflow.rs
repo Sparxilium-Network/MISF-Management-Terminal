@@ -3,7 +3,7 @@ use misf_core::{
     dispatch, dispatch_with,
     model::{CheckResult, Host},
     package_manager::{self, Manager, apt, dnf},
-    ssh,
+    reboot, ssh,
     store::Store,
 };
 use russh::{
@@ -93,6 +93,17 @@ impl State {
             } else {
                 ("Metadata cache created.\r\n".into(), 0)
             }
+        } else if command == apt::STATUS {
+            (
+                "__MISF_REBOOT__\n__MISF_REBOOT_PKG__linux-image-7.0.0-43-generic\nNEEDRESTART-VER: 3.6\nNEEDRESTART-KCUR: 7.0.0-42-generic\nNEEDRESTART-KEXP: 7.0.0-43-generic\nNEEDRESTART-KSTA: 3\nNEEDRESTART-SVC: systemd-logind.service\nNEEDRESTART-SVC: dbus.service\n".into(),
+                0,
+            )
+        } else if [reboot::ROOT, reboot::SUDO].contains(&command) {
+            (
+                "Reboot scheduled for Mon 2026-11-09 10:01:00 UTC, use 'shutdown -c' to cancel.\n"
+                    .into(),
+                0,
+            )
         } else {
             ("unexpected command\n".into(), 127)
         }
@@ -369,6 +380,62 @@ async fn root_upgrade_runs_without_sudo() {
     let commands = fixture.state.commands.lock().unwrap();
     assert!(commands.iter().any(|c| c == apt::UPGRADE));
     assert!(!commands.iter().any(|c| c.contains("sudo")));
+    // Restart status is read last, after the upgrade and the second listing.
+    assert_eq!(
+        *commands,
+        package_manager::package_commands(&fixture.host, true)
+    );
+    assert_eq!(commands.last().unwrap(), apt::STATUS);
+    let restart = result.restart.unwrap();
+    assert!(restart.reboot_required && restart.needrestart);
+    assert_eq!(restart.running_kernel, "7.0.0-42-generic");
+    assert_eq!(restart.expected_kernel, "7.0.0-43-generic");
+    assert_eq!(restart.services, ["systemd-logind.service", "dbus.service"]);
+    assert!(result.output.contains("NEEDRESTART-SVC: dbus.service"));
+}
+
+#[tokio::test]
+async fn regular_accounts_never_read_restart_status() {
+    let fixture = fixture(false, false).await;
+    let result = package_manager::upgrade(&fixture.host, &|_| {}).await;
+    assert_eq!(result.status, "success", "{}", result.error);
+    assert!(result.restart.is_none());
+    assert!(
+        !fixture
+            .state
+            .commands
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|c| c.contains("needrestart"))
+    );
+}
+
+#[tokio::test]
+async fn reboot_runs_one_fixed_command_and_only_on_apt_hosts() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::new(dir.path().join("hosts.db"));
+    let fixture = fixture(false, false).await;
+    let id = register(&store, &fixture, "debian").await;
+    fixture.state.commands.lock().unwrap().clear();
+    let response = dispatch(json!({"action":"reboot","id":id}), &store, &|_| {})
+        .await
+        .unwrap();
+    assert!(response["output"].as_str().unwrap().contains("shutdown -c"));
+    assert_eq!(*fixture.state.commands.lock().unwrap(), [reboot::SUDO]);
+
+    let mut root = fixture.host.clone();
+    root.username = "root".into();
+    reboot::reboot(&root, &|_| {}).await.unwrap();
+    assert_eq!(
+        fixture.state.commands.lock().unwrap().last().unwrap(),
+        reboot::ROOT
+    );
+
+    let rocky = fixture_on(DNF_HOST, false, false).await;
+    let error = reboot::reboot(&rocky.host, &|_| {}).await.unwrap_err();
+    assert!(error.to_string().contains("APT"), "{error}");
+    assert!(rocky.state.commands.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

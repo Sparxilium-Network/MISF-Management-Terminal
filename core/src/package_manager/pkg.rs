@@ -16,11 +16,13 @@ pub(super) const ROOT: Commands = Commands {
     update: UPDATE,
     list: LIST,
     upgrade: UPGRADE,
+    status: None,
 };
 pub(super) const SUDO: Commands = Commands {
     update: SUDO_UPDATE,
     list: LIST,
     upgrade: SUDO_UPGRADE,
+    status: None,
 };
 
 pub(super) fn update_failed(line: &str) -> bool {

@@ -1,7 +1,7 @@
 //! One check or upgrade on one host: detect, refresh the index, list, and maybe upgrade.
 
 use super::{DETECT, Manager, Platform, parse_platform};
-use crate::model::{CheckResult, Host, Package};
+use crate::model::{CheckResult, Host, Package, RestartStatus};
 use crate::ssh::{self, Session};
 use anyhow::{Context, Result, ensure};
 use chrono::Utc;
@@ -10,6 +10,7 @@ const DETECT_SECONDS: u64 = 20;
 const UPDATE_SECONDS: u64 = 5 * 60;
 const LIST_SECONDS: u64 = 2 * 60;
 const UPGRADE_SECONDS: u64 = 30 * 60;
+const STATUS_SECONDS: u64 = 2 * 60;
 
 pub async fn check(host: &Host, progress: &dyn Fn(&str)) -> CheckResult {
     run(host, false, progress).await
@@ -25,6 +26,7 @@ struct Outcome {
     pending: Vec<Package>,
     upgraded: Vec<Package>,
     phased: Vec<String>,
+    restart: Option<RestartStatus>,
 }
 
 /// One host's session state as the operation goes.
@@ -74,25 +76,55 @@ impl Run<'_> {
         self.refresh(manager, commands.update).await?;
         progress("正在讀取待更新套件…");
         let pending = self.pending(manager, commands.list).await?;
-        if !upgrade || pending.is_empty() {
-            return Ok(Outcome {
+        let mut outcome = if !upgrade || pending.is_empty() {
+            Outcome {
                 pending,
                 ..Default::default()
-            });
+            }
+        } else {
+            progress("正在升級可升級套件…");
+            let phased = self.install(manager, commands.upgrade).await?;
+            progress("正在重新讀取剩餘待更新套件…");
+            let remaining = self.pending(manager, commands.list).await?;
+            let upgraded = pending
+                .into_iter()
+                .filter(|package| !remaining.iter().any(|left| left.name == package.name))
+                .collect();
+            Outcome {
+                pending: remaining,
+                upgraded,
+                phased,
+                restart: None,
+            }
+        };
+        if let Some(command) = commands.status {
+            progress("正在讀取重新啟動狀態…");
+            outcome.restart = self.restart(command).await;
         }
-        progress("正在升級可升級套件…");
-        let phased = self.install(manager, commands.upgrade).await?;
-        progress("正在重新讀取剩餘待更新套件…");
-        let remaining = self.pending(manager, commands.list).await?;
-        let upgraded = pending
-            .into_iter()
-            .filter(|package| !remaining.iter().any(|left| left.name == package.name))
-            .collect();
-        Ok(Outcome {
-            pending: remaining,
-            upgraded,
-            phased,
-        })
+        Ok(outcome)
+    }
+
+    /// Reads what needs a restart; a failure leaves it unknown and never fails the run.
+    async fn restart(&mut self, command: &str) -> Option<RestartStatus> {
+        let read = ssh::execute(self.session, command, false, "", STATUS_SECONDS).await;
+        self.transcript.push_str(
+            "
+--- 重新啟動狀態 ---
+",
+        );
+        match read {
+            Ok((code, output)) => {
+                self.transcript.push_str(&output);
+                super::apt::parse_restart(code, &output)
+            }
+            Err(error) => {
+                self.transcript.push_str(&format!(
+                    "{error:#}
+"
+                ));
+                None
+            }
+        }
     }
 
     /// Runs DETECT and settles which manager may run; never a different one than confirmed.
@@ -216,6 +248,7 @@ fn record(
             check.packages = outcome.pending;
             check.upgraded = outcome.upgraded;
             check.phased = outcome.phased;
+            check.restart = outcome.restart;
         }
         Err(error) => {
             if check.status.is_empty() {

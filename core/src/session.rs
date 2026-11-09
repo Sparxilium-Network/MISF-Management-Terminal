@@ -71,7 +71,7 @@ impl Session {
         if self.debug {
             let remote = matches!(
                 name.as_str(),
-                "probe" | "test" | "check" | "upgrade" | "batch"
+                "probe" | "test" | "check" | "upgrade" | "batch" | "reboot"
             );
             let blocked = (matches!(name.as_str(), "vault_add_passkey" | "vault_unlock_passkey")
                 && !self.allow_passkey)

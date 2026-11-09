@@ -287,6 +287,28 @@ pub struct CheckResult {
     pub phased: Vec<String>,
     pub output: String,
     pub error: String,
+    /// What still needs a restart after this run; only collected for APT as root.
+    pub restart: Option<RestartStatus>,
+}
+
+/// Reboot and restart needs read by a fixed status command after a check or upgrade.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(default)]
+pub struct RestartStatus {
+    /// `/var/run/reboot-required` exists, or needrestart expects a newer kernel.
+    pub reboot_required: bool,
+    /// Packages listed in `/var/run/reboot-required.pkgs`.
+    pub reboot_packages: Vec<String>,
+    /// Whether needrestart ran; without it the lists below are unknown, not empty.
+    pub needrestart: bool,
+    pub running_kernel: String,
+    /// The kernel needrestart expects to be running; empty when it matches or is unknown.
+    pub expected_kernel: String,
+    /// Services running outdated libraries; MISF never restarts them.
+    pub services: Vec<String>,
+    pub containers: Vec<String>,
+    /// User sessions running outdated binaries.
+    pub sessions: Vec<String>,
 }
 
 #[cfg(test)]

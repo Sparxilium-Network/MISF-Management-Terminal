@@ -15,11 +15,13 @@ pub(super) const ROOT: Commands = Commands {
     update: UPDATE,
     list: LIST,
     upgrade: UPGRADE,
+    status: None,
 };
 pub(super) const SUDO: Commands = Commands {
     update: SUDO_UPDATE,
     list: SUDO_LIST,
     upgrade: SUDO_UPGRADE,
+    status: None,
 };
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 # MISF Management Terminal 架構
 
-> 最後修改：2026-11-08 ｜ 基於 commit：`8d40cd3`
+> 最後修改：2026-11-08 ｜ 基於 commit：`aeb97d1`
 
 > [!WARNING]
 > **本專案仍處於開發階段，請勿用於正式環境。** 相關安全保護機制尚未完善。
@@ -34,6 +34,7 @@ flowchart LR
 | `app/src/theme.rs` | 淺色／深色配色 |
 | `core/src/lib.rs` | 主機請求的分派（下表） |
 | `core/src/batch.rs` | 批次作業：並行、逐台儲存與回報、失敗時暫停詢問 |
+| `core/src/reboot.rs` | 重新開機：固定命令 `shutdown -r +1`，只限 APT 主機 |
 | `core/src/session.rs` | GUI 與 CLI 共用的入口：寫稽核日誌、套用 debug 限制，再交給 StorageSession |
 | `core/src/vault.rs` | `StorageSession`：容器建立、解鎖、金鑰槽、備份、舊版明文轉入與刪除 |
 | `core/src/passkey.rs`、`core/src/windows_passkey.rs` | FIDO2／Windows WebAuthn 解鎖 |
@@ -49,7 +50,7 @@ UI 與 CLI 都送出 `{"action": …}` JSON 給 `Session::handle`。CLI 從 stdi
 
 - **儲存**：`storage_status`、`vault_create`、`vault_unlock`、`vault_unlock_passkey`、`vault_lock`、`vault_upgrade`、`vault_upgrade_cancel`、`vault_add_key`、`vault_add_passkey`、`vault_rename_key`、`vault_revoke_key`、`vault_backup`、`vault_delete_plaintext`。
 - **主機資料**（需已解鎖）：`list`、`save`、`delete`、`convert_storage`、`key_add`、`key_delete`、`group_add`、`group_rename`、`group_collapse`、`group_delete`、`arrange`。
-- **遠端**：`probe`、`trust`、`test`、`check`、`upgrade`、`batch`。
+- **遠端**：`probe`、`trust`、`test`、`check`、`upgrade`、`batch`、`reboot`。
 
 ## 主機、金鑰與分類
 
@@ -81,6 +82,14 @@ UI 與 CLI 都送出 `{"action": …}` JSON 給 `Session::handle`。CLI 從 stdi
 - 索引更新失敗不讀套件清單，也不開始升級。APT 輸出含 `E:`、DNF／YUM 含 `Error:`／`Failed to download metadata`／`Ignoring repositories`，或非零退出碼，即為失敗；升級失敗時提示遠端可能已部分升級。索引更新上限 5 分鐘，升級上限 30 分鐘。
 - 升級前後各讀一次待更新清單：`CheckResult.upgraded` 為升級後消失的套件，`packages` 為剩餘套件，`operation` 區分 check／upgrade。APT 的 phasing 延後套件在載入時從保存的升級輸出解析。
 - 輸出統一換行、移除 ANSI 與終端控制字串後保存，UI 以可選取的等寬文字顯示。每台主機只保存最近一次檢查或升級。
+
+### 重啟提示與重新開機（只限 APT）
+
+- **不解析升級輸出**：needrestart 在升級時印出的文字是給人看的，格式會隨版本與設定改變，也只在 MISF 升級時才出現。改為在檢查或升級成功讀完清單後，另外執行固定、唯讀的 `apt::STATUS`：讀 `/var/run/reboot-required`（與 `.pkgs`），再以 `needrestart -r l -b`（只列出、機器可讀格式）取得目前／預期核心（`KSTA` ≥ 2 視為需要重新開機）、需要重啟的服務、容器與使用者工作階段。沒有 needrestart 時只回報 reboot-required，服務清單標示為未知而不是「沒有」。
+- **只限 root 帳號**：needrestart 要以 root 才看得到所有行程，一般帳號不執行這條命令（`Commands::status` 為 `None`），也不顯示重啟提示。這條命令列在確認視窗的命令清單中。
+- **不影響主結果**：讀取失敗或逾時（2 分鐘）只讓 `CheckResult.restart` 為空，檢查／升級仍算成功；原始輸出附在執行輸出的「重新啟動狀態」段落。
+- **永不自動重啟服務**：升級命令固定帶 `NEEDRESTART_MODE=l`，MISF 不提供重啟個別服務的功能（那需要把服務名稱組進命令）。UI 只顯示需要重啟的項目：主機頁的警示列、結果卡片的「重啟提示」分頁與批次表格的「重啟提示」欄。
+- **重新開機**：`{"action":"reboot","id":…}` 只接受已偵測為 APT 的主機，執行固定命令 `shutdown -r +1`（root 直接執行，一般帳號經 `sudo -S`），1 分鐘後才重開，主機上可用 `shutdown -c` 取消，SSH 命令也能正常結束。UI 需兩次確認：第一個視窗列出命令與風險並要求勾選，第二個視窗再問一次主機名稱與位址。稽核記錄 `reboot`、`reboot_prompt`、`reboot_cancel`；debug 模式只允許 loopback 主機。
 
 ## 批次作業
 
@@ -128,8 +137,9 @@ GUI 的 worker 把 `finished` 轉成即時更新表格列、把 `failed` 轉成�
 | `host_groups` | 側欄分類名稱、順序與收合狀態 |
 | `key_slots` | LUKSbox 金鑰槽名稱 |
 | `connection_tests` | 每台主機最後一次測試連線（`package_managers` 以逗號分隔），隨主機刪除 |
+| `restart_status`、`restart_items` | 最近一次檢查或升級讀到的重啟狀態；`restart_items.kind` 為 `package`／`service`／`container`／`session`，隨檢查結果刪除 |
 
-目前結構版本為 v5。遷移每一步一個檔案（`core/src/db_upgrade/vN_vM.rs`），`MIGRATIONS[n]` 把 vN 升到 vN+1，依序串接；新增版本只追加檔案，已發布的步驟不得修改。版本較新時拒絕開啟，不降級寫入。明文 `hosts.db` 遷移前先複製為 `hosts.v<N>.bak.db`，再於單一交易執行。容器內資料庫較舊時主機庫維持鎖定（`pending_upgrade`）並詢問：`vault_upgrade` 寫回目前版本，`vault_upgrade_cancel` 關閉容器、檔案不變。
+目前結構版本為 v6。遷移每一步一個檔案（`core/src/db_upgrade/vN_vM.rs`），`MIGRATIONS[n]` 把 vN 升到 vN+1，依序串接；新增版本只追加檔案，已發布的步驟不得修改。版本較新時拒絕開啟，不降級寫入。明文 `hosts.db` 遷移前先複製為 `hosts.v<N>.bak.db`，再於單一交易執行。容器內資料庫較舊時主機庫維持鎖定（`pending_upgrade`）並詢問：`vault_upgrade` 寫回目前版本，`vault_upgrade_cancel` 關閉容器、檔案不變。
 
 ### LUKSbox 容器與 Passkey
 

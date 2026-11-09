@@ -1,7 +1,7 @@
 //! APT (Debian, Ubuntu).
 
 use super::Commands;
-use crate::model::Package;
+use crate::model::{Package, RestartStatus};
 use anyhow::{Result, bail, ensure};
 
 pub const UPDATE: &str = "LC_ALL=C apt-get -q=1 -o APT::Update::Error-Mode=any update";
@@ -12,15 +12,22 @@ pub const UPGRADE: &str = "LC_ALL=C DEBIAN_FRONTEND=noninteractive NEEDRESTART_M
 // sudo resets the environment, so the variables go through `env` after it.
 pub const SUDO_UPGRADE: &str = "LC_ALL=C sudo -S -p '__MISF_SUDO_PROMPT__' -- env LC_ALL=C DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l apt-get -y -q=1 -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade";
 
+/// Read-only restart status, run as root only: `reboot-required` plus needrestart in
+/// list mode (`-r l`) with batch output (`-b`); it never restarts anything.
+pub const STATUS: &str = "sh -c 'if [ -f /var/run/reboot-required ]; then echo __MISF_REBOOT__; if [ -r /var/run/reboot-required.pkgs ]; then sed \"s/^/__MISF_REBOOT_PKG__/\" /var/run/reboot-required.pkgs; fi; fi; if command -v needrestart >/dev/null 2>&1; then LC_ALL=C needrestart -r l -b; else echo __MISF_NO_NEEDRESTART__; fi'";
+
 pub(super) const ROOT: Commands = Commands {
     update: UPDATE,
     list: LIST,
     upgrade: UPGRADE,
+    status: Some(STATUS),
 };
 pub(super) const SUDO: Commands = Commands {
     update: SUDO_UPDATE,
     list: LIST,
     upgrade: SUDO_UPGRADE,
+    // needrestart only sees every process as root; regular accounts get no restart status.
+    status: None,
 };
 
 /// A repository that failed to download still lets `apt-get update` exit 0.
@@ -78,9 +85,102 @@ pub fn parse_phased(output: &str) -> Vec<String> {
     phased
 }
 
+/// Reads [`STATUS`] output; `None` when neither part of it ran.
+pub fn parse_restart(code: u32, output: &str) -> Option<RestartStatus> {
+    let mut status = RestartStatus::default();
+    let (mut answered, mut kernel_status) = (false, 0);
+    let mut expected = String::new();
+    for line in output.lines().map(str::trim) {
+        if line == "__MISF_REBOOT__" {
+            status.reboot_required = true;
+        } else if let Some(package) = line.strip_prefix("__MISF_REBOOT_PKG__") {
+            if !package.is_empty() && !status.reboot_packages.iter().any(|p| p == package) {
+                status.reboot_packages.push(package.into());
+            }
+        } else if line == "__MISF_NO_NEEDRESTART__" {
+            answered = true;
+        } else if let Some((key, value)) = line.split_once(": ") {
+            let value = value.trim().to_owned();
+            match key {
+                "NEEDRESTART-VER" => {
+                    answered = true;
+                    status.needrestart = true;
+                }
+                "NEEDRESTART-KCUR" => status.running_kernel = value,
+                "NEEDRESTART-KEXP" => expected = value,
+                // 0 unknown, 1 current, 2 ABI-compatible upgrade, 3 version upgrade.
+                "NEEDRESTART-KSTA" => kernel_status = value.parse().unwrap_or(0),
+                "NEEDRESTART-SVC" => status.services.push(value),
+                "NEEDRESTART-CONT" => status.containers.push(value),
+                "NEEDRESTART-SESS" => status.sessions.push(value),
+                _ => {}
+            }
+        }
+    }
+    if kernel_status >= 2 {
+        status.reboot_required = true;
+        status.expected_kernel = expected;
+    }
+    (answered || code == 0).then_some(status)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn restart_status_reads_reboot_required_and_needrestart_batch_output() {
+        let output = "__MISF_REBOOT__
+__MISF_REBOOT_PKG__linux-image-7.0.0-43-generic
+__MISF_REBOOT_PKG__linux-base
+__MISF_REBOOT_PKG__linux-base
+NEEDRESTART-VER: 3.6
+NEEDRESTART-KCUR: 7.0.0-42-generic
+NEEDRESTART-KEXP: 7.0.0-43-generic
+NEEDRESTART-KSTA: 3
+NEEDRESTART-SVC: systemd-logind.service
+NEEDRESTART-SVC: dbus.service
+NEEDRESTART-CONT: web-1
+NEEDRESTART-SESS: alice @ session #3
+";
+        let status = parse_restart(0, output).unwrap();
+        assert!(status.reboot_required && status.needrestart);
+        assert_eq!(
+            status.reboot_packages,
+            ["linux-image-7.0.0-43-generic", "linux-base"]
+        );
+        assert_eq!(status.running_kernel, "7.0.0-42-generic");
+        assert_eq!(status.expected_kernel, "7.0.0-43-generic");
+        assert_eq!(status.services, ["systemd-logind.service", "dbus.service"]);
+        assert_eq!(status.containers, ["web-1"]);
+        assert_eq!(status.sessions, ["alice @ session #3"]);
+
+        // A current kernel needs no reboot and keeps no expected version.
+        let current = "NEEDRESTART-VER: 3.6
+NEEDRESTART-KCUR: 7.0.0-43-generic
+NEEDRESTART-KEXP: 7.0.0-43-generic
+NEEDRESTART-KSTA: 1
+";
+        let status = parse_restart(0, current).unwrap();
+        assert!(!status.reboot_required && status.expected_kernel.is_empty());
+
+        // Without needrestart only reboot-required is known.
+        let status = parse_restart(
+            0,
+            "__MISF_NO_NEEDRESTART__
+",
+        )
+        .unwrap();
+        assert!(!status.needrestart && !status.reboot_required);
+        assert!(
+            parse_restart(
+                1,
+                "sh: 1: needrestart: Permission denied
+"
+            )
+            .is_none()
+        );
+    }
 
     #[test]
     fn listing_rows_split_into_versions_and_unknown_text_is_refused() {

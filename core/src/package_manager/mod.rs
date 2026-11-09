@@ -32,6 +32,8 @@ pub struct Commands {
     pub list: &'static str,
     /// Upgrades installed packages.
     pub upgrade: &'static str,
+    /// Reads what needs a restart afterwards; only APT as root has one.
+    pub status: Option<&'static str>,
 }
 
 /// A supported package manager; one batch only ever runs one kind.
@@ -127,6 +129,7 @@ pub fn manager_commands(manager: Manager, root: bool, upgrade: bool) -> Vec<&'st
     if upgrade {
         list.extend([commands.upgrade, commands.list]);
     }
+    list.extend(commands.status);
     list
 }
 
@@ -158,10 +161,16 @@ mod tests {
         let sudo = format!("sudo -S -p '{SUDO_PROMPT}' -- ");
         for manager in ALL {
             let root = manager.commands(true);
-            for command in [root.update, root.list, root.upgrade] {
+            for command in [root.update, root.list, root.upgrade]
+                .into_iter()
+                .chain(root.status)
+            {
                 assert!(!command.contains("sudo"), "{command}");
             }
+            // Restart status is APT-only and never offered to a regular account.
+            assert_eq!(root.status.is_some(), manager == Manager::Apt);
             let user = manager.commands(false);
+            assert_eq!(user.status, None);
             for command in [user.update, user.upgrade] {
                 assert!(command.contains(&sudo), "{command}");
             }

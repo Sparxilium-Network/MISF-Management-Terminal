@@ -2,7 +2,7 @@
 //! slot and `application_id` marks the file as MISF's, so opening or importing an older
 //! database detects its version and upgrades it, while foreign or newer files are refused.
 use crate::db_upgrade::{MIGRATIONS, Migration};
-use crate::model::{CheckResult, ConnectionTest, Host, HostGroup, Package, SshKey};
+use crate::model::{CheckResult, ConnectionTest, Host, HostGroup, Package, RestartStatus, SshKey};
 use crate::store::Database;
 use anyhow::{Context, Result, ensure};
 use rusqlite::{Connection, MAIN_DB, config::DbConfig, limits::Limit, params};
@@ -130,6 +130,42 @@ pub(crate) fn load(conn: &Connection) -> Result<Database> {
                 repository: row.get(6)?,
             });
     }
+    let mut items: HashMap<(String, String), Vec<String>> = HashMap::new();
+    let mut statement = conn.prepare(
+        "SELECT host_id, kind, name FROM restart_items ORDER BY host_id, kind, position",
+    )?;
+    let mut rows = statement.query([])?;
+    while let Some(row) = rows.next()? {
+        items
+            .entry((row.get(0)?, row.get(1)?))
+            .or_default()
+            .push(row.get(2)?);
+    }
+    let mut restarts = HashMap::new();
+    let mut statement = conn.prepare(
+        "SELECT host_id, reboot_required, needrestart, running_kernel, expected_kernel
+         FROM restart_status",
+    )?;
+    let mut rows = statement.query([])?;
+    while let Some(row) = rows.next()? {
+        let id: String = row.get(0)?;
+        let mut take = |kind: &str| {
+            items
+                .remove(&(id.clone(), kind.to_owned()))
+                .unwrap_or_default()
+        };
+        let status = RestartStatus {
+            reboot_required: row.get(1)?,
+            needrestart: row.get(2)?,
+            running_kernel: row.get(3)?,
+            expected_kernel: row.get(4)?,
+            reboot_packages: take("package"),
+            services: take("service"),
+            containers: take("container"),
+            sessions: take("session"),
+        };
+        restarts.insert(id, status);
+    }
     let mut results = HashMap::new();
     let mut statement = conn.prepare(
         "SELECT host_id, checked_at, operation, status, distro, package_manager, output, error
@@ -155,6 +191,7 @@ pub(crate) fn load(conn: &Connection) -> Result<Database> {
             upgraded: packages.remove(&(id.clone(), true)).unwrap_or_default(),
             output,
             error: row.get(7)?,
+            restart: restarts.remove(&id),
         };
         results.insert(id, result);
     }
@@ -273,7 +310,8 @@ pub(crate) fn load(conn: &Connection) -> Result<Database> {
 pub(crate) fn save(conn: &mut Connection, db: &Database) -> Result<()> {
     let tx = conn.transaction()?;
     tx.execute_batch(
-        "DELETE FROM packages; DELETE FROM check_results; DELETE FROM connection_tests;
+        "DELETE FROM restart_items; DELETE FROM restart_status;
+         DELETE FROM packages; DELETE FROM check_results; DELETE FROM connection_tests;
          DELETE FROM hosts;
          DELETE FROM key_slots; DELETE FROM ssh_keys; DELETE FROM host_groups;",
     )?;
@@ -329,6 +367,14 @@ pub(crate) fn save(conn: &mut Connection, db: &Database) -> Result<()> {
         for (slot, name) in &db.slot_names {
             slot_row.execute(params![slot, name])?;
         }
+        let mut restart_row = tx.prepare(
+            "INSERT INTO restart_status (host_id, reboot_required, needrestart, running_kernel,
+                 expected_kernel)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+        )?;
+        let mut item_row = tx.prepare(
+            "INSERT INTO restart_items (host_id, kind, position, name) VALUES (?1, ?2, ?3, ?4)",
+        )?;
         let mut package_row = tx.prepare(
             "INSERT INTO packages (host_id, upgraded, position, name, current_version,
                  candidate_version, architecture, repository)
@@ -394,6 +440,25 @@ pub(crate) fn save(conn: &mut Connection, db: &Database) -> Result<()> {
                 result.output,
                 result.error,
             ])?;
+            if let Some(restart) = &result.restart {
+                restart_row.execute(params![
+                    host.id,
+                    restart.reboot_required,
+                    restart.needrestart,
+                    restart.running_kernel,
+                    restart.expected_kernel,
+                ])?;
+                for (kind, list) in [
+                    ("package", &restart.reboot_packages),
+                    ("service", &restart.services),
+                    ("container", &restart.containers),
+                    ("session", &restart.sessions),
+                ] {
+                    for (position, name) in list.iter().enumerate() {
+                        item_row.execute(params![host.id, kind, position as i64, name])?;
+                    }
+                }
+            }
             for (upgraded, list) in [(false, &result.packages), (true, &result.upgraded)] {
                 for (position, package) in list.iter().enumerate() {
                     package_row.execute(params![
@@ -485,6 +550,16 @@ pub(crate) mod tests {
                             name: "openssl".into(),
                             ..Default::default()
                         }],
+                        restart: Some(RestartStatus {
+                            reboot_required: true,
+                            reboot_packages: vec!["linux-base".into()],
+                            needrestart: true,
+                            running_kernel: "7.0.0-42-generic".into(),
+                            expected_kernel: "7.0.0-43-generic".into(),
+                            services: vec!["dbus.service".into(), "cron.service".into()],
+                            containers: vec![],
+                            sessions: vec!["alice @ session #3".into()],
+                        }),
                         ..Default::default()
                     }),
                     last_test: Some(ConnectionTest {
