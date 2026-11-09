@@ -1,0 +1,367 @@
+// The navy host list on the left: search, groups, host cards and drag-and-drop.
+import { LineEdit, ScrollView } from "std-widgets.slint";
+import { Theme, T } from "theme.slint";
+import { ColorButton, TextButton, HintArea } from "widgets.slint";
+
+export struct SidebarRow {
+    // 0 a group heading, 1 a host, 2 a message such as "no hosts".
+    kind: int,
+    // The group ID ("" = ungrouped) or the host ID.
+    id: string,
+    // A host's group ID.
+    group: string,
+    text: string,
+    count: string,
+    collapsed: bool,
+    // A real group, which can be renamed and deleted.
+    editable: bool,
+    lines: [string],
+    // The details on one line, for compact rows.
+    detail: string,
+    // Compact rows may clip their details; the tooltip shows them whole.
+    tooltip: string,
+    // 0 no dot, 1 not checked, 2 last check succeeded.
+    dot: int,
+    indent: length,
+    y: length,
+    height: length,
+    selected: bool,
+    dragged: bool,
+}
+
+export global SidebarState {
+    in property <[SidebarRow]> rows;
+    in property <length> content-height;
+    in property <string> count-text;
+    in property <bool> locked;
+    in property <bool> compact;
+    // Dragging is off while searching, where the list hides some hosts.
+    in property <bool> searching;
+    in-out property <string> search;
+    in property <bool> drop-shown;
+    in property <length> drop-y;
+    // The dragged item's name, drawn beside the pointer at `drag-y`.
+    in property <string> drag-label;
+    in property <length> drag-y;
+    callback search-edited(text: string);
+    callback select(id: string);
+    callback toggle-group(id: string);
+    callback rename-group(id: string);
+    callback delete-group(id: string);
+    callback add-group();
+    callback add-host();
+    // A row being dragged: the pointer in list content coordinates, and whether it is
+    // inside the visible part of the list.
+    callback drag-move(kind: int, id: string, content-y: length, inside: bool);
+    callback drag-end();
+    callback drag-cancel();
+}
+
+component RowArea inherits TouchArea {
+    in property <SidebarRow> item;
+    in property <length> viewport-y;
+    in property <length> view-height;
+    in property <length> view-width;
+    property <bool> dragging;
+    callback tapped();
+    mouse-cursor: pointer;
+    pointer-event(event) => {
+        if (event.button != PointerEventButton.left) {
+            return;
+        }
+        if (event.kind == PointerEventKind.down) {
+            self.dragging = false;
+        } else if (event.kind == PointerEventKind.up) {
+            if (self.dragging) {
+                self.dragging = false;
+                SidebarState.drag-end();
+            } else if (self.has-hover) {
+                root.tapped();
+            }
+        } else if (event.kind == PointerEventKind.cancel && self.dragging) {
+            self.dragging = false;
+            SidebarState.drag-cancel();
+        }
+    }
+    moved => {
+        if (SidebarState.searching) {
+            return;
+        }
+        if (!self.dragging && abs(self.mouse-y - self.pressed-y) + abs(self.mouse-x - self.pressed-x) > 5px) {
+            self.dragging = true;
+        }
+        if (self.dragging) {
+            SidebarState.drag-move(
+                root.item.kind,
+                root.item.id,
+                root.item.y + self.mouse-y,
+                root.item.y + self.mouse-y + root.viewport-y >= 0 && root.item.y + self.mouse-y + root.viewport-y <= root.view-height
+                    && root.item.indent + self.mouse-x >= 0 && root.item.indent + self.mouse-x <= root.view-width);
+        }
+    }
+}
+
+component GroupHeading {
+    in property <SidebarRow> item;
+    in property <length> viewport-y;
+    in property <length> view-height;
+    in property <length> view-width;
+    ContextMenuArea {
+        enabled: root.item.editable && !SidebarState.searching;
+        Menu {
+            MenuItem {
+                title: T.get("group.rename");
+                activated => { SidebarState.rename-group(root.item.id); }
+            }
+            MenuItem {
+                title: T.get("group.delete");
+                activated => { SidebarState.delete-group(root.item.id); }
+            }
+        }
+        HintArea {
+            width: root.width;
+            height: root.height;
+            plain: root.item.editable && !SidebarState.searching ? T.get("group.hint") : "";
+            area := RowArea {
+                item: root.item;
+                viewport-y: root.viewport-y;
+                view-height: root.view-height;
+                view-width: root.view-width;
+                enabled: !SidebarState.searching;
+                tapped => { SidebarState.toggle-group(root.item.id); }
+                HorizontalLayout {
+                    padding-left: 2px;
+                    padding-right: 4px;
+                    spacing: 6px;
+                    Path {
+                        width: 10px;
+                        height: 8px;
+                        y: (parent.height - self.height) / 2;
+                        fill: label.color;
+                        viewbox-width: 10;
+                        viewbox-height: 8;
+                        commands: root.item.collapsed ? "M 3 0 L 8 4 L 3 8 Z" : "M 1 1.5 L 9 1.5 L 5 6.5 Z";
+                    }
+                    label := Text {
+                        text: root.item.text;
+                        font-size: 13px;
+                        color: area.has-hover && !SidebarState.searching ? #dce7f5 : Theme.group-text;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        horizontal-stretch: 1;
+                    }
+                    Text {
+                        text: root.item.count;
+                        font-size: 11px;
+                        color: #7890af;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+    }
+}
+
+component HostRow {
+    in property <SidebarRow> item;
+    in property <length> viewport-y;
+    in property <length> view-height;
+    in property <length> view-width;
+    property <float> fade: root.item.dragged ? 0.4 : 1;
+    HintArea {
+        width: root.width;
+        height: root.height;
+        plain: SidebarState.compact ? root.item.tooltip : "";
+        delay: 0.6s;
+        area := RowArea {
+            item: root.item;
+            viewport-y: root.viewport-y;
+            view-height: root.view-height;
+            view-width: root.view-width;
+            tapped => { SidebarState.select(root.item.id); }
+            Rectangle {
+                x: root.item.indent;
+                width: parent.width - root.item.indent;
+                height: SidebarState.compact ? parent.height : parent.height - 5px;
+                y: 0;
+                border-radius: SidebarState.compact ? 4px : 7px;
+                opacity: root.fade;
+                background: root.item.selected ? Theme.navy-selected
+                    : SidebarState.compact ? (area.has-hover ? Theme.navy-hover : transparent) : Theme.navy;
+                border-width: SidebarState.compact ? 0 : 1px;
+                border-color: root.item.selected ? #3b5f86 : #233a57;
+                if SidebarState.compact: HorizontalLayout {
+                    padding-left: 6px;
+                    padding-right: 4px;
+                    spacing: 8px;
+                    if root.item.dot > 0: Rectangle {
+                        width: 7px;
+                        height: 7px;
+                        y: (parent.height - self.height) / 2;
+                        border-radius: 3.5px;
+                        background: root.item.dot == 2 ? Theme.success : Theme.muted;
+                    }
+                    Text {
+                        text: root.item.text;
+                        font-size: 13px;
+                        color: #ffffff;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: root.item.detail;
+                        font-size: 11px;
+                        color: Theme.card-detail;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        horizontal-stretch: 1;
+                    }
+                }
+                if !SidebarState.compact: VerticalLayout {
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    padding-top: root.item.lines.length == 0 ? 7px : 12px;
+                    padding-bottom: root.item.lines.length == 0 ? 7px : 12px;
+                    spacing: 2px;
+                    HorizontalLayout {
+                        spacing: 7px;
+                        if root.item.dot > 0: Rectangle {
+                            width: 8px;
+                            height: 8px;
+                            y: (parent.height - self.height) / 2;
+                            border-radius: 4px;
+                            background: root.item.dot == 2 ? Theme.success : Theme.muted;
+                        }
+                        Text {
+                            text: root.item.text;
+                            font-size: 15px;
+                            font-weight: 700;
+                            color: #ffffff;
+                            overflow: elide;
+                            horizontal-stretch: 1;
+                        }
+                    }
+                    for line in root.item.lines: Text {
+                        text: line;
+                        font-size: 11px;
+                        color: Theme.card-detail;
+                        overflow: elide;
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component Sidebar inherits Rectangle {
+    in property <bool> busy;
+    background: Theme.navy;
+    VerticalLayout {
+        padding: 20px;
+        spacing: 0;
+        Text {
+            text: "MISF";
+            font-size: 34px;
+            font-weight: 800;
+            color: #ffffff;
+        }
+        Text {
+            text: "MANAGEMENT TERMINAL";
+            font-size: 10px;
+            color: Theme.sidebar-muted;
+        }
+        Rectangle { height: 23px; }
+        LineEdit {
+            text <=> SidebarState.search;
+            placeholder-text: T.get("host.search");
+            enabled: !root.busy;
+            edited(text) => { SidebarState.search-edited(text); }
+        }
+        Rectangle { height: 10px; }
+        HorizontalLayout {
+            Text {
+                text: SidebarState.count-text;
+                font-size: 12px;
+                color: Theme.group-text;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+            HintArea {
+                plain: T.get("group.hint");
+                TextButton {
+                    text: T.get("group.add");
+                    font-size: 12px;
+                    color: Theme.sidebar-text;
+                    enabled: !SidebarState.locked && !root.busy;
+                    clicked => { SidebarState.add-group(); }
+                }
+            }
+        }
+        Rectangle { height: 6px; }
+        list := ScrollView {
+            vertical-stretch: 1;
+            content-height: max(SidebarState.content-height, self.visible-height);
+            content-width: self.visible-width;
+            for row in SidebarState.rows: Rectangle {
+                y: row.y;
+                height: row.height;
+                width: list.visible-width;
+                if row.kind == 0: GroupHeading {
+                    width: parent.width;
+                    height: parent.height;
+                    item: row;
+                    viewport-y: list.content-y;
+                    view-height: list.visible-height;
+                    view-width: list.visible-width;
+                }
+                if row.kind == 1: HostRow {
+                    width: parent.width;
+                    height: parent.height;
+                    item: row;
+                    viewport-y: list.content-y;
+                    view-height: list.visible-height;
+                    view-width: list.visible-width;
+                }
+                if row.kind == 2: Text {
+                    y: 30px;
+                    text: row.text;
+                    color: Theme.sidebar-muted;
+                    wrap: word-wrap;
+                }
+            }
+            if SidebarState.drop-shown: Rectangle {
+                y: SidebarState.drop-y - 1px;
+                height: 2px;
+                width: list.visible-width;
+                background: Theme.drop-line;
+            }
+            if SidebarState.drag-label != "": Rectangle {
+                x: 24px;
+                y: SidebarState.drag-y + 6px;
+                width: drag-text.preferred-width + 16px;
+                height: drag-text.preferred-height + 8px;
+                border-radius: 5px;
+                background: Theme.blue;
+                drag-text := Text {
+                    text: SidebarState.drag-label;
+                    font-size: 13px;
+                    color: #ffffff;
+                }
+            }
+        }
+        Rectangle { height: 10px; }
+        ColorButton {
+            text: T.get("host.add_button");
+            min-height: 38px;
+            enabled: !SidebarState.locked && !root.busy;
+            clicked => { SidebarState.add-host(); }
+        }
+        Rectangle { height: 8px; }
+        Text {
+            text: T.get("app.local_mode");
+            font-size: 11px;
+            color: Theme.sidebar-muted;
+        }
+    }
+    // Rows ignore input while work runs, as everything else here does.
+    if root.busy: TouchArea { }
+}

@@ -1,0 +1,277 @@
+// The chosen host's page: actions, the advanced menu, statistics and its results.
+import { Button } from "std-widgets.slint";
+import { Theme, T } from "theme.slint";
+import { HintData, HintArea, ColorButton, TextButton, Card } from "widgets.slint";
+import { ResultPanel } from "result_panel.slint";
+
+export global HostState {
+    in property <bool> has-host;
+    in property <string> name;
+    in property <string> summary;
+    in property <string> check-label;
+    in property <string> upgrade-label;
+    in property <HintData> delete-hint;
+    in property <HintData> test-hint;
+    in property <HintData> probe-hint;
+    in property <HintData> check-hint;
+    in property <HintData> upgrade-hint;
+    in property <HintData> dist-hint;
+    in property <HintData> reboot-hint;
+    in property <bool> upgrade-enabled;
+    in property <bool> dist-enabled;
+    in property <bool> reboot-enabled;
+    in property <string> fingerprint;
+    in property <string> pending;
+    in property <string> status;
+    in property <string> last-check;
+    in property <string> kept-back;
+    in property <string> restart;
+    // The advanced menu, drawn by the window above everything at (menu-x, menu-y).
+    in-out property <bool> advanced-open;
+    in-out property <length> menu-x;
+    in-out property <length> menu-y;
+    callback delete();
+    callback edit();
+    callback test();
+    callback probe();
+    callback check();
+    callback reload();
+    callback add-first();
+    callback advanced-toggled(open: bool);
+    // 0 upgrade, 1 dist-upgrade, 2 reboot.
+    callback advanced(item: int);
+}
+
+component Stat inherits Card {
+    in property <string> title;
+    in property <string> value;
+    horizontal-stretch: 1;
+    VerticalLayout {
+        padding: 18px;
+        spacing: 6px;
+        Text {
+            text: root.title;
+            font-size: 12px;
+            color: Theme.muted;
+        }
+        Text {
+            text: root.value;
+            font-size: 22px;
+            font-weight: 700;
+            color: Theme.ink;
+        }
+    }
+}
+
+// The menu's items; the window places it below the button.
+export component AdvancedMenu inherits Rectangle {
+    width: 240px;
+    height: items.preferred-height;
+    background: Theme.surface;
+    border-color: Theme.border;
+    border-width: 1px;
+    border-radius: 6px;
+    drop-shadow-blur: 10px;
+    drop-shadow-color: #00000050;
+    TouchArea { }
+    items := VerticalLayout {
+        padding: 6px;
+        spacing: 2px;
+        HintArea {
+            hint: HostState.upgrade-hint;
+            active: HostState.upgrade-enabled;
+            disabled-text: T.get("apt.upgrade_needs_detect");
+            TextButton {
+                text: HostState.upgrade-label;
+                color: Theme.error;
+                enabled: HostState.upgrade-enabled;
+                horizontal-stretch: 1;
+                clicked => { HostState.advanced(0); }
+            }
+        }
+        HintArea {
+            hint: HostState.dist-hint;
+            active: HostState.dist-enabled;
+            disabled-text: T.get("apt.dist_upgrade_needs_apt");
+            TextButton {
+                text: T.get("apt.dist_upgrade");
+                color: Theme.error;
+                enabled: HostState.dist-enabled;
+                horizontal-stretch: 1;
+                clicked => { HostState.advanced(1); }
+            }
+        }
+        Rectangle {
+            height: 1px;
+            background: Theme.border;
+        }
+        HintArea {
+            hint: HostState.reboot-hint;
+            active: HostState.reboot-enabled;
+            disabled-text: T.get("reboot.needs_apt");
+            TextButton {
+                text: T.get("reboot.button");
+                color: Theme.error;
+                enabled: HostState.reboot-enabled;
+                horizontal-stretch: 1;
+                clicked => { HostState.advanced(2); }
+            }
+        }
+    }
+}
+
+export component HostPage inherits VerticalLayout {
+    spacing: 4px;
+    Text {
+        text: T.get("app.host_overview");
+        font-size: 10px;
+        font-weight: 700;
+        color: Theme.muted;
+    }
+    HorizontalLayout {
+        spacing: 10px;
+        Text {
+            text: HostState.has-host ? HostState.name : T.get("host.first_title");
+            font-size: 29px;
+            font-weight: 700;
+            color: Theme.ink;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+        Button {
+            text: T.get("host.edit");
+            enabled: HostState.has-host;
+            clicked => { HostState.edit(); }
+        }
+        HintArea {
+            hint: HostState.delete-hint;
+            active: HostState.has-host;
+            TextButton {
+                text: T.get("common.delete");
+                color: Theme.error;
+                enabled: HostState.has-host;
+                clicked => { HostState.delete(); }
+            }
+        }
+    }
+    if !HostState.has-host: VerticalLayout {
+        spacing: 10px;
+        alignment: start;
+        Text {
+            text: T.get("host.intro");
+            color: Theme.muted;
+            wrap: word-wrap;
+        }
+        Rectangle { height: 40px; }
+        Card {
+            VerticalLayout {
+                padding: 24px;
+                spacing: 9px;
+                Text {
+                    text: T.get("host.start");
+                    font-size: 23px;
+                    font-weight: 700;
+                    color: Theme.ink;
+                }
+                Text {
+                    text: T.get("host.start_description");
+                    color: Theme.ink;
+                    wrap: word-wrap;
+                }
+                HorizontalLayout {
+                    alignment: start;
+                    padding-top: 9px;
+                    ColorButton {
+                        text: T.get("host.add_first");
+                        clicked => { HostState.add-first(); }
+                    }
+                }
+            }
+        }
+    }
+    if HostState.has-host: VerticalLayout {
+        spacing: 8px;
+        vertical-stretch: 1;
+        Text {
+            text: HostState.summary;
+            color: Theme.muted;
+            wrap: word-wrap;
+        }
+        HorizontalLayout {
+            spacing: 10px;
+            alignment: start;
+            padding-top: 4px;
+            HintArea {
+                hint: HostState.test-hint;
+                Button {
+                    text: T.get("host.test");
+                    clicked => { HostState.test(); }
+                }
+            }
+            HintArea {
+                hint: HostState.probe-hint;
+                Button {
+                    text: T.get("host.fingerprint");
+                    clicked => { HostState.probe(); }
+                }
+            }
+            HintArea {
+                hint: HostState.check-hint;
+                ColorButton {
+                    text: HostState.check-label;
+                    clicked => { HostState.check(); }
+                }
+            }
+            advanced := ColorButton {
+                text: T.get("advanced.button");
+                fill: Theme.red;
+                arrow: true;
+                open: HostState.advanced-open;
+                clicked => {
+                    HostState.menu-x = self.absolute-position.x;
+                    HostState.menu-y = self.absolute-position.y + self.height + 4px;
+                    HostState.advanced-toggled(!HostState.advanced-open);
+                }
+            }
+            Button {
+                text: T.get("common.reload");
+                clicked => { HostState.reload(); }
+            }
+        }
+        Text {
+            text: HostState.fingerprint;
+            font-size: 11px;
+            color: Theme.muted;
+            wrap: word-wrap;
+        }
+        HorizontalLayout {
+            spacing: 10px;
+            padding-top: 4px;
+            Stat {
+                title: T.get("apt.pending");
+                value: HostState.pending;
+            }
+            Stat {
+                title: T.get("apt.status");
+                value: HostState.status;
+            }
+            Stat {
+                title: T.get("apt.last_check");
+                value: HostState.last-check;
+            }
+        }
+        if HostState.kept-back != "": Text {
+            text: HostState.kept-back;
+            color: Theme.warning;
+            wrap: word-wrap;
+        }
+        if HostState.restart != "": Text {
+            text: HostState.restart;
+            color: Theme.warning;
+            wrap: word-wrap;
+        }
+        ResultPanel {
+            vertical-stretch: 1;
+        }
+    }
+}

@@ -1,0 +1,21 @@
+// State of the window frame: the top bar, the status line and the main tabs.
+export global Shell {
+    in property <bool> busy;
+    in property <string> status;
+    in property <bool> locked;
+    in property <bool> encrypted;
+    in property <string> path;
+    in property <string> storage-warning;
+    in property <bool> plaintext-remains;
+    in property <string> debug-notice;
+    // 0 the host page, 1 the batch view.
+    in property <int> view;
+    in property <string> batch-tab;
+    callback settings();
+    callback lock();
+    callback unlock();
+    callback enable-vault();
+    callback manage-keys();
+    callback review-plaintext();
+    callback view-chosen(view: int);
+}

@@ -1,0 +1,305 @@
+// Creating, unlocking and managing the LUKSbox vault and its key slots.
+import { Button, CheckBox, Spinner } from "std-widgets.slint";
+import { Theme, T } from "../theme.slint";
+import { Modal, Heading, Field, ColorButton, Notice, Body } from "../widgets.slint";
+import { Shell } from "../shell.slint";
+
+export struct SlotView {
+    index: int,
+    title: string,
+    kind: string,
+    name: string,
+}
+
+export global VaultState {
+    in property <bool> shown;
+    // 0 create, 1 unlock, 2 manage, 3 add a password, 4 passkey, 5 revoke, 6 rename.
+    in property <int> mode;
+    in property <[SlotView]> slots;
+    in property <string> slot-count;
+    in property <bool> can-add;
+    in property <bool> passkey-allowed;
+    in property <bool> locked;
+    in property <bool> plaintext-exists;
+    // The passkey method choice exists only on Windows.
+    in property <bool> windows;
+    in property <bool> hello;
+    // The slot being renamed or revoked, and the revoke question.
+    in property <string> slot-label;
+    in property <string> revoke-prompt;
+    in-out property <string> name;
+    in-out property <string> password;
+    in-out property <string> confirmation;
+    in-out property <bool> acknowledged;
+    in property <string> error;
+    callback submit();
+    callback cancel();
+    callback add-password();
+    callback passkey();
+    callback use-password();
+    callback rename(slot: int);
+    callback revoke(slot: int);
+    callback backup();
+    callback hello-chosen(hello: bool);
+}
+
+export component VaultDialog inherits Modal {
+    panel-width: 570px;
+    Heading {
+        text: VaultState.mode == 0 ? T.get("vault.enable")
+            : VaultState.mode == 1 ? T.get("vault.unlock_host")
+            : VaultState.mode == 2 ? T.get("vault.manage")
+            : VaultState.mode == 3 ? T.get("vault.add_password")
+            : VaultState.mode == 4 ? T.get("passkey.title")
+            : VaultState.mode == 5 ? T.get("vault.revoke") : T.get("vault.rename_title");
+    }
+    if VaultState.mode == 2: VerticalLayout {
+        spacing: 8px;
+        Body {
+            text: VaultState.slot-count;
+        }
+        for slot in VaultState.slots: HorizontalLayout {
+            spacing: 10px;
+            Text {
+                text: slot.title;
+                color: Theme.ink;
+                vertical-alignment: center;
+            }
+            Text {
+                text: slot.kind;
+                color: Theme.ink;
+                vertical-alignment: center;
+            }
+            Text {
+                text: slot.name == "" ? T.get("vault.slot_unnamed") : slot.name;
+                color: slot.name == "" ? Theme.muted : Theme.ink;
+                font-weight: slot.name == "" ? 400 : 700;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                overflow: elide;
+            }
+            Button {
+                text: T.get("vault.rename");
+                enabled: !Shell.busy;
+                clicked => { VaultState.rename(slot.index); }
+            }
+            Button {
+                text: T.get("vault.revoke");
+                enabled: !Shell.busy && VaultState.slots.length > 1;
+                clicked => { VaultState.revoke(slot.index); }
+            }
+        }
+        Body {
+            text: T.get("vault.revoke_limit");
+        }
+        Body {
+            text: T.get("vault.keep_backup");
+        }
+        HorizontalLayout {
+            spacing: 10px;
+            alignment: start;
+            ColorButton {
+                text: T.get("vault.add_password");
+                enabled: !Shell.busy && VaultState.can-add;
+                clicked => { VaultState.add-password(); }
+            }
+            Button {
+                text: T.get("passkey.add");
+                enabled: !Shell.busy && VaultState.can-add && VaultState.passkey-allowed;
+                clicked => { VaultState.passkey(); }
+            }
+            Button {
+                text: T.get("vault.export");
+                enabled: !Shell.busy;
+                clicked => { VaultState.backup(); }
+            }
+            Button {
+                text: T.get("common.close");
+                enabled: !Shell.busy;
+                clicked => { VaultState.cancel(); }
+            }
+        }
+    }
+    if VaultState.mode == 6: VerticalLayout {
+        spacing: 8px;
+        Body {
+            text: VaultState.slot-label;
+        }
+        Field {
+            label: T.get("vault.slot_name");
+            placeholder: T.get("vault.slot_name_hint");
+            text <=> VaultState.name;
+            accepted => { VaultState.submit(); }
+        }
+        HorizontalLayout {
+            spacing: 10px;
+            alignment: start;
+            ColorButton {
+                text: T.get("vault.rename_save");
+                enabled: !Shell.busy;
+                clicked => { VaultState.submit(); }
+            }
+            Button {
+                text: T.get("common.cancel");
+                enabled: !Shell.busy;
+                clicked => { VaultState.cancel(); }
+            }
+        }
+    }
+    if VaultState.mode == 5: VerticalLayout {
+        spacing: 8px;
+        Body {
+            text: VaultState.revoke-prompt;
+        }
+        Notice {
+            text: T.get("vault.revoke_backup_warning");
+        }
+        CheckBox {
+            text: T.get("vault.revoke_ack");
+            checked <=> VaultState.acknowledged;
+        }
+        HorizontalLayout {
+            spacing: 10px;
+            alignment: start;
+            Button {
+                text: T.get("vault.revoke_confirm");
+                enabled: !Shell.busy && VaultState.acknowledged;
+                clicked => { VaultState.submit(); }
+            }
+            Button {
+                text: T.get("common.cancel");
+                enabled: !Shell.busy;
+                clicked => { VaultState.cancel(); }
+            }
+        }
+    }
+    if VaultState.mode == 4: VerticalLayout {
+        spacing: 8px;
+        Body {
+            text: T.get("passkey.description");
+        }
+        if VaultState.windows: HorizontalLayout {
+            spacing: 16px;
+            alignment: start;
+            CheckBox {
+                text: "Windows Hello";
+                checked: VaultState.hello;
+                toggled => { VaultState.hello-chosen(true); }
+            }
+            CheckBox {
+                text: T.get("passkey.security_key");
+                checked: !VaultState.hello;
+                toggled => { VaultState.hello-chosen(false); }
+            }
+        }
+        if !VaultState.locked: Field {
+            label: T.get("vault.slot_name");
+            placeholder: T.get("passkey.name_hint");
+            text <=> VaultState.name;
+        }
+        if !VaultState.windows: Field {
+            label: T.get("passkey.pin");
+            placeholder: T.get("passkey.pin_hint");
+            secret: true;
+            text <=> VaultState.password;
+        }
+        HorizontalLayout {
+            spacing: 10px;
+            alignment: start;
+            ColorButton {
+                text: VaultState.locked ? T.get("passkey.unlock") : T.get("passkey.add");
+                enabled: !Shell.busy && VaultState.passkey-allowed;
+                clicked => { VaultState.submit(); }
+            }
+            if VaultState.locked: Button {
+                text: T.get("passkey.use_password");
+                enabled: !Shell.busy;
+                clicked => { VaultState.use-password(); }
+            }
+            Button {
+                text: T.get("common.cancel");
+                enabled: !Shell.busy;
+                clicked => { VaultState.cancel(); }
+            }
+        }
+    }
+    if VaultState.mode == 0 || VaultState.mode == 1 || VaultState.mode == 3: VerticalLayout {
+        spacing: 8px;
+        if VaultState.mode == 0: Body {
+            text: T.get("vault.create_description");
+        }
+        if VaultState.mode == 0: Notice {
+            text: T.get("vault.experimental");
+        }
+        if VaultState.mode == 0 && VaultState.plaintext-exists: Body {
+            text: T.get("vault.retain_plaintext");
+        }
+        if VaultState.mode != 1: Field {
+            label: T.get("vault.slot_name");
+            placeholder: T.get("vault.slot_name_hint");
+            text <=> VaultState.name;
+        }
+        Field {
+            label: T.get("vault.password");
+            placeholder: VaultState.mode == 1 ? T.get("vault.password_hint") : T.get("vault.new_password_hint");
+            secret: true;
+            text <=> VaultState.password;
+            accepted => {
+                if (VaultState.mode == 1) {
+                    VaultState.submit();
+                }
+            }
+        }
+        if VaultState.mode != 1: Field {
+            label: T.get("vault.confirm_password");
+            placeholder: T.get("vault.confirm_hint");
+            secret: true;
+            text <=> VaultState.confirmation;
+            accepted => { VaultState.submit(); }
+        }
+        if VaultState.error != "": Notice {
+            error: true;
+            text: VaultState.error;
+        }
+        HorizontalLayout {
+            spacing: 10px;
+            alignment: start;
+            ColorButton {
+                text: VaultState.mode == 0 ? T.get("vault.encrypt_verify")
+                    : VaultState.mode == 1 ? T.get("vault.unlock") : T.get("vault.add_key");
+                enabled: !Shell.busy;
+                clicked => { VaultState.submit(); }
+            }
+            Button {
+                text: T.get("common.cancel");
+                enabled: !Shell.busy;
+                clicked => { VaultState.cancel(); }
+            }
+        }
+        if VaultState.mode == 1: HorizontalLayout {
+            alignment: start;
+            Button {
+                text: T.get("passkey.unlock");
+                enabled: !Shell.busy && VaultState.passkey-allowed;
+                clicked => { VaultState.passkey(); }
+            }
+        }
+    }
+    if Shell.debug-notice != "": Notice {
+        text: Shell.debug-notice;
+    }
+    if Shell.busy: HorizontalLayout {
+        spacing: 8px;
+        alignment: start;
+        Spinner {
+            indeterminate: true;
+            width: 22px;
+            height: 22px;
+        }
+        Text {
+            text: T.get("vault.working");
+            color: Theme.ink;
+            vertical-alignment: center;
+        }
+    }
+}

@@ -1,0 +1,55 @@
+// Colors and translation shared by every window.
+import { Palette } from "std-widgets.slint";
+
+export global Theme {
+    // 0 follows the system, 1 light, 2 dark.
+    in property <int> appearance;
+    // The fluent style draws pure white text only in its dark scheme, which also covers
+    // "follow the system", where the scheme itself is not readable.
+    out property <bool> dark: Palette.foreground == #ffffff;
+    out property <color> background: dark ? #111823 : #f4f7fb;
+    out property <color> surface: dark ? #1a2534 : #ffffff;
+    out property <color> ink: dark ? #e7eef8 : #22354d;
+    out property <color> muted: dark ? #a4b5cc : #62748c;
+    out property <color> border: dark ? #394b62 : #dce5ef;
+    out property <color> warning: dark ? #f6c271 : #926121;
+    out property <color> error: dark ? #ff9393 : #ae4141;
+    out property <color> selection: dark ? #2c537c : #daebfb;
+    out property <color> stripe: dark ? #ffffff0a : #0000000a;
+    out property <color> navy: #13243b;
+    out property <color> navy-hover: #1d314a;
+    out property <color> navy-selected: #28425f;
+    out property <color> blue: #2175c3;
+    out property <color> red: #b23a3a;
+    out property <color> sidebar-text: #dce7f5;
+    out property <color> sidebar-muted: #8fa6c5;
+    out property <color> group-text: #93aed0;
+    out property <color> card-detail: #a6bbd5;
+    out property <color> success: #4ec9a2;
+    out property <color> drop-line: #78beff;
+    out property <length> mono-size: 12px;
+    out property <string> mono-font: "Consolas";
+}
+
+// Looks keys up in the app's own catalogs; reading `language` makes every text that
+// uses `T.get` follow a language change.
+export global T {
+    in property <int> language;
+    pure callback lookup(key: string, language: int) -> string;
+    public pure function get(key: string) -> string {
+        return self.lookup(key, self.language);
+    }
+}
+
+// Applies Theme.appearance to the style's palette; placed once in each window.
+export component AppearanceSync {
+    width: 0;
+    height: 0;
+    property <int> appearance: Theme.appearance;
+    function apply() {
+        Palette.color-scheme = self.appearance == 1 ? ColorScheme.light
+            : self.appearance == 2 ? ColorScheme.dark : ColorScheme.unknown;
+    }
+    init => { self.apply(); }
+    changed appearance => { self.apply(); }
+}

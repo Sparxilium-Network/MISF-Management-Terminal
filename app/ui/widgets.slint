@@ -1,0 +1,469 @@
+// Small building blocks shared by every page and dialog.
+import { LineEdit } from "std-widgets.slint";
+import { Theme, T } from "theme.slint";
+
+// What a sensitive control runs and risks, shown after a pause on it.
+export struct HintData {
+    title: string,
+    commands: [string],
+    effect: string,
+    risk: string,
+    // The commands as copied from the right-click menu; empty when there are none.
+    copy: string,
+}
+
+// The one tooltip a window shows; HintArea fills it in.
+export global Tip {
+    in-out property <bool> shown;
+    in-out property <int> serial;
+    in-out property <HintData> hint;
+    // A plain tooltip, used when there is no hint or the control is disabled.
+    in-out property <string> plain;
+    in-out property <length> x;
+    in-out property <length> y;
+}
+
+// Text for the system clipboard, copied by the window's ClipboardSink.
+export global Clip {
+    in-out property <string> text;
+    in-out property <int> serial;
+    public function copy(text: string) {
+        self.text = text;
+        self.serial += 1;
+    }
+}
+
+export component ClipboardSink {
+    width: 0;
+    height: 0;
+    property <int> serial: Clip.serial;
+    sink := TextInput {
+        visible: false;
+        read-only: true;
+    }
+    changed serial => {
+        sink.text = Clip.text;
+        sink.select-all();
+        sink.copy();
+        sink.text = "";
+    }
+}
+
+// Wraps a control: after 1.5 s of hovering shows its hint (or `plain`), and when the
+// hint has commands, a right-click offers to copy them.
+export component HintArea {
+    in property <HintData> hint;
+    in property <string> plain;
+    // A disabled control shows `disabled-text` instead of its hint.
+    in property <bool> active: true;
+    in property <string> disabled-text;
+    in property <duration> delay: 1.5s;
+    property <bool> has-hint: root.active ? (root.hint.title != "" || root.plain != "") : root.disabled-text != "";
+    property <int> mine: -1;
+    property <bool> hovering: touch.has-hover;
+    min-width: inner.min-width;
+    min-height: inner.min-height;
+    preferred-width: inner.preferred-width;
+    preferred-height: inner.preferred-height;
+    horizontal-stretch: inner.horizontal-stretch;
+    vertical-stretch: 0;
+
+    function show() {
+        Tip.serial += 1;
+        root.mine = Tip.serial;
+        if (root.active) {
+            Tip.hint = root.hint;
+            Tip.plain = root.hint.title == "" ? root.plain : "";
+        } else {
+            Tip.hint = { };
+            Tip.plain = root.disabled-text;
+        }
+        Tip.x = touch.absolute-position.x + touch.mouse-x + 14px;
+        Tip.y = touch.absolute-position.y + touch.mouse-y + 20px;
+        Tip.shown = true;
+    }
+    changed hovering => {
+        if (!self.hovering && Tip.serial == self.mine) {
+            Tip.shown = false;
+        }
+        self.mine = -1;
+    }
+    Timer {
+        interval: root.delay;
+        running: root.hovering && root.has-hint && root.mine < 0;
+        triggered => { root.show(); }
+    }
+    menu := ContextMenuArea {
+        enabled: root.active && root.hint.copy != "";
+        Menu {
+            MenuItem {
+                title: T.get("hint.copy_commands");
+                activated => { Clip.copy(root.hint.copy); }
+            }
+        }
+        touch := TouchArea {
+            inner := HorizontalLayout {
+                @children
+            }
+        }
+    }
+}
+
+// The tooltip itself, placed last in a window so it covers everything.
+export component TipOverlay {
+    in property <length> window-width;
+    in property <length> window-height;
+    property <length> w: min(560px, root.window-width - 24px);
+    if Tip.shown: box := Rectangle {
+        x: max(8px, min(Tip.x, root.window-width - self.width - 8px));
+        y: Tip.y + self.height > root.window-height - 8px ? max(8px, Tip.y - self.height - 28px) : Tip.y;
+        width: min(root.w, body.preferred-width);
+        height: body.preferred-height;
+        background: Theme.surface;
+        border-color: Theme.border;
+        border-width: 1px;
+        border-radius: 6px;
+        drop-shadow-blur: 8px;
+        drop-shadow-color: #0000004d;
+        body := VerticalLayout {
+            padding: 10px;
+            spacing: 4px;
+            if Tip.plain != "": Text {
+                text: Tip.plain;
+                color: Theme.ink;
+                wrap: word-wrap;
+            }
+            if Tip.hint.title != "": Text {
+                text: Tip.hint.title;
+                font-weight: 700;
+                color: Theme.ink;
+                wrap: word-wrap;
+            }
+            if Tip.hint.commands.length > 0: Text {
+                text: T.get("hint.commands");
+                color: Theme.ink;
+            }
+            for command in Tip.hint.commands: Text {
+                text: command;
+                font-family: Theme.mono-font;
+                font-size: 11px;
+                color: Theme.ink;
+                wrap: word-wrap;
+            }
+            if Tip.hint.effect != "": Text {
+                text: Tip.hint.effect;
+                color: Theme.ink;
+                wrap: word-wrap;
+            }
+            if Tip.hint.risk != "": Text {
+                text: Tip.hint.risk;
+                color: Theme.warning;
+                wrap: word-wrap;
+            }
+            if Tip.hint.copy != "": Text {
+                text: T.get("hint.copy_tip");
+                color: Theme.muted;
+                wrap: word-wrap;
+            }
+        }
+    }
+}
+
+// A filled button: blue for the main action, red for actions that change hosts.
+export component ColorButton {
+    in property <string> text;
+    in property <color> fill: Theme.blue;
+    in property <bool> enabled: true;
+    // Draws a small triangle after the label; points up while `open`.
+    in property <bool> arrow;
+    in property <bool> open;
+    in property <length> min-button-width: 0;
+    callback clicked();
+    min-height: 34px;
+    max-height: 40px;
+    vertical-stretch: 0;
+    min-width: max(root.min-button-width, row.min-width);
+    preferred-width: row.preferred-width;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if (root.enabled) { root.clicked(); } }
+    forward-focus: focus;
+    focus := FocusScope {
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if (event.text == " " || event.text == "\n") {
+                root.clicked();
+                return accept;
+            }
+            reject
+        }
+    }
+    background := Rectangle {
+        border-radius: 5px;
+        background: !root.enabled ? root.fill.with-alpha(0.45)
+            : touch.pressed ? root.fill.darker(0.2)
+            : touch.has-hover ? root.fill.brighter(0.12) : root.fill;
+        border-width: focus.has-focus ? 2px : 0;
+        border-color: Theme.selection;
+    }
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => { root.clicked(); }
+    }
+    row := HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        spacing: 6px;
+        alignment: center;
+        Text {
+            text: root.text;
+            color: #ffffff;
+            font-weight: 700;
+            vertical-alignment: center;
+            horizontal-alignment: center;
+        }
+        if root.arrow: Path {
+            width: 10px;
+            height: 8px;
+            y: (parent.height - self.height) / 2;
+            fill: #ffffff;
+            viewbox-width: 10;
+            viewbox-height: 8;
+            commands: root.open ? "M 0.5 6.5 L 9.5 6.5 L 5 1.5 Z" : "M 0.5 1.5 L 9.5 1.5 L 5 6.5 Z";
+        }
+    }
+}
+
+// A borderless text button, for links such as "＋ Add group" and menu items.
+export component TextButton {
+    in property <string> text;
+    in property <color> color: Theme.ink;
+    in property <bool> enabled: true;
+    in property <length> font-size: 14px;
+    in property <bool> selected;
+    in property <TextHorizontalAlignment> align: left;
+    callback clicked();
+    min-height: 28px;
+    max-height: 34px;
+    vertical-stretch: 0;
+    preferred-width: label.preferred-width + 16px;
+    min-width: label.min-width + 16px;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if (root.enabled) { root.clicked(); } }
+    Rectangle {
+        border-radius: 4px;
+        background: root.selected ? Theme.selection
+            : touch.has-hover && root.enabled ? Theme.selection.with-alpha(0.55) : transparent;
+    }
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => { root.clicked(); }
+    }
+    label := Text {
+        x: 8px;
+        width: parent.width - 16px;
+        text: root.text;
+        font-size: root.font-size;
+        color: root.enabled ? root.color : root.color.with-alpha(0.45);
+        vertical-alignment: center;
+        horizontal-alignment: root.align;
+        overflow: elide;
+    }
+}
+
+// A three-state check box: `state` 0 unchecked, 1 partly, 2 checked.
+export component CheckMark {
+    in property <int> state;
+    in property <bool> enabled: true;
+    in property <string> text;
+    callback toggled();
+    min-height: 24px;
+    preferred-width: row.preferred-width;
+    accessible-role: checkbox;
+    accessible-checkable: true;
+    accessible-checked: root.state == 2;
+    accessible-label: root.text;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if (root.enabled) { root.toggled(); } }
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => { root.toggled(); }
+    }
+    row := HorizontalLayout {
+        spacing: 8px;
+        alignment: start;
+        Rectangle {
+            width: 18px;
+            height: 18px;
+            y: (parent.height - self.height) / 2;
+            border-radius: 4px;
+            border-width: root.state == 0 ? 1px : 0;
+            border-color: root.enabled ? Theme.muted : Theme.border;
+            background: root.state == 0 ? Theme.surface : root.enabled ? Theme.blue : Theme.blue.with-alpha(0.4);
+            opacity: root.enabled ? 1 : 0.6;
+            if root.state == 2: Path {
+                width: 12px;
+                height: 10px;
+                stroke: #ffffff;
+                stroke-width: 2px;
+                viewbox-width: 12;
+                viewbox-height: 10;
+                commands: "M 1 5 L 4.5 8.5 L 11 1.5";
+            }
+            if root.state == 1: Rectangle {
+                width: 10px;
+                height: 2px;
+                background: #ffffff;
+            }
+        }
+        if root.text != "": Text {
+            text: root.text;
+            color: root.enabled ? Theme.ink : Theme.muted;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// A plain surface with a thin border.
+export component Card inherits Rectangle {
+    background: Theme.surface;
+    border-color: Theme.border;
+    border-width: 1px;
+    border-radius: 8px;
+}
+
+// A label above a single-line input.
+export component Field inherits VerticalLayout {
+    in property <string> label;
+    in property <string> placeholder;
+    in property <bool> secret;
+    in property <bool> enabled: true;
+    in-out property <string> text;
+    callback edited(text: string);
+    callback accepted();
+    spacing: 4px;
+    Text {
+        text: root.label;
+        font-size: 12px;
+        font-weight: 700;
+        color: Theme.ink;
+    }
+    LineEdit {
+        text <=> root.text;
+        placeholder-text: root.placeholder;
+        input-type: root.secret ? InputType.password : InputType.text;
+        enabled: root.enabled;
+        edited(text) => { root.edited(text); }
+        accepted => { root.accepted(); }
+    }
+}
+
+// A settings section: a muted title with a rule running to the right edge.
+export component SectionTitle inherits HorizontalLayout {
+    in property <string> text;
+    spacing: 8px;
+    padding-top: 6px;
+    padding-bottom: 4px;
+    Text {
+        text: root.text;
+        font-weight: 700;
+        color: Theme.muted;
+        vertical-alignment: center;
+    }
+    Rectangle {
+        horizontal-stretch: 1;
+        Rectangle {
+            height: 1px;
+            background: Theme.border;
+        }
+    }
+}
+
+// A muted line of small text that wraps.
+export component Note inherits Text {
+    color: Theme.muted;
+    font-size: 12px;
+    wrap: word-wrap;
+}
+
+// A one-line notice in the warning or error color.
+export component Notice inherits Text {
+    in property <bool> error;
+    color: root.error ? Theme.error : Theme.warning;
+    wrap: word-wrap;
+}
+
+// Text in the monospace font that can be selected and copied.
+export component Mono inherits TextInput {
+    read-only: true;
+    font-family: Theme.mono-font;
+    font-size: Theme.mono-size;
+    color: Theme.ink;
+    wrap: word-wrap;
+    single-line: false;
+}
+
+// A tab strip of selectable labels.
+export component Tabs inherits HorizontalLayout {
+    in property <[string]> labels;
+    in property <[int]> ids;
+    in property <int> current;
+    callback chosen(id: int);
+    spacing: 4px;
+    alignment: start;
+    vertical-stretch: 0;
+    for label[i] in root.labels: TextButton {
+        text: label;
+        selected: root.ids[i] == root.current;
+        clicked => { root.chosen(root.ids[i]); }
+    }
+}
+
+// The dim layer and centered panel of a modal dialog. Clicks outside call `dismissed`.
+export component Modal {
+    in property <length> panel-width: 560px;
+    in property <length> max-panel-height: root.height - 60px;
+    callback dismissed();
+    Rectangle {
+        background: #00000073;
+        TouchArea {
+            clicked => { root.dismissed(); }
+        }
+    }
+    panel := Rectangle {
+        width: min(root.panel-width, root.width - 40px);
+        height: min(root.max-panel-height, body.preferred-height);
+        background: Theme.surface;
+        border-radius: 8px;
+        border-color: Theme.border;
+        border-width: 1px;
+        drop-shadow-blur: 16px;
+        drop-shadow-color: #00000060;
+        // Swallows clicks so they never reach the dim layer.
+        TouchArea { }
+        body := VerticalLayout {
+            padding: 20px;
+            spacing: 8px;
+            @children
+        }
+    }
+}
+
+export component Heading inherits Text {
+    font-size: 19px;
+    font-weight: 700;
+    color: Theme.ink;
+    wrap: word-wrap;
+}
+
+// One label/value line in a grid-like list.
+export component Body inherits Text {
+    color: Theme.ink;
+    wrap: word-wrap;
+}

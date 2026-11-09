@@ -1,0 +1,259 @@
+// Confirmations for operations that change hosts: upgrades, reboots, and the questions a
+// running batch asks.
+import { Button, CheckBox, ScrollView } from "std-widgets.slint";
+import { Theme, T } from "../theme.slint";
+import { Modal, Heading, ColorButton, Notice, Body, Mono } from "../widgets.slint";
+import { Shell } from "../shell.slint";
+import { InfoLine, InfoLines } from "../result_panel.slint";
+
+export global UpgradeState {
+    in property <bool> shown;
+    in property <string> title;
+    in property <[string]> names;
+    in property <bool> dist;
+    // Each target's last simulation, with removals in the error color.
+    in property <[InfoLine]> plans;
+    in property <bool> batch;
+    in property <[string]> commands;
+    in-out property <bool> acknowledged;
+    in property <bool> can-confirm;
+    callback confirm();
+    callback cancel();
+}
+
+export global KeptBackState {
+    in property <bool> shown;
+    in property <string> title;
+    in property <[InfoLine]> lines;
+    callback dist-upgrade();
+    callback close();
+}
+
+export global RebootState {
+    in property <bool> shown;
+    in property <bool> final-step;
+    in property <string> title;
+    in property <string> question;
+    in property <string> command;
+    in-out property <bool> acknowledged;
+    callback next();
+    callback confirm();
+    callback back();
+    callback cancel();
+}
+
+export global BatchFailureState {
+    in property <bool> shown;
+    in property <string> title;
+    in property <string> error;
+    callback abort();
+    callback resume();
+}
+
+export component UpgradeDialog inherits Modal {
+    panel-width: 620px;
+    Heading {
+        text: UpgradeState.title;
+    }
+    Body {
+        text: T.get("upgrade.hosts");
+    }
+    ScrollView {
+        max-height: 110px;
+        preferred-height: names.preferred-height;
+        content-height: names.preferred-height;
+        content-width: self.visible-width;
+        names := VerticalLayout {
+            width: parent.width - 14px;
+            for name in UpgradeState.names: Body {
+                text: "•  " + name;
+            }
+        }
+    }
+    Body {
+        text: UpgradeState.dist ? T.get("hint.dist_upgrade_effect") : T.get("hint.upgrade_effect");
+    }
+    Notice {
+        text: UpgradeState.dist ? T.get("hint.dist_upgrade_risk") : T.get("hint.upgrade_risk");
+    }
+    InfoLines {
+        lines: UpgradeState.plans;
+    }
+    if UpgradeState.batch: Body {
+        text: T.get("upgrade.batch_notice");
+    }
+    Text {
+        text: T.get("hint.commands");
+        font-weight: 700;
+        color: Theme.ink;
+    }
+    for command in UpgradeState.commands: Mono {
+        text: command;
+        font-size: 11px;
+    }
+    CheckBox {
+        text: T.get("upgrade.ack");
+        checked <=> UpgradeState.acknowledged;
+    }
+    HorizontalLayout {
+        spacing: 10px;
+        alignment: start;
+        ColorButton {
+            text: T.get("upgrade.confirm");
+            fill: Theme.red;
+            enabled: !Shell.busy && UpgradeState.acknowledged && UpgradeState.can-confirm;
+            clicked => { UpgradeState.confirm(); }
+        }
+        Button {
+            text: T.get("common.cancel");
+            enabled: !Shell.busy;
+            clicked => { UpgradeState.cancel(); }
+        }
+    }
+}
+
+export component KeptBackDialog inherits Modal {
+    panel-width: 680px;
+    dismissed => { KeptBackState.close(); }
+    Heading {
+        text: KeptBackState.title;
+    }
+    Body {
+        text: T.get("kept_back.description");
+    }
+    ScrollView {
+        vertical-stretch: 1;
+        min-height: 120px;
+        preferred-height: lines.preferred-height;
+        content-height: lines.preferred-height;
+        content-width: self.visible-width;
+        lines := InfoLines {
+            width: parent.width - 14px;
+            lines: KeptBackState.lines;
+        }
+    }
+    Notice {
+        text: T.get("kept_back.risk");
+    }
+    HorizontalLayout {
+        spacing: 10px;
+        alignment: start;
+        ColorButton {
+            text: T.get("kept_back.dist_upgrade");
+            fill: Theme.red;
+            enabled: !Shell.busy;
+            clicked => { KeptBackState.dist-upgrade(); }
+        }
+        Button {
+            text: T.get("common.close");
+            enabled: !Shell.busy;
+            clicked => { KeptBackState.close(); }
+        }
+    }
+}
+
+export component RebootDialog inherits Modal {
+    panel-width: 560px;
+    Heading {
+        text: RebootState.final-step ? T.get("reboot.final_title") : RebootState.title;
+    }
+    if RebootState.final-step: VerticalLayout {
+        spacing: 8px;
+        Body {
+            text: RebootState.question;
+        }
+        Notice {
+            text: T.get("reboot.cancel_hint");
+        }
+    }
+    if !RebootState.final-step: VerticalLayout {
+        spacing: 8px;
+        Body {
+            text: T.get("hint.reboot_effect");
+        }
+        Notice {
+            text: T.get("hint.reboot_risk");
+        }
+        Text {
+            text: T.get("hint.commands");
+            font-weight: 700;
+            color: Theme.ink;
+        }
+        Mono {
+            text: RebootState.command;
+            font-size: 11px;
+        }
+        CheckBox {
+            text: T.get("reboot.ack");
+            checked <=> RebootState.acknowledged;
+        }
+    }
+    HorizontalLayout {
+        spacing: 10px;
+        alignment: start;
+        if RebootState.final-step: ColorButton {
+            text: T.get("reboot.confirm");
+            fill: Theme.red;
+            enabled: !Shell.busy;
+            clicked => { RebootState.confirm(); }
+        }
+        if RebootState.final-step: Button {
+            text: T.get("reboot.back");
+            enabled: !Shell.busy;
+            clicked => { RebootState.back(); }
+        }
+        if !RebootState.final-step: ColorButton {
+            text: T.get("reboot.next");
+            fill: Theme.red;
+            enabled: !Shell.busy && RebootState.acknowledged;
+            clicked => { RebootState.next(); }
+        }
+        Button {
+            text: T.get("common.cancel");
+            enabled: !Shell.busy;
+            clicked => { RebootState.cancel(); }
+        }
+    }
+}
+
+// The worker starts no new host until one of the two answers is given, so this cannot be
+// dismissed.
+export component BatchFailureDialog inherits Modal {
+    panel-width: 560px;
+    Heading {
+        text: BatchFailureState.title;
+    }
+    if BatchFailureState.error != "": ScrollView {
+        max-height: 120px;
+        preferred-height: error.preferred-height;
+        content-height: error.preferred-height;
+        content-width: self.visible-width;
+        error := TextInput {
+            width: parent.width - 14px;
+            text: BatchFailureState.error;
+            read-only: true;
+            single-line: false;
+            wrap: word-wrap;
+            color: Theme.error;
+        }
+    }
+    Body {
+        text: T.get("batch_failure.paused");
+    }
+    Notice {
+        text: T.get("batch_failure.abort_notice");
+    }
+    HorizontalLayout {
+        spacing: 10px;
+        alignment: start;
+        ColorButton {
+            text: T.get("batch_failure.abort");
+            fill: Theme.red;
+            clicked => { BatchFailureState.abort(); }
+        }
+        ColorButton {
+            text: T.get("batch_failure.continue");
+            clicked => { BatchFailureState.resume(); }
+        }
+    }
+}

@@ -1,0 +1,485 @@
+// The settings window: a category tree on the left and the chosen page on the right.
+import { Button, ComboBox, CheckBox, SpinBox, ScrollView } from "std-widgets.slint";
+import { Theme, T, AppearanceSync } from "theme.slint";
+import { ColorButton, TextButton, SectionTitle, Note, Notice, Body, HintArea, TipOverlay } from "widgets.slint";
+
+export struct TreeRow {
+    page: int,
+    label: string,
+    // 0 a top-level page, 1 the Preferences branch, 2 a page inside it.
+    level: int,
+    selected: bool,
+}
+
+export struct ColumnToggle {
+    index: int,
+    label: string,
+    shown: bool,
+}
+
+export global SettingsState {
+    // 0 vault, 1 appearance, 2 security, 3 batch, 4 language, 5 log, 6 about.
+    in property <int> page;
+    in property <[TreeRow]> tree;
+    in property <bool> expanded;
+    in property <string> title;
+    in property <bool> busy;
+    // Vault page.
+    in property <bool> encrypted;
+    in property <bool> locked;
+    in property <string> path;
+    // About page.
+    in property <string> version;
+    in property <string> format;
+    in property <string> schema;
+    in property <bool> can-convert;
+    // Log page.
+    in property <string> log-size;
+    // Preferences, as indexes into each list.
+    // Choice labels, from the same lists the preferences are stored by.
+    in property <[string]> appearances;
+    in property <[string]> densities;
+    in property <[string]> host-details;
+    in property <[string]> batch-orders;
+    in property <[string]> batch-details;
+    in property <int> appearance;
+    in property <int> density;
+    in property <int> host-detail;
+    in property <[bool]> host-fields;
+    in property <[string]> host-field-labels;
+    in property <int> unlock-method;
+    in property <[string]> unlock-methods;
+    in property <bool> auto-lock;
+    in property <int> auto-lock-minutes;
+    in property <int> auto-lock-max;
+    in property <int> batch-order;
+    in property <int> batch-detail;
+    // The column switches, three to a line.
+    in property <[[ColumnToggle]]> batch-columns;
+    in property <int> language;
+    in property <[string]> languages;
+    callback page-chosen(page: int);
+    callback branch-clicked();
+    callback enable-vault();
+    callback unlock();
+    callback manage();
+    callback backup();
+    callback convert();
+    callback export-log();
+    // Each preference change: which one, and its new index or value.
+    callback preference(key: string, value: int);
+    callback host-field(index: int, shown: bool);
+    callback batch-column(index: int, shown: bool);
+    callback reset-widths();
+}
+
+component TreeItem {
+    in property <TreeRow> entry;
+    in property <bool> expanded;
+    min-height: 30px;
+    accessible-role: button;
+    accessible-label: root.entry.label;
+    accessible-action-default => { touch.clicked(); }
+    Rectangle {
+        border-radius: 4px;
+        background: root.entry.selected ? Theme.selection : touch.has-hover ? Theme.selection.with-alpha(0.5) : transparent;
+    }
+    touch := TouchArea {
+        clicked => {
+            if (root.entry.level == 1) {
+                SettingsState.branch-clicked();
+            } else {
+                SettingsState.page-chosen(root.entry.page);
+            }
+        }
+    }
+    HorizontalLayout {
+        padding-left: root.entry.level == 2 ? 26px : 10px;
+        padding-right: 8px;
+        spacing: 6px;
+        if root.entry.level == 1: Path {
+            width: 10px;
+            height: 8px;
+            y: (parent.height - self.height) / 2;
+            fill: Theme.ink;
+            viewbox-width: 10;
+            viewbox-height: 8;
+            commands: root.expanded ? "M 1 1.5 L 9 1.5 L 5 6.5 Z" : "M 3 0 L 8 4 L 3 8 Z";
+        }
+        Text {
+            text: root.entry.label;
+            color: Theme.ink;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+    }
+}
+
+// A label and its control in a section, indented under the section's title.
+component FormRow inherits HorizontalLayout {
+    in property <string> label;
+    padding-left: 16px;
+    spacing: 24px;
+    Text {
+        width: 150px;
+        text: root.label;
+        color: Theme.ink;
+        vertical-alignment: center;
+        wrap: word-wrap;
+    }
+    HorizontalLayout {
+        spacing: 8px;
+        alignment: start;
+        @children
+    }
+}
+
+component Choice inherits ComboBox {
+    in property <string> key;
+    in property <int> index;
+    width: 180px;
+    current-index: root.index;
+    selected(value) => { SettingsState.preference(root.key, self.current-index); }
+}
+
+component VaultPage inherits VerticalLayout {
+    spacing: 8px;
+    alignment: start;
+    Notice {
+        text: SettingsState.encrypted ? T.get("storage.encrypted") : T.get("storage.not_created");
+    }
+    Text {
+        text: SettingsState.path;
+        font-size: 11px;
+        color: Theme.muted;
+        wrap: word-wrap;
+    }
+    Rectangle { height: 6px; }
+    if !SettingsState.encrypted: VerticalLayout {
+        spacing: 8px;
+        Body {
+            text: T.get("settings.vault_not_created");
+        }
+        HorizontalLayout {
+            alignment: start;
+            Button {
+                text: T.get("vault.enable_button");
+                enabled: !SettingsState.busy;
+                clicked => { SettingsState.enable-vault(); }
+            }
+        }
+    }
+    if SettingsState.encrypted && SettingsState.locked: VerticalLayout {
+        spacing: 8px;
+        Body {
+            text: T.get("settings.vault_locked");
+        }
+        HorizontalLayout {
+            alignment: start;
+            Button {
+                text: T.get("vault.unlock_host");
+                enabled: !SettingsState.busy;
+                clicked => { SettingsState.unlock(); }
+            }
+        }
+    }
+    if SettingsState.encrypted && !SettingsState.locked: VerticalLayout {
+        spacing: 8px;
+        Body {
+            text: T.get("settings.vault_description");
+        }
+        HorizontalLayout {
+            spacing: 10px;
+            alignment: start;
+            Button {
+                text: T.get("vault.manage");
+                enabled: !SettingsState.busy;
+                clicked => { SettingsState.manage(); }
+            }
+            Button {
+                text: T.get("vault.export");
+                enabled: !SettingsState.busy;
+                clicked => { SettingsState.backup(); }
+            }
+        }
+    }
+}
+
+component AboutPage inherits VerticalLayout {
+    spacing: 8px;
+    alignment: start;
+    for row in [
+        { label: T.get("settings.app_version"), value: SettingsState.version },
+        { label: T.get("settings.storage_format"), value: SettingsState.format },
+        { label: T.get("settings.schema_version"), value: SettingsState.schema },
+    ]: HorizontalLayout {
+        spacing: 24px;
+        Text {
+            width: 150px;
+            text: row.label;
+            color: Theme.ink;
+        }
+        Text {
+            text: row.value;
+            color: Theme.ink;
+        }
+    }
+    if SettingsState.can-convert: HorizontalLayout {
+        alignment: start;
+        Button {
+            text: T.get("settings.convert_db");
+            enabled: !SettingsState.busy;
+            clicked => { SettingsState.convert(); }
+        }
+    }
+    Rectangle { height: 10px; }
+    Text {
+        text: T.get("app.development_warning");
+        font-weight: 700;
+        color: Theme.warning;
+        wrap: word-wrap;
+    }
+    Body {
+        text: T.get("app.development_detail");
+    }
+}
+
+component LogPage inherits VerticalLayout {
+    spacing: 8px;
+    alignment: start;
+    Body {
+        text: T.get("log.description");
+    }
+    Body {
+        text: SettingsState.log-size;
+    }
+    Notice {
+        text: T.get("log.warning");
+    }
+    HorizontalLayout {
+        alignment: start;
+        padding-top: 6px;
+        ColorButton {
+            text: T.get("log.export");
+            clicked => { SettingsState.export-log(); }
+        }
+    }
+}
+
+component PreferencesPage inherits VerticalLayout {
+    spacing: 10px;
+    alignment: start;
+    if SettingsState.page == 1: VerticalLayout {
+        spacing: 10px;
+        SectionTitle {
+            text: T.get("settings.section_appearance");
+        }
+        FormRow {
+            label: T.get("settings.appearance");
+            Choice {
+                key: "appearance";
+                index: SettingsState.appearance;
+                model: SettingsState.appearances;
+            }
+        }
+        SectionTitle {
+            text: T.get("settings.section_host_list");
+        }
+        FormRow {
+            label: T.get("density.title");
+            Choice {
+                key: "density";
+                index: SettingsState.density;
+                model: SettingsState.densities;
+            }
+        }
+        FormRow {
+            label: T.get("host_detail.title");
+            Choice {
+                key: "host_detail";
+                index: SettingsState.host-detail;
+                model: SettingsState.host-details;
+            }
+        }
+        if SettingsState.host-detail == 2: FormRow {
+            label: "";
+            VerticalLayout {
+                spacing: 6px;
+                for label[i] in SettingsState.host-field-labels: CheckBox {
+                    text: label;
+                    checked: SettingsState.host-fields[i];
+                    toggled => { SettingsState.host-field(i, self.checked); }
+                }
+            }
+        }
+    }
+    if SettingsState.page == 2: VerticalLayout {
+        spacing: 10px;
+        SectionTitle {
+            text: T.get("settings.section_unlock");
+        }
+        FormRow {
+            label: T.get("unlock_method.title");
+            Choice {
+                key: "unlock_method";
+                index: SettingsState.unlock-method;
+                model: SettingsState.unlock-methods;
+            }
+        }
+        SectionTitle {
+            text: T.get("auto_lock.title");
+        }
+        FormRow {
+            label: T.get("auto_lock.title");
+            Choice {
+                key: "auto_lock";
+                index: SettingsState.auto-lock ? 1 : 0;
+                model: [T.get("auto_lock.never"), T.get("auto_lock.after")];
+            }
+            if SettingsState.auto-lock: SpinBox {
+                width: 110px;
+                minimum: 1;
+                maximum: SettingsState.auto-lock-max;
+                value: SettingsState.auto-lock-minutes;
+                edited(value) => { SettingsState.preference("auto_lock_minutes", value); }
+            }
+            if SettingsState.auto-lock: Text {
+                text: T.get("auto_lock.minutes");
+                color: Theme.ink;
+                vertical-alignment: center;
+            }
+        }
+        HorizontalLayout {
+            padding-left: 16px;
+            Note {
+                text: T.get("auto_lock.hint");
+            }
+        }
+    }
+    if SettingsState.page == 3: VerticalLayout {
+        spacing: 10px;
+        SectionTitle {
+            text: T.get("settings.section_batch_order");
+        }
+        FormRow {
+            label: T.get("batch_order.title");
+            Choice {
+                key: "batch_order";
+                index: SettingsState.batch-order;
+                model: SettingsState.batch-orders;
+            }
+        }
+        FormRow {
+            label: T.get("batch_detail.title");
+            Choice {
+                key: "batch_detail";
+                index: SettingsState.batch-detail;
+                model: SettingsState.batch-details;
+            }
+        }
+        SectionTitle {
+            text: T.get("batch_columns.title");
+        }
+        VerticalLayout {
+            padding-left: 16px;
+            spacing: 8px;
+            for line in SettingsState.batch-columns: HorizontalLayout {
+                spacing: 16px;
+                alignment: start;
+                for column in line: CheckBox {
+                    width: 125px;
+                    text: column.label;
+                    // The host column is always shown.
+                    enabled: column.index != 0;
+                    checked: column.shown;
+                    toggled => { SettingsState.batch-column(column.index, self.checked); }
+                }
+            }
+            HorizontalLayout {
+                alignment: start;
+                padding-top: 4px;
+                HintArea {
+                    plain: T.get("batch_columns.drag_hint");
+                    Button {
+                        text: T.get("batch_columns.reset_widths");
+                        clicked => { SettingsState.reset-widths(); }
+                    }
+                }
+            }
+        }
+    }
+    if SettingsState.page == 4: VerticalLayout {
+        spacing: 10px;
+        SectionTitle {
+            text: T.get("settings.nav_language");
+        }
+        FormRow {
+            label: T.get("settings.language");
+            Choice {
+                key: "language";
+                index: SettingsState.language;
+                model: SettingsState.languages;
+            }
+        }
+    }
+    Rectangle { height: 10px; }
+    Note {
+        text: T.get("settings.plaintext_notice");
+    }
+}
+
+export component SettingsWindow inherits Window {
+    title: T.get("settings.title");
+    icon: @image-url("../../assets/icons/misf-256.png");
+    min-width: 560px;
+    min-height: 280px;
+    preferred-width: 660px;
+    preferred-height: 400px;
+    background: Theme.background;
+    default-font-size: 14px;
+    AppearanceSync { }
+    HorizontalLayout {
+        padding: 12px;
+        spacing: 12px;
+        VerticalLayout {
+            width: 190px;
+            spacing: 2px;
+            alignment: start;
+            for row in SettingsState.tree: TreeItem {
+                entry: row;
+                expanded: SettingsState.expanded;
+            }
+        }
+        Rectangle {
+            width: 1px;
+            background: Theme.border;
+        }
+        VerticalLayout {
+            spacing: 10px;
+            Text {
+                text: SettingsState.title;
+                font-size: 19px;
+                font-weight: 700;
+                color: Theme.ink;
+            }
+            ScrollView {
+                vertical-stretch: 1;
+                content-width: self.visible-width;
+                content-height: max(self.visible-height, page.preferred-height);
+                page := VerticalLayout {
+                    width: parent.width - 14px;
+                    alignment: start;
+                    if SettingsState.page == 0: VaultPage { }
+                    if SettingsState.page == 5: LogPage { }
+                    if SettingsState.page == 6: AboutPage { }
+                    if SettingsState.page >= 1 && SettingsState.page <= 4: PreferencesPage { }
+                }
+            }
+        }
+    }
+    TipOverlay {
+        window-width: root.width;
+        window-height: root.height;
+    }
+}

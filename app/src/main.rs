@@ -7,14 +7,12 @@ mod theme;
 mod ui;
 mod worker;
 
-use preferences::WindowSize;
-
 use misf_core::{
     audit::{Action, AuditLog, Outcome},
     runtime::RuntimePaths,
 };
 
-fn main() -> eframe::Result {
+fn main() -> Result<(), slint::PlatformError> {
     if std::env::args_os()
         .skip(1)
         .any(|arg| arg == "--help" || arg == "-h")
@@ -36,32 +34,7 @@ fn main() -> eframe::Result {
             std::process::exit(2);
         }
     };
-    // Reopen at the size the user last closed the window with; the app reports any load error.
-    let window = preferences::Preferences::load(&paths.store.with_file_name("ui-settings.json"))
-        .ok()
-        .and_then(|preferences| preferences.window);
-    let icon = eframe::icon_data::from_png_bytes(include_bytes!("../../assets/icons/misf-256.png"))
-        .expect("The bundled MISF icon must be a valid PNG");
-    let options = eframe::NativeOptions {
-        viewport: eframe::egui::ViewportBuilder::default()
-            .with_app_id("org.sparxilium.misf")
-            .with_icon(icon)
-            .with_title(if paths.debug {
-                "MISF · DEBUG · Isolated profile"
-            } else {
-                "MISF · Management Terminal"
-            })
-            .with_inner_size(window.map_or(WindowSize::DEFAULT, WindowSize::inner_size))
-            .with_maximized(window.is_some_and(|window| window.maximized))
-            .with_min_inner_size(WindowSize::MIN),
-        renderer: eframe::Renderer::Glow,
-        ..Default::default()
-    };
-    eframe::run_native(
-        "MISF",
-        options,
-        Box::new(move |cc| Ok(Box::new(ui::ManagementApp::new(cc, paths, audit)))),
-    )
+    ui::run(paths, audit)
 }
 
 fn startup() -> Result<(RuntimePaths, AuditLog), String> {

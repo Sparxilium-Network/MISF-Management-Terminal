@@ -1,0 +1,182 @@
+// Stored SSH keys: list, delete unused ones, and add new ones.
+import { Button, CheckBox, ScrollView } from "std-widgets.slint";
+import { Theme, T } from "../theme.slint";
+import { Modal, Heading, Field, ColorButton, TextButton, HintArea, Notice, Body } from "../widgets.slint";
+import { Shell } from "../shell.slint";
+import { SecretBox } from "editor.slint";
+
+export struct KeyView {
+    id: string,
+    name: string,
+    algorithm: string,
+    used: string,
+    deletable: bool,
+    fingerprint: string,
+}
+
+export global KeysState {
+    in property <bool> shown;
+    in property <[KeyView]> keys;
+    // Set while a key awaits delete confirmation.
+    in property <string> delete-prompt;
+    in-out property <string> name;
+    in-out property <string> private-key;
+    in-out property <string> passphrase;
+    in property <bool> show-secrets;
+    in property <string> error;
+    callback add();
+    callback close();
+    callback delete(id: string);
+    callback confirm-delete();
+    callback cancel-delete();
+    callback import-key();
+    callback show-secrets-toggled(shown: bool);
+}
+
+export component KeysDialog inherits Modal {
+    panel-width: 620px;
+    Heading {
+        text: T.get("keys.title");
+    }
+    Body {
+        text: T.get("keys.description");
+    }
+    if KeysState.delete-prompt != "": VerticalLayout {
+        spacing: 8px;
+        Body {
+            text: KeysState.delete-prompt;
+        }
+        HorizontalLayout {
+            spacing: 10px;
+            alignment: start;
+            ColorButton {
+                text: T.get("keys.confirm_delete");
+                fill: Theme.red;
+                enabled: !Shell.busy;
+                clicked => { KeysState.confirm-delete(); }
+            }
+            Button {
+                text: T.get("common.cancel");
+                enabled: !Shell.busy;
+                clicked => { KeysState.cancel-delete(); }
+            }
+        }
+    }
+    if KeysState.delete-prompt == "": VerticalLayout {
+        spacing: 8px;
+        if KeysState.keys.length == 0: Text {
+            text: T.get("keys.none");
+            color: Theme.muted;
+        }
+        if KeysState.keys.length > 0: ScrollView {
+            max-height: 200px;
+            preferred-height: list.preferred-height;
+            content-height: list.preferred-height;
+            content-width: self.visible-width;
+            list := VerticalLayout {
+                width: parent.width - 14px;
+                spacing: 4px;
+                for key in KeysState.keys: VerticalLayout {
+                    spacing: 2px;
+                    HorizontalLayout {
+                        spacing: 10px;
+                        Text {
+                            text: key.name;
+                            font-weight: 700;
+                            color: Theme.ink;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: key.algorithm;
+                            color: Theme.muted;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: key.used;
+                            color: Theme.ink;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+                        HintArea {
+                            active: key.deletable;
+                            disabled-text: T.get("keys.in_use");
+                            delay: 0.4s;
+                            TextButton {
+                                text: T.get("common.delete");
+                                color: Theme.error;
+                                enabled: key.deletable && !Shell.busy;
+                                clicked => { KeysState.delete(key.id); }
+                            }
+                        }
+                    }
+                    Text {
+                        text: key.fingerprint;
+                        font-family: Theme.mono-font;
+                        font-size: 11px;
+                        color: Theme.muted;
+                    }
+                }
+            }
+        }
+        Rectangle {
+            height: 1px;
+            background: Theme.border;
+        }
+        Text {
+            text: T.get("keys.add_title");
+            font-weight: 700;
+            color: Theme.ink;
+        }
+        Field {
+            label: T.get("keys.name");
+            placeholder: T.get("keys.name_hint");
+            text <=> KeysState.name;
+        }
+        Body {
+            text: T.get("auth.key_format");
+        }
+        SecretBox {
+            text <=> KeysState.private-key;
+            masked: !KeysState.show-secrets;
+            placeholder: T.get("auth.key_hint");
+        }
+        HorizontalLayout {
+            alignment: start;
+            Button {
+                text: T.get("auth.import_key");
+                enabled: !Shell.busy;
+                clicked => { KeysState.import-key(); }
+            }
+        }
+        Field {
+            label: T.get("auth.key_passphrase");
+            placeholder: T.get("auth.key_passphrase_hint");
+            secret: !KeysState.show-secrets;
+            text <=> KeysState.passphrase;
+        }
+        CheckBox {
+            text: T.get("auth.show_secrets");
+            checked: KeysState.show-secrets;
+            toggled => { KeysState.show-secrets-toggled(self.checked); }
+        }
+        if KeysState.error != "": Notice {
+            error: true;
+            text: KeysState.error;
+        }
+        HorizontalLayout {
+            spacing: 10px;
+            alignment: start;
+            padding-top: 6px;
+            ColorButton {
+                text: T.get("keys.add");
+                enabled: !Shell.busy;
+                clicked => { KeysState.add(); }
+            }
+            Button {
+                text: T.get("common.close");
+                enabled: !Shell.busy;
+                clicked => { KeysState.close(); }
+            }
+        }
+    }
+}

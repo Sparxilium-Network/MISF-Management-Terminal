@@ -1,0 +1,396 @@
+// The batch view: choose hosts of one package manager and run checks or upgrades on them.
+import { Button, ScrollView } from "std-widgets.slint";
+import { Theme, T } from "theme.slint";
+import { HintData, HintArea, ColorButton, TextButton, CheckMark, Card } from "widgets.slint";
+import { ResultPanel } from "result_panel.slint";
+
+export struct ManagerChoice {
+    id: string,
+    label: string,
+    selected: bool,
+}
+
+export struct BatchColumnView {
+    label: string,
+    weight: float,
+}
+
+// kind: 0 plain, 1 the host name, 2 the status, 3 the phased count.
+export struct BatchCell {
+    text: string,
+    kind: int,
+    hint: string,
+}
+
+export struct BatchRowView {
+    // A group heading row rather than a host.
+    heading: bool,
+    id: string,
+    text: string,
+    // 0 unchecked, 1 partly, 2 checked.
+    check: int,
+    check-enabled: bool,
+    // Why the host cannot be selected, or the heading's hint.
+    reason: string,
+    cells: [BatchCell],
+    selected: bool,
+    stripe: bool,
+    failed: bool,
+}
+
+export global BatchState {
+    in property <[ManagerChoice]> managers;
+    in property <string> selected-text;
+    in property <string> check-label;
+    in property <string> upgrade-label;
+    in property <string> dist-label;
+    in property <bool> show-dist;
+    in property <bool> any-selected;
+    in property <bool> any-ready;
+    in property <HintData> check-hint;
+    in property <HintData> upgrade-hint;
+    in property <HintData> dist-hint;
+    in property <[BatchColumnView]> columns;
+    in property <[BatchRowView]> rows;
+    // The chosen host's packages below the table.
+    in property <bool> detail-inline;
+    in property <bool> popup-mode;
+    // The chosen host's packages open in a window over the table.
+    in property <bool> popup-shown;
+    in property <string> detail-title;
+    in property <bool> previous-enabled;
+    in property <bool> next-enabled;
+    callback choose-manager(id: string);
+    callback select-all();
+    callback clear();
+    callback check();
+    callback upgrade();
+    callback dist-upgrade();
+    callback toggle(id: string);
+    // A heading row's ID is its group's place among the headings.
+    callback toggle-group(heading: string);
+    callback select-host(id: string);
+    callback open-host(id: string);
+    callback open-detail(id: string);
+    // Moves the edge left of visible column `column` by `dx` in a table `spare` wide.
+    callback column-drag(column: int, dx: length, spare: length);
+    callback column-drag-end();
+    callback column-reset();
+    callback previous();
+    callback next();
+    callback close-popup();
+}
+
+// Previous and next buttons and the title above the chosen host's packages.
+export component DetailHeading inherits HorizontalLayout {
+    spacing: 8px;
+    Button {
+        text: T.get("batch.previous");
+        enabled: BatchState.previous-enabled;
+        clicked => { BatchState.previous(); }
+    }
+    Button {
+        text: T.get("batch.next");
+        enabled: BatchState.next-enabled;
+        clicked => { BatchState.next(); }
+    }
+    Text {
+        text: BatchState.detail-title;
+        font-size: 18px;
+        font-weight: 700;
+        color: Theme.ink;
+        vertical-alignment: center;
+        overflow: elide;
+        horizontal-stretch: 1;
+    }
+}
+
+component HostCell {
+    in property <BatchRowView> line;
+    in property <BatchCell> cell;
+    HintArea {
+        width: root.width;
+        height: root.height;
+        plain: BatchState.popup-mode ? T.get("batch_detail.open_hint") : T.get("batch.host_hint");
+        ContextMenuArea {
+            Menu {
+                MenuItem {
+                    title: T.get("batch.open_host");
+                    activated => { BatchState.open-host(root.line.id); }
+                }
+                MenuItem {
+                    title: T.get("batch_detail.open");
+                    enabled: BatchState.popup-mode;
+                    activated => { BatchState.open-detail(root.line.id); }
+                }
+            }
+            touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { BatchState.select-host(root.line.id); }
+                double-clicked => { BatchState.open-host(root.line.id); }
+                Rectangle {
+                    border-radius: 4px;
+                    background: root.line.selected ? Theme.selection : touch.has-hover ? Theme.selection.with-alpha(0.5) : transparent;
+                }
+                Text {
+                    x: 6px;
+                    width: parent.width - 12px;
+                    text: root.cell.text;
+                    color: Theme.ink;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+            }
+        }
+    }
+}
+
+export component BatchTable {
+    in property <length> check-width: 40px;
+    in property <length> row-height: 34px;
+    property <length> spare: root.width - root.check-width;
+    property <float> total: sum-weights();
+    pure function sum-weights() -> float {
+        // Up to the eleven columns there can be.
+        return (BatchState.columns.length > 0 ? BatchState.columns[0].weight : 0)
+            + (BatchState.columns.length > 1 ? BatchState.columns[1].weight : 0)
+            + (BatchState.columns.length > 2 ? BatchState.columns[2].weight : 0)
+            + (BatchState.columns.length > 3 ? BatchState.columns[3].weight : 0)
+            + (BatchState.columns.length > 4 ? BatchState.columns[4].weight : 0)
+            + (BatchState.columns.length > 5 ? BatchState.columns[5].weight : 0)
+            + (BatchState.columns.length > 6 ? BatchState.columns[6].weight : 0)
+            + (BatchState.columns.length > 7 ? BatchState.columns[7].weight : 0)
+            + (BatchState.columns.length > 8 ? BatchState.columns[8].weight : 0)
+            + (BatchState.columns.length > 9 ? BatchState.columns[9].weight : 0)
+            + (BatchState.columns.length > 10 ? BatchState.columns[10].weight : 0);
+    }
+    pure function column-width(k: int) -> length {
+        return root.total > 0 ? root.spare * BatchState.columns[k].weight / root.total : 0;
+    }
+    pure function edge(k: int) -> length {
+        // The left edge of visible column k from the table's left.
+        return root.check-width
+            + (k > 0 ? column-width(0) : 0) + (k > 1 ? column-width(1) : 0)
+            + (k > 2 ? column-width(2) : 0) + (k > 3 ? column-width(3) : 0)
+            + (k > 4 ? column-width(4) : 0) + (k > 5 ? column-width(5) : 0)
+            + (k > 6 ? column-width(6) : 0) + (k > 7 ? column-width(7) : 0)
+            + (k > 8 ? column-width(8) : 0) + (k > 9 ? column-width(9) : 0);
+    }
+    min-width: root.check-width + BatchState.columns.length * 52px;
+    preferred-height: (BatchState.rows.length + 1) * root.row-height;
+    // The header with its captions and the draggable edges between them.
+    for column[k] in BatchState.columns: Text {
+        x: root.edge(k) + 6px;
+        y: 0;
+        width: root.column-width(k) - 12px;
+        height: root.row-height;
+        text: column.label;
+        font-weight: 700;
+        color: Theme.muted;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    for row[r] in BatchState.rows: Rectangle {
+        x: 0;
+        y: (r + 1) * root.row-height;
+        width: root.width;
+        height: root.row-height;
+        background: row.stripe ? Theme.stripe : transparent;
+        HintArea {
+            x: 11px;
+            width: 20px;
+            plain: row.heading ? row.reason : "";
+            active: row.check-enabled;
+            disabled-text: row.reason;
+            delay: 0.6s;
+            CheckMark {
+                state: row.check;
+                enabled: row.check-enabled;
+                toggled => {
+                    if (row.heading) {
+                        BatchState.toggle-group(row.id);
+                    } else {
+                        BatchState.toggle(row.id);
+                    }
+                }
+            }
+        }
+        if row.heading: Text {
+            x: root.check-width + 6px;
+            width: parent.width - root.check-width - 12px;
+            text: row.text;
+            font-weight: 700;
+            color: Theme.group-text;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        for cell[k] in row.cells: Rectangle {
+            x: root.edge(k);
+            width: root.column-width(k);
+            if cell.kind == 1: HostCell {
+                width: parent.width - 4px;
+                height: parent.height - 4px;
+                line: row;
+                cell: cell;
+            }
+            if cell.kind != 1: HintArea {
+                x: 6px;
+                width: parent.width - 12px;
+                plain: cell.hint;
+                delay: 0.6s;
+                Text {
+                    text: cell.text;
+                    color: cell.kind == 2 && row.failed ? Theme.error : Theme.ink;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+            }
+        }
+    }
+    for column[k] in BatchState.columns: Rectangle {
+        visible: k > 0;
+        x: root.edge(k) - 4px;
+        y: 0;
+        width: 8px;
+        height: root.row-height;
+        Rectangle {
+            x: 3.5px;
+            y: 8px;
+            width: 1px;
+            height: parent.height - 16px;
+            background: handle.has-hover || handle.pressed ? Theme.blue : Theme.border;
+        }
+        HintArea {
+            plain: T.get("batch_columns.drag_hint");
+            handle := TouchArea {
+                mouse-cursor: ew-resize;
+                moved => {
+                    BatchState.column-drag(k, self.mouse-x - self.pressed-x, root.spare);
+                }
+                pointer-event(event) => {
+                    if (event.kind == PointerEventKind.up) {
+                        BatchState.column-drag-end();
+                    }
+                }
+                double-clicked => { BatchState.column-reset(); }
+            }
+        }
+    }
+}
+
+export component BatchPage inherits VerticalLayout {
+    spacing: 8px;
+    Text {
+        text: T.get("batch.title");
+        font-size: 29px;
+        font-weight: 700;
+        color: Theme.ink;
+    }
+    Text {
+        text: T.get("batch.description");
+        color: Theme.muted;
+        wrap: word-wrap;
+    }
+    HorizontalLayout {
+        spacing: 8px;
+        alignment: start;
+        padding-top: 4px;
+        Text {
+            text: T.get("batch.manager");
+            color: Theme.ink;
+            vertical-alignment: center;
+        }
+        if BatchState.managers.length == 0: Text {
+            text: T.get("batch.no_manager");
+            color: Theme.muted;
+            vertical-alignment: center;
+        }
+        for manager in BatchState.managers: TextButton {
+            text: manager.label;
+            selected: manager.selected;
+            clicked => { BatchState.choose-manager(manager.id); }
+        }
+    }
+    HorizontalLayout {
+        spacing: 10px;
+        alignment: start;
+        Button {
+            text: T.get("batch.select_all");
+            enabled: BatchState.any-ready;
+            clicked => { BatchState.select-all(); }
+        }
+        Button {
+            text: T.get("batch.clear");
+            enabled: BatchState.any-selected;
+            clicked => { BatchState.clear(); }
+        }
+        Text {
+            text: BatchState.selected-text;
+            color: Theme.ink;
+            vertical-alignment: center;
+        }
+        HintArea {
+            hint: BatchState.check-hint;
+            active: BatchState.any-selected;
+            ColorButton {
+                text: BatchState.check-label;
+                enabled: BatchState.any-selected;
+                clicked => { BatchState.check(); }
+            }
+        }
+        HintArea {
+            hint: BatchState.upgrade-hint;
+            active: BatchState.any-selected;
+            ColorButton {
+                text: BatchState.upgrade-label;
+                fill: Theme.red;
+                enabled: BatchState.any-selected;
+                clicked => { BatchState.upgrade(); }
+            }
+        }
+        if BatchState.show-dist: HintArea {
+            hint: BatchState.dist-hint;
+            active: BatchState.any-selected;
+            ColorButton {
+                text: BatchState.dist-label;
+                fill: Theme.red;
+                enabled: BatchState.any-selected;
+                clicked => { BatchState.dist-upgrade(); }
+            }
+        }
+    }
+    Card {
+        property <length> full: (BatchState.rows.length + 1) * 34px + 36px;
+        vertical-stretch: BatchState.detail-inline ? 0 : 1;
+        min-height: min(self.full, 120px);
+        preferred-height: BatchState.detail-inline ? min(self.full, 276px) : self.full;
+        max-height: BatchState.detail-inline ? min(self.full, 276px) : max(self.full, 100000px);
+        if BatchState.rows.length == 0: Text {
+            x: 18px;
+            y: 18px;
+            text: T.get("host.empty");
+            color: Theme.muted;
+        }
+        if BatchState.rows.length > 0: scroll := ScrollView {
+            x: 18px;
+            y: 18px;
+            width: parent.width - 36px;
+            height: parent.height - 36px;
+            content-width: max(self.visible-width, table.min-width);
+            content-height: table.preferred-height;
+            table := BatchTable {
+                width: scroll.content-width;
+                height: self.preferred-height;
+            }
+        }
+    }
+    if BatchState.detail-inline: VerticalLayout {
+        spacing: 8px;
+        vertical-stretch: 1;
+        padding-top: 4px;
+        DetailHeading { }
+        ResultPanel {
+            vertical-stretch: 1;
+        }
+    }
+}

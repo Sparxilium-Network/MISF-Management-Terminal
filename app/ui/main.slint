@@ -1,0 +1,308 @@
+// The main window: top bar, host list, the host or batch page, the status line, and the
+// dialogs and menus drawn over them.
+import { Button, Spinner } from "std-widgets.slint";
+import { Theme, T, AppearanceSync } from "theme.slint";
+import { HintData, Tip, Clip, ClipboardSink, TipOverlay, ColorButton, TextButton, Tabs, Card, Modal, Notice } from "widgets.slint";
+import { Shell } from "shell.slint";
+import { Sidebar, SidebarState, SidebarRow } from "sidebar.slint";
+import { HostPage, HostState, AdvancedMenu } from "host_page.slint";
+import { ResultPanel, ResultState, InfoLine } from "result_panel.slint";
+import { BatchPage, BatchState, DetailHeading, ManagerChoice, BatchColumnView, BatchCell, BatchRowView } from "batch_page.slint";
+import { EditorDialog, EditorState } from "dialogs/editor.slint";
+import { KeysDialog, KeysState, KeyView } from "dialogs/keys.slint";
+import { VaultDialog, VaultState, SlotView } from "dialogs/vault.slint";
+import { UpgradeDialog, UpgradeState, KeptBackDialog, KeptBackState, RebootDialog, RebootState, BatchFailureDialog, BatchFailureState } from "dialogs/confirm.slint";
+import { TrustDialog, TrustState, DeleteDialog, DeleteState, GroupDialog, GroupState, PlaintextDialog, PlaintextState, SchemaDialog, SchemaState, ErrorDialog, ErrorState } from "dialogs/simple.slint";
+import { SettingsWindow, SettingsState, TreeRow, ColumnToggle } from "settings.slint";
+
+export { HintData, Theme, T, Tip, Clip, Shell, SidebarState, SidebarRow, HostState, ResultState, InfoLine, BatchState, ManagerChoice, BatchColumnView, BatchCell, BatchRowView, EditorState, KeysState, KeyView, VaultState, SlotView, UpgradeState, KeptBackState, RebootState, BatchFailureState, TrustState, DeleteState, GroupState, PlaintextState, SchemaState, ErrorState, SettingsWindow, SettingsState, TreeRow, ColumnToggle }
+
+component TopBar inherits Rectangle {
+    background: Theme.surface;
+    VerticalLayout {
+        padding: 12px;
+        spacing: 6px;
+        HorizontalLayout {
+            spacing: 10px;
+            Button {
+                text: T.get("settings.title");
+                clicked => { Shell.settings(); }
+            }
+            Rectangle {
+                width: 1px;
+                background: Theme.border;
+            }
+            if Shell.encrypted && Shell.locked: Button {
+                text: T.get("vault.unlock_host");
+                enabled: !Shell.busy;
+                clicked => { Shell.unlock(); }
+            }
+            if Shell.encrypted && !Shell.locked: Button {
+                text: T.get("vault.lock");
+                enabled: !Shell.busy;
+                clicked => { Shell.lock(); }
+            }
+            if !Shell.encrypted: Button {
+                text: T.get("vault.enable_button");
+                enabled: !Shell.busy;
+                clicked => { Shell.enable-vault(); }
+            }
+            if !Shell.locked: Button {
+                text: T.get("keys.manage");
+                enabled: !Shell.busy;
+                clicked => { Shell.manage-keys(); }
+            }
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+            VerticalLayout {
+                alignment: center;
+                Text {
+                    text: Shell.encrypted ? T.get("storage.encrypted") : T.get("storage.not_created");
+                    font-size: 11px;
+                    color: Theme.warning;
+                    horizontal-alignment: right;
+                }
+                Text {
+                    text: Shell.path;
+                    font-size: 10px;
+                    color: Theme.muted;
+                    horizontal-alignment: right;
+                    overflow: elide;
+                }
+            }
+        }
+        if Shell.storage-warning != "": Notice {
+            error: true;
+            text: Shell.storage-warning;
+        }
+        if Shell.encrypted && Shell.plaintext-remains: HorizontalLayout {
+            spacing: 10px;
+            Notice {
+                text: T.get("storage.original_remains");
+                vertical-alignment: center;
+            }
+            Button {
+                text: T.get("plaintext.review");
+                enabled: !Shell.locked && !Shell.busy;
+                clicked => { Shell.review-plaintext(); }
+            }
+        }
+        if Shell.debug-notice != "": Notice {
+            text: Shell.debug-notice;
+        }
+    }
+}
+
+component LockedPage inherits VerticalLayout {
+    spacing: 12px;
+    alignment: start;
+    Text {
+        text: T.get("app.vault_heading");
+        font-size: 10px;
+        font-weight: 700;
+        color: Theme.muted;
+    }
+    Text {
+        text: Shell.encrypted ? T.get("vault.locked") : T.get("vault.setup_heading");
+        font-size: 29px;
+        font-weight: 700;
+        color: Theme.ink;
+    }
+    Text {
+        text: Shell.encrypted ? T.get("vault.unlock_description") : T.get("vault.setup_description");
+        color: Theme.ink;
+        wrap: word-wrap;
+    }
+    Rectangle { height: 12px; }
+    Card {
+        VerticalLayout {
+            padding: 18px;
+            padding-top: 30px;
+            padding-bottom: 30px;
+            spacing: 12px;
+            Text {
+                text: T.get("vault.algorithm");
+                color: Theme.ink;
+                wrap: word-wrap;
+            }
+            HorizontalLayout {
+                alignment: start;
+                ColorButton {
+                    text: Shell.encrypted ? T.get("vault.unlock_host") : T.get("vault.enable_button");
+                    clicked => {
+                        if (Shell.encrypted) {
+                            Shell.unlock();
+                        } else {
+                            Shell.enable-vault();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+component Workspace inherits Rectangle {
+    background: Theme.background;
+    VerticalLayout {
+        padding: 28px;
+        spacing: 8px;
+        if Shell.locked: LockedPage { }
+        if !Shell.locked: Tabs {
+            labels: [T.get("view.host"), Shell.batch-tab];
+            ids: [0, 1];
+            current: Shell.view;
+            chosen(id) => { Shell.view-chosen(id); }
+        }
+        if !Shell.locked && Shell.view == 0: HostPage {
+            vertical-stretch: 1;
+        }
+        if !Shell.locked && Shell.view == 1: BatchPage {
+            vertical-stretch: 1;
+        }
+    }
+    // Pages ignore input while work runs.
+    if Shell.busy: TouchArea { }
+}
+
+export component AppWindow inherits Window {
+    in property <bool> debug;
+    title: root.debug ? "MISF · DEBUG · Isolated profile" : "MISF · Management Terminal";
+    icon: @image-url("../../assets/icons/misf-256.png");
+    min-width: 1024px;
+    min-height: 700px;
+    preferred-width: 1280px;
+    preferred-height: 820px;
+    background: Theme.background;
+    default-font-size: 14px;
+    AppearanceSync { }
+    ClipboardSink { }
+    VerticalLayout {
+        TopBar { }
+        HorizontalLayout {
+            vertical-stretch: 1;
+            Sidebar {
+                width: 280px;
+                busy: Shell.busy;
+            }
+            Workspace {
+                horizontal-stretch: 1;
+            }
+        }
+        Rectangle {
+            background: Theme.surface;
+            HorizontalLayout {
+                padding: 12px;
+                spacing: 8px;
+                if Shell.busy: Spinner {
+                    indeterminate: true;
+                    width: 16px;
+                    height: 16px;
+                }
+                Text {
+                    text: Shell.status;
+                    font-size: 12px;
+                    color: Theme.muted;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+            }
+        }
+    }
+    if BatchState.popup-shown: Modal {
+        width: root.width;
+        height: root.height;
+        panel-width: max(480px, min(1400px, root.width - 120px));
+        max-panel-height: root.height - 60px;
+        dismissed => { BatchState.close-popup(); }
+        HorizontalLayout {
+            spacing: 10px;
+            DetailHeading {
+                horizontal-stretch: 1;
+            }
+            Button {
+                text: T.get("common.close");
+                clicked => { BatchState.close-popup(); }
+            }
+        }
+        ResultPanel {
+            vertical-stretch: 1;
+            min-height: max(160px, root.height - 300px);
+        }
+    }
+    if EditorState.shown: EditorDialog {
+        width: root.width;
+        height: root.height;
+    }
+    if TrustState.shown: TrustDialog {
+        width: root.width;
+        height: root.height;
+    }
+    if DeleteState.shown: DeleteDialog {
+        width: root.width;
+        height: root.height;
+    }
+    if UpgradeState.shown: UpgradeDialog {
+        width: root.width;
+        height: root.height;
+    }
+    if KeptBackState.shown: KeptBackDialog {
+        width: root.width;
+        height: root.height;
+    }
+    if BatchFailureState.shown: BatchFailureDialog {
+        width: root.width;
+        height: root.height;
+    }
+    if RebootState.shown: RebootDialog {
+        width: root.width;
+        height: root.height;
+    }
+    if VaultState.shown: VaultDialog {
+        width: root.width;
+        height: root.height;
+    }
+    if SchemaState.shown: SchemaDialog {
+        width: root.width;
+        height: root.height;
+    }
+    if PlaintextState.shown: PlaintextDialog {
+        width: root.width;
+        height: root.height;
+    }
+    // After the editor, so it opens on top when chosen from there.
+    if KeysState.shown: KeysDialog {
+        width: root.width;
+        height: root.height;
+    }
+    if GroupState.shown: GroupDialog {
+        width: root.width;
+        height: root.height;
+    }
+    if ErrorState.shown: ErrorDialog {
+        width: root.width;
+        height: root.height;
+    }
+    if HostState.advanced-open: Rectangle {
+        width: root.width;
+        height: root.height;
+        // A left click outside the menu closes it; right-clicks open the items' copy menus.
+        TouchArea {
+            pointer-event(event) => {
+                if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                    HostState.advanced-toggled(false);
+                }
+            }
+        }
+        AdvancedMenu {
+            x: min(HostState.menu-x, root.width - self.width - 8px);
+            y: HostState.menu-y;
+        }
+    }
+    TipOverlay {
+        window-width: root.width;
+        window-height: root.height;
+    }
+}

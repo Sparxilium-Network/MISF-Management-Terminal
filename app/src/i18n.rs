@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, sync::OnceLock};
 
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Language {
     #[default]
     ZhTw,
@@ -29,6 +29,18 @@ impl Language {
             .into_iter()
             .find(|language| language.code() == code)
     }
+
+    /// The number Slint's `T.language` holds.
+    pub fn index(self) -> i32 {
+        Self::ALL.iter().position(|l| *l == self).unwrap_or(0) as i32
+    }
+
+    pub fn from_index(index: i32) -> Self {
+        usize::try_from(index)
+            .ok()
+            .and_then(|i| Self::ALL.get(i).copied())
+            .unwrap_or_default()
+    }
 }
 
 fn catalog(language: Language) -> &'static BTreeMap<String, String> {
@@ -51,6 +63,14 @@ impl Translator {
             .or_else(|| catalog(Language::ZhTw).get(key))
             .map(String::as_str)
             .unwrap_or(key)
+    }
+
+    /// Like [`Self::get`] for a key that is not a literal, such as one from Slint.
+    pub fn text(self, key: &str) -> &str {
+        catalog(self.0)
+            .get(key)
+            .or_else(|| catalog(Language::ZhTw).get(key))
+            .map_or(key, String::as_str)
     }
 
     pub fn format(self, key: &'static str, arguments: &[(&str, String)]) -> String {
@@ -130,11 +150,34 @@ mod tests {
             assert_eq!(placeholders(value), placeholders(&en[key]), "{key}");
         }
         for source in [
-            include_str!("ui.rs"),
+            include_str!("ui/app.rs"),
+            include_str!("ui/batch.rs"),
+            include_str!("ui/dialogs.rs"),
+            include_str!("ui/editor.rs"),
+            include_str!("ui/format.rs"),
+            include_str!("ui/host_page.rs"),
+            include_str!("ui/logging.rs"),
+            include_str!("ui/mod.rs"),
+            include_str!("ui/settings.rs"),
+            include_str!("ui/shell.rs"),
+            include_str!("ui/sidebar.rs"),
+            include_str!("ui/vault.rs"),
             include_str!("theme.rs"),
             include_str!("session_log.rs"),
+            include_str!("../ui/main.slint"),
+            include_str!("../ui/widgets.slint"),
+            include_str!("../ui/sidebar.slint"),
+            include_str!("../ui/host_page.slint"),
+            include_str!("../ui/result_panel.slint"),
+            include_str!("../ui/batch_page.slint"),
+            include_str!("../ui/settings.slint"),
+            include_str!("../ui/dialogs/editor.slint"),
+            include_str!("../ui/dialogs/keys.slint"),
+            include_str!("../ui/dialogs/vault.slint"),
+            include_str!("../ui/dialogs/confirm.slint"),
+            include_str!("../ui/dialogs/simple.slint"),
         ] {
-            for function in ["t.get(", "t.format("] {
+            for function in ["t.get(", "t.format(", "T.get("] {
                 for part in source.split(function).skip(1) {
                     let key = part
                         .trim_start()

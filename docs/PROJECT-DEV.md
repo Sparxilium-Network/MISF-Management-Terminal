@@ -1,13 +1,13 @@
 # MISF Management Terminal 開發說明
 
-> 最後修改：2026-11-08 ｜ 基於 commit：`69cd0ec`
+> 最後修改：2026-11-10 ｜ 基於 commit：`1c6f0cf`
 
 一般使用方式見 [README](../README.md) 與 [使用指南](user-guide.md)。本文件是開發文件的入口，給開發者與維護者，記錄建置、儲存格式、安全設計細節與測試方式。
 
 > [!WARNING]
 > 目前只有 **APT**（Debian／Ubuntu）在真實主機上測試過；DNF、YUM、pkg 等其他功能不保證可用或安全。
 
-全 Rust 原生桌面客戶端，以 eframe／egui 繪製畫面，內建 Rust SSH 核心。畫面與核心編譯成同一個執行檔，不需要 Java、瀏覽器或管理伺服器。
+全 Rust 原生桌面客戶端，以 Slint 繪製畫面，內建 Rust SSH 核心。畫面與核心編譯成同一個執行檔，不需要 Java、瀏覽器或管理伺服器。
 
 ## 開發文件索引
 
@@ -32,7 +32,7 @@
 
 ## 結構
 
-- `app/`：eframe／egui 原生 UI；背景執行緒執行網路及磁碟作業。
+- `app/`：Slint 原生 UI（`app/ui/*.slint` 宣告畫面，`app/src/ui/` 處理狀態）；背景執行緒執行網路及磁碟作業。
 - `core/`：主機資料、SSH 及套件管理核心；亦提供 stdin/stdout JSON CLI。
 - CLI 的加密工作階段只存在同一程序內；可透過 stdin 傳入 JSON 請求陣列，依序執行解鎖、操作與鎖定。不要把解鎖密碼放進命令列參數。
 
@@ -165,6 +165,6 @@ LUKSbox 測試使用暫存資料，涵蓋未建立容器時拒絕主機操作且
 
 ## 畫面擷取
 
-開發用畫面擷取可使用 `cargo build -p misf --features capture`，以 `MISF_SCREENSHOT_TO` 指定 PNG 路徑，並以 `--debug.dir` 指定測試資料。`MISF_OPEN_EDITOR=1`／`MISF_OPEN_SETTINGS=1`／`MISF_OPEN_PASSKEY=1`／`MISF_OPEN_BATCH=1`／`MISF_OPEN_KEYS=1` 可預先開啟對應畫面；旗標只有明確設為 `1` 才啟用；`MISF_OPEN_SETTINGS=about`／`preferences`／`security`／`batch` 直接開啟「關於」或「偏好設定」下的「外觀與主機清單」／「安全性」／「批次作業」頁。debug 模式的 Passkey 按鈕停用，擷取不操作硬體。正式 release 預設不啟用擷取功能。
+開發用畫面擷取可使用 `cargo build -p misf --features capture`，以 `MISF_SCREENSHOT_TO` 指定 PNG 路徑，並以 `--debug.dir` 指定測試資料。`MISF_OPEN_EDITOR=1`／`MISF_OPEN_SETTINGS=1`／`MISF_OPEN_PASSKEY=1`／`MISF_OPEN_BATCH=1`／`MISF_OPEN_KEYS=1` 可預先開啟對應畫面；旗標只有明確設為 `1` 才啟用；`MISF_OPEN_SETTINGS=about`／`preferences`／`security`／`batch` 直接開啟「關於」或「偏好設定」下的「外觀與主機清單」／「安全性」／「批次作業」頁（設定是獨立視窗，此時截取設定視窗）。`MISF_FIXTURE=1` 以幾台假主機取代主機庫內容，方便截取主機頁與批次頁。debug 模式的 Passkey 按鈕停用，擷取不操作硬體。正式 release 預設不啟用擷取功能。
 
 `.daybrake/` 保存 DayBrake 儲存安全測試的任務書、報告與已知安全問題（`.daybrake/Know.md`）。`.daybrake` 不是 daybreak 拼錯，是故意的。

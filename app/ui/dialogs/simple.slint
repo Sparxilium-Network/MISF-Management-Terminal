@@ -1,0 +1,238 @@
+// Short questions: trusting a host key, deleting a host, naming a group, the leftover
+// plaintext copy, the vault schema upgrade, and errors.
+import { Button, LineEdit } from "std-widgets.slint";
+import { Theme, T } from "../theme.slint";
+import { Modal, Heading, ColorButton, TextButton, Notice, Body, Mono } from "../widgets.slint";
+import { Shell } from "../shell.slint";
+
+export global TrustState {
+    in property <bool> shown;
+    in property <bool> changed;
+    in property <string> address;
+    in property <string> actual;
+    in property <string> previous;
+    callback accept();
+    callback cancel();
+}
+
+export global DeleteState {
+    in property <bool> shown;
+    in property <string> prompt;
+    callback confirm();
+    callback cancel();
+}
+
+export global GroupState {
+    in property <bool> shown;
+    in property <bool> renaming;
+    in-out property <string> name;
+    callback save();
+    callback cancel();
+}
+
+export global PlaintextState {
+    in property <bool> shown;
+    in property <string> path;
+    callback keep();
+    callback delete();
+}
+
+export global SchemaState {
+    in property <bool> shown;
+    in property <string> description;
+    in property <string> confirm-label;
+    callback upgrade();
+    callback cancel();
+}
+
+export global ErrorState {
+    in property <bool> shown;
+    in property <string> text;
+    callback close();
+}
+
+export component TrustDialog inherits Modal {
+    panel-width: 580px;
+    Heading {
+        text: TrustState.changed ? T.get("trust.changed") : T.get("trust.confirm");
+    }
+    Body {
+        text: TrustState.address;
+    }
+    Body {
+        text: T.get("trust.received");
+    }
+    Mono {
+        text: TrustState.actual;
+    }
+    if TrustState.changed: Body {
+        text: T.get("trust.previous");
+    }
+    if TrustState.changed: Mono {
+        text: TrustState.previous;
+    }
+    Body {
+        text: T.get("trust.description");
+    }
+    HorizontalLayout {
+        spacing: 10px;
+        alignment: start;
+        ColorButton {
+            text: T.get("trust.accept");
+            enabled: !Shell.busy;
+            clicked => { TrustState.accept(); }
+        }
+        Button {
+            text: T.get("common.cancel");
+            enabled: !Shell.busy;
+            clicked => { TrustState.cancel(); }
+        }
+    }
+}
+
+export component DeleteDialog inherits Modal {
+    panel-width: 400px;
+    Heading {
+        text: T.get("host.delete");
+    }
+    Body {
+        text: DeleteState.prompt;
+    }
+    HorizontalLayout {
+        spacing: 10px;
+        alignment: start;
+        Button {
+            text: T.get("host.confirm_delete");
+            enabled: !Shell.busy;
+            clicked => { DeleteState.confirm(); }
+        }
+        Button {
+            text: T.get("common.cancel");
+            enabled: !Shell.busy;
+            clicked => { DeleteState.cancel(); }
+        }
+    }
+}
+
+export component GroupDialog inherits Modal {
+    panel-width: 360px;
+    Heading {
+        text: GroupState.renaming ? T.get("group.rename_title") : T.get("group.add_title");
+    }
+    Body {
+        text: T.get("group.name");
+    }
+    edit := LineEdit {
+        text <=> GroupState.name;
+        accepted => {
+            if (GroupState.name != "") {
+                GroupState.save();
+            }
+        }
+        edited(text) => {
+            // Group names stay within 64 characters.
+            if (text.character-count > 64) {
+                self.text = GroupState.name;
+            }
+        }
+    }
+    init => { edit.focus(); }
+    HorizontalLayout {
+        spacing: 10px;
+        alignment: start;
+        ColorButton {
+            text: T.get("group.save");
+            enabled: !Shell.busy && GroupState.name != "";
+            clicked => { GroupState.save(); }
+        }
+        Button {
+            text: T.get("common.cancel");
+            enabled: !Shell.busy;
+            clicked => { GroupState.cancel(); }
+        }
+    }
+}
+
+export component PlaintextDialog inherits Modal {
+    panel-width: 560px;
+    Heading {
+        text: T.get("plaintext.title");
+    }
+    Body {
+        text: T.get("plaintext.description");
+    }
+    Text {
+        text: T.get("plaintext.path_label");
+        font-weight: 700;
+        color: Theme.ink;
+    }
+    Mono {
+        text: PlaintextState.path;
+    }
+    Body {
+        text: T.get("plaintext.delete_notice");
+    }
+    HorizontalLayout {
+        spacing: 10px;
+        alignment: start;
+        Button {
+            text: T.get("plaintext.keep");
+            enabled: !Shell.busy;
+            clicked => { PlaintextState.keep(); }
+        }
+        TextButton {
+            text: T.get("plaintext.confirm_delete");
+            color: Theme.error;
+            enabled: !Shell.busy;
+            clicked => { PlaintextState.delete(); }
+        }
+    }
+}
+
+export component SchemaDialog inherits Modal {
+    panel-width: 520px;
+    Heading {
+        text: T.get("schema_upgrade.title");
+    }
+    Body {
+        text: SchemaState.description;
+    }
+    Body {
+        text: T.get("schema_upgrade.notice");
+    }
+    HorizontalLayout {
+        spacing: 10px;
+        alignment: start;
+        ColorButton {
+            text: SchemaState.confirm-label;
+            enabled: !Shell.busy;
+            clicked => { SchemaState.upgrade(); }
+        }
+        Button {
+            text: T.get("schema_upgrade.cancel");
+            enabled: !Shell.busy;
+            clicked => { SchemaState.cancel(); }
+        }
+    }
+}
+
+export component ErrorDialog inherits Modal {
+    panel-width: 540px;
+    Heading {
+        text: T.get("error.title");
+    }
+    TextInput {
+        text: ErrorState.text;
+        read-only: true;
+        single-line: false;
+        wrap: word-wrap;
+        color: Theme.ink;
+    }
+    HorizontalLayout {
+        alignment: start;
+        Button {
+            text: T.get("common.close");
+            clicked => { ErrorState.close(); }
+        }
+    }
+}

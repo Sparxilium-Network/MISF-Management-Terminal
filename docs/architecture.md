@@ -1,6 +1,6 @@
 # MISF Management Terminal 架構
 
-> 最後修改：2026-11-08 ｜ 基於 commit：`69cd0ec`
+> 最後修改：2026-11-10 ｜ 基於 commit：`1c6f0cf`
 
 > [!WARNING]
 > **本專案仍處於開發階段，請勿用於正式環境。** 相關安全保護機制尚未完善。
@@ -11,11 +11,11 @@
 
 ## 概觀
 
-單一桌面執行檔：eframe／egui 繪製原生視窗，直接呼叫同一程序內的 Rust 核心。沒有管理伺服器、HTTP 服務、TOKEN 或遠端資料庫。SSH 使用內建的 russh，不執行系統 `ssh`，也不讀取本機 SSH config、known_hosts、agent 或系統私鑰。
+單一桌面執行檔：Slint（fluent 樣式、winit＋OpenGL 繪製）顯示原生視窗，直接呼叫同一程序內的 Rust 核心。沒有管理伺服器、HTTP 服務、TOKEN 或遠端資料庫。SSH 使用內建的 russh，不執行系統 `ssh`，也不讀取本機 SSH config、known_hosts、agent 或系統私鑰。
 
 ```mermaid
 flowchart LR
-    UI[egui UI<br/>app/] -->|工作佇列| Worker[背景執行緒 + Tokio]
+    UI[Slint UI<br/>app/] -->|工作佇列| Worker[背景執行緒 + Tokio]
     CLI[JSON CLI<br/>core/src/main.rs] --> Session
     Worker --> Session[Session<br/>稽核與 debug 政策]
     Session --> Storage[StorageSession<br/>LUKSbox 容器]
@@ -27,12 +27,13 @@ flowchart LR
 
 | 位置 | 職責 |
 | --- | --- |
-| `app/src/ui.rs` | 主視窗、主機編輯、結果卡片、批次作業、解鎖與設定畫面 |
+| `app/ui/*.slint` | 畫面宣告：主視窗外框、側欄、主機頁、結果分頁、批次表格、設定視窗與各對話框；每頁以一個 Slint global 接收資料與送出操作 |
+| `app/src/ui/` | 視窗狀態 `App` 與各頁模組：把狀態填入對應的 Slint global，並處理該頁的操作 |
 | `app/src/session_log.rs` | 只存在記憶體的工作階段 LOG，可在設定中匯出 |
 | `app/src/worker.rs` | 把請求交給背景執行緒與 Tokio runtime，回傳進度與結果；批次中轉送每台結果與失敗詢問 |
 | `app/src/preferences.rs` | 未加密的 `ui-settings.json`（語言、外觀、清單與批次表格偏好、自動鎖定分鐘數） |
 | `app/src/i18n.rs`、`app/locales/` | 內嵌的 zh-tw／en-us 語系，以穩定 key 與命名參數取字 |
-| `app/src/theme.rs` | 淺色／深色配色 |
+| `app/src/theme.rs` | 淺色／深色／跟隨系統的外觀選項（配色在 `app/ui/theme.slint`） |
 | `core/src/lib.rs` | 主機請求的分派（下表） |
 | `core/src/batch.rs` | 批次作業：並行、逐台儲存與回報、失敗時暫停詢問 |
 | `core/src/reboot.rs` | 重新開機：固定命令 `shutdown -r +1`，只限 APT 主機 |

@@ -1,0 +1,296 @@
+// Adding or editing a host's connection.
+import { Button, ComboBox, CheckBox, LineEdit, ScrollView, Spinner } from "std-widgets.slint";
+import { Theme, T } from "../theme.slint";
+import { Modal, Heading, Field, ColorButton, Note, Notice } from "../widgets.slint";
+import { Shell } from "../shell.slint";
+
+export global EditorState {
+    in property <bool> shown;
+    in property <bool> adding;
+    in-out property <string> name;
+    in-out property <string> address;
+    in-out property <string> port;
+    in-out property <string> username;
+    // 0 Linux, 1 BSD.
+    in property <int> os;
+    // 0 password, 1 private key, 2 stored key.
+    in property <int> auth;
+    in property <[string]> managers;
+    in property <int> manager;
+    in property <bool> show-secrets;
+    in-out property <string> password;
+    in property <[string]> keys;
+    in property <int> key;
+    in property <string> key-fingerprint;
+    in-out property <string> private-key;
+    in-out property <string> key-passphrase;
+    in-out property <string> sudo-password;
+    in property <bool> pty;
+    in-out property <string> notes;
+    in property <string> error;
+    callback edited();
+    callback os-chosen(index: int);
+    callback auth-chosen(index: int);
+    callback manager-chosen(index: int);
+    callback key-chosen(index: int);
+    callback show-secrets-toggled(shown: bool);
+    callback pty-toggled(on: bool);
+    callback import-key();
+    callback manage-keys();
+    callback save();
+    callback cancel();
+}
+
+// A multi-line box for a private key, masked until secrets are shown.
+export component SecretBox inherits Rectangle {
+    in-out property <string> text;
+    in property <bool> masked;
+    in property <string> placeholder;
+    callback edited();
+    min-height: 74px;
+    border-width: 1px;
+    border-radius: 4px;
+    border-color: input.has-focus ? Theme.blue : Theme.border;
+    background: Theme.surface;
+    clip: true;
+    if root.text == "": Text {
+        x: 8px;
+        y: 6px;
+        text: root.placeholder;
+        color: Theme.muted;
+    }
+    input := TextInput {
+        x: 8px;
+        y: 6px;
+        width: parent.width - 16px;
+        height: parent.height - 12px;
+        text <=> root.text;
+        single-line: false;
+        wrap: word-wrap;
+        input-type: root.masked ? InputType.password : InputType.text;
+        font-family: Theme.mono-font;
+        font-size: 12px;
+        color: Theme.ink;
+        edited => { root.edited(); }
+    }
+}
+
+export component EditorDialog inherits Modal {
+    panel-width: 560px;
+    dismissed => { }
+    Heading {
+        text: EditorState.adding ? T.get("host.add") : T.get("host.edit");
+    }
+    ScrollView {
+        vertical-stretch: 1;
+        min-height: 200px;
+        preferred-height: form.preferred-height;
+        content-height: form.preferred-height;
+        content-width: self.visible-width;
+        form := VerticalLayout {
+            width: parent.width - 14px;
+            spacing: 10px;
+            Field {
+                label: T.get("host.name");
+                placeholder: T.get("host.name_hint");
+                text <=> EditorState.name;
+                edited => { EditorState.edited(); }
+            }
+            HorizontalLayout {
+                spacing: 12px;
+                Field {
+                    horizontal-stretch: 3;
+                    label: T.get("host.address");
+                    placeholder: T.get("host.address_hint");
+                    text <=> EditorState.address;
+                    edited => { EditorState.edited(); }
+                }
+                Field {
+                    horizontal-stretch: 1;
+                    label: T.get("host.port");
+                    placeholder: "22";
+                    text <=> EditorState.port;
+                    edited => { EditorState.edited(); }
+                }
+            }
+            Field {
+                label: T.get("auth.username");
+                placeholder: T.get("auth.username_hint");
+                text <=> EditorState.username;
+                edited => { EditorState.edited(); }
+            }
+            HorizontalLayout {
+                spacing: 12px;
+                VerticalLayout {
+                    spacing: 4px;
+                    Text {
+                        text: T.get("host.os");
+                        font-size: 12px;
+                        font-weight: 700;
+                        color: Theme.ink;
+                    }
+                    ComboBox {
+                        model: ["Linux", "BSD"];
+                        current-index: EditorState.os;
+                        selected(value) => { EditorState.os-chosen(self.current-index); }
+                    }
+                }
+                VerticalLayout {
+                    spacing: 4px;
+                    Text {
+                        text: T.get("auth.method");
+                        font-size: 12px;
+                        font-weight: 700;
+                        color: Theme.ink;
+                    }
+                    ComboBox {
+                        model: [T.get("auth.password"), T.get("auth.private_key"), T.get("auth.saved_key")];
+                        current-index: EditorState.auth;
+                        selected(value) => { EditorState.auth-chosen(self.current-index); }
+                    }
+                }
+                VerticalLayout {
+                    spacing: 4px;
+                    Text {
+                        text: T.get("host.manager");
+                        font-size: 12px;
+                        font-weight: 700;
+                        color: Theme.ink;
+                    }
+                    ComboBox {
+                        model: EditorState.managers;
+                        current-index: EditorState.manager;
+                        selected(value) => { EditorState.manager-chosen(self.current-index); }
+                    }
+                }
+            }
+            CheckBox {
+                text: T.get("auth.show_secrets");
+                checked: EditorState.show-secrets;
+                toggled => { EditorState.show-secrets-toggled(self.checked); }
+            }
+            if EditorState.auth == 0: Field {
+                label: T.get("auth.ssh_password");
+                placeholder: T.get("auth.ssh_password_hint");
+                secret: !EditorState.show-secrets;
+                text <=> EditorState.password;
+                edited => { EditorState.edited(); }
+            }
+            if EditorState.auth == 2: VerticalLayout {
+                spacing: 6px;
+                if EditorState.keys.length == 0: Text {
+                    text: T.get("keys.none");
+                    color: Theme.muted;
+                }
+                if EditorState.keys.length > 0: VerticalLayout {
+                    spacing: 4px;
+                    Text {
+                        text: T.get("keys.choose_label");
+                        font-size: 12px;
+                        font-weight: 700;
+                        color: Theme.ink;
+                    }
+                    ComboBox {
+                        model: EditorState.keys;
+                        current-index: EditorState.key;
+                        selected(value) => { EditorState.key-chosen(self.current-index); }
+                    }
+                }
+                if EditorState.key-fingerprint != "": Text {
+                    text: EditorState.key-fingerprint;
+                    font-family: Theme.mono-font;
+                    font-size: 11px;
+                    color: Theme.muted;
+                }
+                HorizontalLayout {
+                    alignment: start;
+                    Button {
+                        text: T.get("keys.manage");
+                        clicked => { EditorState.manage-keys(); }
+                    }
+                }
+            }
+            if EditorState.auth == 1: VerticalLayout {
+                spacing: 6px;
+                Text {
+                    text: T.get("auth.key_format");
+                    color: Theme.ink;
+                    wrap: word-wrap;
+                }
+                SecretBox {
+                    text <=> EditorState.private-key;
+                    masked: !EditorState.show-secrets;
+                    placeholder: T.get("auth.key_hint");
+                    edited => { EditorState.edited(); }
+                }
+                HorizontalLayout {
+                    alignment: start;
+                    Button {
+                        text: T.get("auth.import_key");
+                        clicked => { EditorState.import-key(); }
+                    }
+                }
+                Field {
+                    label: T.get("auth.key_passphrase");
+                    placeholder: T.get("auth.key_passphrase_hint");
+                    secret: !EditorState.show-secrets;
+                    text <=> EditorState.key-passphrase;
+                    edited => { EditorState.edited(); }
+                }
+            }
+            Rectangle {
+                height: 1px;
+                background: Theme.border;
+            }
+            Field {
+                label: T.get("auth.sudo_password");
+                placeholder: T.get("auth.sudo_hint");
+                secret: !EditorState.show-secrets;
+                text <=> EditorState.sudo-password;
+                edited => { EditorState.edited(); }
+            }
+            CheckBox {
+                text: T.get("auth.pty");
+                checked: EditorState.pty;
+                toggled => { EditorState.pty-toggled(self.checked); }
+            }
+            Field {
+                label: T.get("host.notes");
+                placeholder: T.get("common.optional");
+                text <=> EditorState.notes;
+                edited => { EditorState.edited(); }
+            }
+            Note {
+                text: T.get("storage.credentials_encrypted");
+            }
+            if EditorState.error != "": Notice {
+                error: true;
+                text: EditorState.error;
+            }
+        }
+    }
+    HorizontalLayout {
+        spacing: 10px;
+        alignment: start;
+        ColorButton {
+            text: T.get("host.save");
+            enabled: !Shell.busy;
+            clicked => { EditorState.save(); }
+        }
+        Button {
+            text: T.get("common.cancel");
+            enabled: !Shell.busy;
+            clicked => { EditorState.cancel(); }
+        }
+        if Shell.busy: Spinner {
+            indeterminate: true;
+            width: 22px;
+            height: 22px;
+        }
+        if Shell.busy: Text {
+            text: T.get("host.saving");
+            color: Theme.ink;
+            vertical-alignment: center;
+        }
+    }
+}

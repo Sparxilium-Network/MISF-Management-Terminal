@@ -1,0 +1,183 @@
+// Pending, upgraded, restart, raw output and connection tabs for one host, shared by the
+// host page and the batch view.
+import { LineEdit, ScrollView } from "std-widgets.slint";
+import { Theme, T } from "theme.slint";
+import { Card, Tabs, Mono } from "widgets.slint";
+
+// One line of a text panel. kind: 0 body, 1 muted, 2 warning, 3 error, 4 bold title,
+// 5 selectable bullet, 6 small muted, 7 label with a monospace value, 8 label with a value,
+// 9 a small gap, 10 a selectable monospace line.
+export struct InfoLine {
+    kind: int,
+    text: string,
+    value: string,
+}
+
+export global ResultState {
+    // 0 packages, 1 upgraded, 2 output, 3 connection, 4 restart.
+    in property <int> tab;
+    in property <string> message;
+    in property <bool> failed;
+    in property <[string]> headers;
+    in property <[[string]]> packages;
+    in property <bool> no-data;
+    in-out property <string> package-search;
+    in property <string> output;
+    in property <[InfoLine]> restart;
+    in property <[InfoLine]> connection;
+    callback tab-chosen(tab: int);
+    callback package-search-edited(text: string);
+}
+
+export component InfoLines inherits VerticalLayout {
+    in property <[InfoLine]> lines;
+    spacing: 6px;
+    alignment: start;
+    for line in root.lines: HorizontalLayout {
+        spacing: 24px;
+        if line.kind == 7 || line.kind == 8: Text {
+            width: 150px;
+            text: line.text;
+            font-weight: 700;
+            color: Theme.muted;
+            wrap: word-wrap;
+        }
+        if line.kind == 7: Mono {
+            text: line.value;
+            horizontal-stretch: 1;
+        }
+        if line.kind == 8: Text {
+            text: line.value;
+            color: Theme.ink;
+            wrap: word-wrap;
+            horizontal-stretch: 1;
+        }
+        if line.kind == 9: Rectangle { height: 4px; }
+        if line.kind == 10: Mono {
+            text: line.text;
+        }
+        if line.kind == 5: TextInput {
+            text: "•  " + line.text;
+            read-only: true;
+            color: Theme.ink;
+            wrap: word-wrap;
+            single-line: false;
+        }
+        if line.kind < 5 || line.kind == 6: Text {
+            text: line.text;
+            wrap: word-wrap;
+            font-weight: line.kind == 4 ? 700 : 400;
+            font-size: line.kind == 6 ? 11px : 14px;
+            color: line.kind == 1 || line.kind == 6 ? Theme.muted
+                : line.kind == 2 ? Theme.warning
+                : line.kind == 3 ? Theme.error : Theme.ink;
+        }
+    }
+}
+
+export component ResultPanel inherits Card {
+    min-height: 220px;
+    VerticalLayout {
+        padding: 18px;
+        spacing: 8px;
+        Tabs {
+            labels: [T.get("apt.packages"), T.get("apt.upgraded"), T.get("restart.tab"), T.get("apt.output"), T.get("conn.tab")];
+            ids: [0, 1, 4, 2, 3];
+            current: ResultState.tab;
+            chosen(id) => { ResultState.tab-chosen(id); }
+        }
+        Rectangle {
+            height: 1px;
+            background: Theme.border;
+        }
+        if ResultState.tab == 4 || ResultState.tab == 3: ScrollView {
+            vertical-stretch: 1;
+            min-height: 120px;
+            content-width: self.visible-width;
+            content-height: lines.preferred-height;
+            lines := InfoLines {
+                width: parent.width - 12px;
+                lines: ResultState.tab == 4 ? ResultState.restart : ResultState.connection;
+            }
+        }
+        if ResultState.tab == 2: ScrollView {
+            vertical-stretch: 1;
+            min-height: 120px;
+            content-width: max(self.visible-width, output.preferred-width + 8px);
+            content-height: max(self.visible-height, output.preferred-height + 8px);
+            output := TextInput {
+                x: 0;
+                y: 0;
+                text: ResultState.output;
+                read-only: true;
+                single-line: false;
+                font-family: Theme.mono-font;
+                font-size: 12px;
+                color: Theme.ink;
+            }
+        }
+        if ResultState.tab <= 1: VerticalLayout {
+            spacing: 8px;
+            vertical-stretch: 1;
+            Text {
+                text: ResultState.message;
+                color: ResultState.failed ? Theme.error : Theme.muted;
+                wrap: word-wrap;
+            }
+            HorizontalLayout {
+                alignment: start;
+                LineEdit {
+                    width: 270px;
+                    text <=> ResultState.package-search;
+                    placeholder-text: T.get("apt.filter");
+                    edited(text) => { ResultState.package-search-edited(text); }
+                }
+            }
+            table := ScrollView {
+                vertical-stretch: 1;
+                min-height: 70px;
+                property <length> row-width: max(self.visible-width - 4px, 4 * 150px);
+                content-width: self.row-width;
+                content-height: max(self.visible-height, rows.preferred-height);
+                rows := VerticalLayout {
+                    width: table.row-width;
+                    alignment: start;
+                    HorizontalLayout {
+                        padding: 6px;
+                        spacing: 20px;
+                        for caption in ResultState.headers: Text {
+                            text: caption;
+                            font-weight: 700;
+                            color: Theme.muted;
+                            horizontal-stretch: 1;
+                            min-width: 130px;
+                        }
+                    }
+                    for package[i] in ResultState.packages: Rectangle {
+                        background: Math.mod(i, 2) == 0 ? Theme.stripe : transparent;
+                        HorizontalLayout {
+                            padding: 6px;
+                            padding-top: 7px;
+                            padding-bottom: 7px;
+                            spacing: 20px;
+                            for cell in package: TextInput {
+                                text: cell;
+                                read-only: true;
+                                color: Theme.ink;
+                                horizontal-stretch: 1;
+                                min-width: 130px;
+                            }
+                        }
+                    }
+                    if ResultState.no-data: Text {
+                        text: T.get("apt.no_data");
+                        color: Theme.muted;
+                        horizontal-alignment: center;
+                        height: 60px;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+    }
+}

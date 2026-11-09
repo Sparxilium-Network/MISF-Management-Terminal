@@ -1,4 +1,3 @@
-use eframe::egui;
 use misf_core::{
     audit::AuditLog,
     batch::{self, Decision},
@@ -7,7 +6,10 @@ use misf_core::{
     session::Session,
 };
 use serde_json::Value;
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{
+    Arc,
+    mpsc::{self, Receiver, Sender},
+};
 use tokio::sync::{
     Mutex,
     mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
@@ -31,6 +33,9 @@ pub enum Event {
     },
 }
 
+/// Asks the UI thread to read [`Worker::events`]; called after every event is sent.
+pub type Wake = Arc<dyn Fn() + Send + Sync>;
+
 pub struct Worker {
     pub requests: Sender<Value>,
     pub events: Receiver<Event>,
@@ -41,14 +46,14 @@ pub struct Worker {
 /// Forwards batch progress to the UI and waits for its answer to a failure.
 struct Relay {
     events: Sender<Event>,
-    ctx: egui::Context,
+    wake: Wake,
     decisions: Mutex<UnboundedReceiver<Decision>>,
 }
 
 impl Relay {
     fn send(&self, event: Event) {
         let _ = self.events.send(event);
-        self.ctx.request_repaint();
+        (self.wake)();
     }
 }
 
@@ -77,7 +82,7 @@ impl batch::Observer for Relay {
 }
 
 impl Worker {
-    pub fn new(ctx: egui::Context, paths: RuntimePaths, audit: AuditLog) -> Self {
+    pub fn new(wake: Wake, paths: RuntimePaths, audit: AuditLog) -> Self {
         let (requests, jobs) = mpsc::channel::<Value>();
         let (events, results) = mpsc::channel();
         let (decisions, answers) = unbounded_channel();
@@ -88,7 +93,7 @@ impl Worker {
             let mut session = Session::new(&paths, audit);
             session.set_batch_observer(Box::new(Relay {
                 events: events.clone(),
-                ctx: ctx.clone(),
+                wake: wake.clone(),
                 decisions: Mutex::new(answers),
             }));
             while let Ok(request) = jobs.recv() {
@@ -97,13 +102,13 @@ impl Worker {
                     Ok(runtime) => runtime
                         .block_on(session.handle(request, &|message| {
                             let _ = events.send(Event::Progress(message.into()));
-                            ctx.request_repaint();
+                            wake();
                         }))
                         .map_err(|error| format!("{error:#}")),
                     Err(error) => Err(format!("無法啟動網路核心：{error}")),
                 };
                 let _ = events.send(Event::Done { action, result });
-                ctx.request_repaint();
+                wake();
             }
         });
         Self {

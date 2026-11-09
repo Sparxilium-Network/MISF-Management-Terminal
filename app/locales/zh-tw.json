@@ -390,7 +390,7 @@
   "log.plan": "dist-upgrade 模擬結果（未變更主機）",
   "progress.batch": "批次作業進行中：已完成 {count} 台",
   "batch.title": "批次套件作業",
-  "batch.description": "勾選多台主機，同時檢查或升級（最多 8 台並行）。一次只能選同一種套件管理器的主機；表格左上角的 ⇅ 可切換排序，點選主機名稱可在下方查看套件。",
+  "batch.description": "勾選多台主機，同時檢查或升級（最多 8 台並行）。一次只能選同一種套件管理器的主機；表格排序在「設定 › 偏好設定 › 批次作業」調整，點選主機名稱可在下方查看套件。",
   "batch.select_all": "全選可用主機",
   "batch.clear": "清除選取",
   "batch.selected": "已選 {count} 台",
