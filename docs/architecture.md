@@ -1,6 +1,6 @@
 # MISF Management Terminal 架構
 
-> 最後修改：2026-11-10 ｜ 基於 commit：`1c6f0cf`
+> 最後修改：2026-11-10 ｜ 基於 commit：`2e87553`
 
 > [!WARNING]
 > **本專案仍處於開發階段，請勿用於正式環境。** 相關安全保護機制尚未完善。
@@ -11,7 +11,7 @@
 
 ## 概觀
 
-單一桌面執行檔：Slint（fluent 樣式、winit＋OpenGL 繪製）顯示原生視窗，直接呼叫同一程序內的 Rust 核心。沒有管理伺服器、HTTP 服務、TOKEN 或遠端資料庫。SSH 使用內建的 russh，不執行系統 `ssh`，也不讀取本機 SSH config、known_hosts、agent 或系統私鑰。
+單一桌面執行檔：Slint（fluent 樣式、winit 視窗、Skia 繪製）顯示原生視窗，直接呼叫同一程序內的 Rust 核心。沒有管理伺服器、HTTP 服務、TOKEN 或遠端資料庫。SSH 使用內建的 russh，不執行系統 `ssh`，也不讀取本機 SSH config、known_hosts、agent 或系統私鑰。
 
 ```mermaid
 flowchart LR

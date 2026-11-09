@@ -377,15 +377,17 @@ pub fn push(app: &mut App, w: &AppWindow) {
     ));
     let columns = app.preferences.batch_columns.visible();
     let weights = app.preferences.batch_columns.weights;
-    state.set_columns(ModelRc::new(VecModel::from(
-        columns
-            .iter()
-            .map(|(i, column)| BatchColumnView {
-                label: column.label(t).into(),
-                weight: weights[*i],
-            })
-            .collect::<Vec<_>>(),
-    )));
+    // Updated in place: the edge being dragged must not be rebuilt under the pointer.
+    let views: Vec<BatchColumnView> = columns
+        .iter()
+        .map(|(i, column)| BatchColumnView {
+            label: column.label(t).into(),
+            weight: weights[*i],
+        })
+        .collect();
+    sync_rows(state.get_columns(), views, |columns| {
+        state.set_columns(columns)
+    });
     let mut table = rows(app, t, &order, &headings);
     keep_inner(&state.get_rows(), &mut table, |row| &mut row.cells);
     sync_rows(state.get_rows(), table, |rows| state.set_rows(rows));

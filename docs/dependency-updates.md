@@ -1,6 +1,6 @@
 # 依賴更新與安全公告
 
-> 最後修改：2026-11-10 ｜ 基於 commit：`a20ea4e`
+> 最後修改：2026-11-10 ｜ 基於 commit：`2e87553`
 
 依賴的實際版本以已提交的 `Cargo.lock` 為準；建置與發布一律使用 `--locked`，不在建置時改變依賴。Dependabot 每日檢查 Actions 與 Cargo 依賴並提出更新 PR，通過驗證及合併後才進入發布。
 
@@ -42,4 +42,4 @@ AES／Argon2 等 API 世代，上游容器原始碼維持原樣，沒有改寫�
 `Cargo.lock` 雜湊；不一致時 `package.ps1`（含 CI）拒絕打包。雙授權套件依
 `about.toml` 的順序優先採用 MIT（附各套件版權行、無 NOTICE 義務）；目前只採
 Apache-2.0 的套件皆無 NOTICE 檔，LUKSbox 的 NOTICE 另附於 `licenses/LUKSbox/`。
-Slint 升級時，須確認其授權選項仍含 GPL-3.0-only，並確認 Windows／Linux 版沒有另外內嵌 Slint 自帶的字型（`i-slint-common` 的 Inter 字型目前只在 wasm／QNX 內嵌）；介面字型是專案自帶的 Noto Sans TC。
+Slint 升級時，須確認其授權選項仍含 GPL-3.0-only，並確認 Windows／Linux 版沒有另外內嵌 Slint 自帶的字型（`i-slint-common` 的 Inter 字型目前只在 wasm／QNX 內嵌）；介面字型是專案自帶的 Noto Sans TC。Skia 由 `skia-bindings` 下載預先編譯檔，升級時需更新 `licenses/Skia/LICENSE`（取自建置輸出的 `LICENSE_SKIA`）並確認 `THIRD_PARTY_NOTICES.md` 列出的功能組合。

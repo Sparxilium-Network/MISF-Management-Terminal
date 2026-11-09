@@ -232,7 +232,7 @@
   "font.title": "Font",
   "font.noto": "Noto Sans TC",
   "font.noto_bold": "Noto Sans TC Bold",
-  "font.system": "System font (the original)",
+  "font.system": "System font",
   "density.title": "Host list density",
   "density.comfortable": "Comfortable (cards)",
   "density.compact": "Compact (one-line tree)",

@@ -109,14 +109,8 @@ pub fn build(
 pub fn run(paths: RuntimePaths, audit: AuditLog) -> Result<(), slint::PlatformError> {
     slint::BackendSelector::new()
         .backend_name("winit".into())
-        .renderer_name(
-            if cfg!(feature = "skia") {
-                "skia"
-            } else {
-                "femtovg"
-            }
-            .into(),
-        )
+        // Skia draws text more sharply than femtovg's grayscale-only antialiasing.
+        .renderer_name("skia".into())
         .select()?;
     let wake: crate::worker::Wake = Arc::new(|| {
         let _ = slint::invoke_from_event_loop(|| {

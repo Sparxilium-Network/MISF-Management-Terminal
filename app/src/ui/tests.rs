@@ -745,6 +745,33 @@ fn pages_respond_to_clicks() {
     assert_eq!(app.view, View::Host);
     drop(app);
 
+    // Dragging the edge between two batch columns widens the left one and saves it.
+    ctx.update(|app| {
+        app.set_view(View::Batch);
+        app.busy = false;
+    });
+    let before = ctx.app.borrow().preferences.batch_columns.weights;
+    let edge = ElementHandle::find_by_element_id(&main, "BatchTable::handle")
+        .find(|e| e.size().width > 0.0)
+        .expect("no column edge to drag");
+    let (at, size) = (edge.absolute_position(), edge.size());
+    let mut position =
+        slint::LogicalPosition::new(at.x + size.width / 2.0, at.y + size.height / 2.0);
+    let window = main.window();
+    window.dispatch_event(slint::platform::WindowEvent::PointerMoved { position });
+    window.dispatch_event(slint::platform::WindowEvent::PointerPressed { position, button });
+    for _ in 0..4 {
+        position.x += 10.0;
+        window.dispatch_event(slint::platform::WindowEvent::PointerMoved { position });
+    }
+    window.dispatch_event(slint::platform::WindowEvent::PointerReleased { position, button });
+    // `changed` handlers run on the event loop's next pass.
+    slint::platform::update_timers_and_animations();
+    let after = ctx.app.borrow().preferences.batch_columns.weights;
+    assert_ne!(before, after);
+    let saved = crate::preferences::Preferences::load(&ctx.app.borrow().settings_path).unwrap();
+    assert_eq!(saved.batch_columns.weights, after);
+
     // The package window opens over the batch table and Escape closes it.
     ctx.update(|app| {
         app.set_view(View::Batch);

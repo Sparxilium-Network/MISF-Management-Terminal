@@ -48,6 +48,17 @@ allows combining with MISF. The full GPL v3 text is in
 `licenses/THIRD_PARTY_LICENSES.html`. The source of the Slint version used is
 available from crates.io and https://github.com/slint-ui/slint.
 
+## Skia
+
+The interface is drawn with [Skia](https://skia.org), copyright Google Inc.,
+under the BSD 3-Clause license; the full text is in `licenses/Skia/LICENSE`.
+The Skia library is linked from the prebuilt binaries published by the
+[rust-skia](https://github.com/rust-skia/rust-skia) project (`skia-bindings`
+0.153.3, built with the `gl`, `d3d`, JPEG and PDF features). Those binaries also
+contain third-party code that Skia bundles, such as libjpeg-turbo, libpng, zlib
+and Wuffs, each under its own permissive license; see Skia's `third_party`
+directory for their texts.
+
 ## Noto Sans TC
 
 The interface font, Noto Sans TC (variable weight,

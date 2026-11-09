@@ -1,6 +1,6 @@
 # MISF Management Terminal 開發說明
 
-> 最後修改：2026-11-10 ｜ 基於 commit：`62da7a9`
+> 最後修改：2026-11-10 ｜ 基於 commit：`2e87553`
 
 一般使用方式見 [README](../README.md) 與 [使用指南](user-guide.md)。本文件是開發文件的入口，給開發者與維護者，記錄建置、儲存格式、安全設計細節與測試方式。
 
@@ -63,7 +63,7 @@ Linux／macOS 可使用 `cargo run --locked -p misf`，須在對應平台建置�
 
 - Windows：`MISF-Management-Terminal-windows-x86_64.zip`。
 - Linux：`MISF-Management-Terminal-linux-x86_64.tar.gz`。這是原生動態連結套件，需要圖形桌面及相容的 glibc、OpenGL、X11／Wayland、fontconfig 等系統函式庫；不是 AppImage，也不保證支援較舊發行版。
-- 每個套件內附 README、`docs/`、本專案 AGPL-3.0 授權全文 `LICENSE`，以及第三方授權（`THIRD_PARTY_NOTICES.md`、`licenses/`：所有編入執行檔的 Rust 相依套件授權全文、LUKSbox 授權與內嵌字型 Noto Sans TC 的 OFL 授權；Slint 依 GPL-3.0-only 使用）；另附 SHA-256 校驗檔。
+- 每個套件內附 README、`docs/`、本專案 AGPL-3.0 授權全文 `LICENSE`，以及第三方授權（`THIRD_PARTY_NOTICES.md`、`licenses/`：所有編入執行檔的 Rust 相依套件授權全文、LUKSbox 授權、Skia 授權與內嵌字型 Noto Sans TC 的 OFL 授權；Slint 依 GPL-3.0-only 使用）；另附 SHA-256 校驗檔。
 - 相依套件授權清單 `licenses/THIRD_PARTY_LICENSES.html` 由 `./licenses.ps1` 以 cargo-about 依 `Cargo.lock` 產生，並先以 `cargo deny check licenses` 依 `deny.toml` 確認沒有與 AGPL 不相容的授權；更新相依後須重新執行並提交。清單與 `Cargo.lock` 不一致時，`package.ps1` 會拒絕打包。
 
 `main`／手動執行（選 `main`）使用 `dev-<run_number>.<run_attempt>-<短 commit>` 作為版本標籤；推送 `v*` 標籤時沿用該標籤。即使標籤為 `v1.0.0`，本流程仍只發布 Pre-release。已公開的同名版本不會被重跑覆寫；上傳未完成的草稿可重跑補齊。
@@ -167,6 +167,6 @@ LUKSbox 測試使用暫存資料，涵蓋未建立容器時拒絕主機操作且
 
 開發用畫面擷取可使用 `cargo build -p misf --features capture`，以 `MISF_SCREENSHOT_TO` 指定 PNG 路徑，並以 `--debug.dir` 指定測試資料。`MISF_OPEN_EDITOR=1`／`MISF_OPEN_SETTINGS=1`／`MISF_OPEN_PASSKEY=1`／`MISF_OPEN_BATCH=1`／`MISF_OPEN_KEYS=1` 可預先開啟對應畫面；旗標只有明確設為 `1` 才啟用；`MISF_OPEN_SETTINGS=about`／`preferences`／`security`／`batch` 直接開啟「關於」或「偏好設定」下的「外觀與主機清單」／「安全性」／「批次作業」頁（設定是獨立視窗，此時截取設定視窗）。`MISF_FIXTURE=1` 以幾台假主機取代主機庫內容，方便截取主機頁與批次頁。debug 模式的 Passkey 按鈕停用，擷取不操作硬體。正式 release 預設不啟用擷取功能。
 
-預設以 femtovg（OpenGL）繪製。`--features skia` 改用 Skia 繪製，供比較文字清晰度；建置時 `skia-bindings` 會從 GitHub 下載預先編譯的 Skia。此選項目前不是正式版本，授權清單也只涵蓋預設建置。可與預設版分開建置：`cargo build --release -p misf --features skia --target-dir target/skia`。
+畫面以 Slint 的 Skia 繪圖引擎繪製（文字比 femtovg 清楚）。建置時 `skia-bindings` 會從 rust-skia 的 GitHub 發行頁下載預先編譯的 Skia，第一次建置需要網路；Skia 授權全文在 `licenses/Skia/LICENSE`。
 
 `.daybrake/` 保存 DayBrake 儲存安全測試的任務書、報告與已知安全問題（`.daybrake/Know.md`）。`.daybrake` 不是 daybreak 拼錯，是故意的。

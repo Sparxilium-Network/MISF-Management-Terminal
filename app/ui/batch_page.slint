@@ -261,14 +261,17 @@ export component BatchTable {
             background: handle.has-hover || handle.pressed ? Theme.blue : Theme.border;
         }
         HintArea {
+            width: parent.width;
+            height: parent.height;
             plain: T.get("batch_columns.drag_hint");
             handle := TouchArea {
                 mouse-cursor: ew-resize;
                 moved => {
                     BatchState.column-drag(k, self.mouse-x - self.pressed-x, root.spare);
                 }
-                pointer-event(event) => {
-                    if (event.kind == PointerEventKind.up) {
+                // Saves once the edge is let go, wherever the pointer is then.
+                changed pressed => {
+                    if (!self.pressed) {
                         BatchState.column-drag-end();
                     }
                 }
