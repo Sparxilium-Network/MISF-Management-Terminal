@@ -22,8 +22,8 @@ try {
     if (Test-Path -LiteralPath "$outputPath/licenses") { Remove-Item -LiteralPath "$outputPath/licenses" -Recurse -Force }
     New-Item -ItemType Directory -Path "$outputPath/licenses/LUKSbox" -Force | Out-Null
     Get-ChildItem -LiteralPath 'third_party/LUKSbox' -File | Copy-Item -Destination "$outputPath/licenses/LUKSbox"
-    New-Item -ItemType Directory -Path "$outputPath/licenses/Skia" -Force | Out-Null
-    Copy-Item -LiteralPath 'licenses/Skia/LICENSE' -Destination "$outputPath/licenses/Skia"
+    # Skia and the libraries bundled in its prebuilt binaries.
+    Copy-Item -LiteralPath 'licenses/Skia' -Destination "$outputPath/licenses" -Recurse
     New-Item -ItemType Directory -Path "$outputPath/licenses/NotoSansTC" -Force | Out-Null
     Copy-Item -LiteralPath 'assets/fonts/OFL.txt' -Destination "$outputPath/licenses/NotoSansTC"
     Copy-Item -LiteralPath 'licenses/THIRD_PARTY_LICENSES.html' -Destination "$outputPath/licenses"

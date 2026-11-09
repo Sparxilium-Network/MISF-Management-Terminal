@@ -1,5 +1,10 @@
 # 全工作區檢查結果
 
+## 2026-11-10（補齊 Skia 內含元件授權，分支 `slint-rego`，基於 `cc7ba2e`）
+
+- 依 rust-skia 的建置參數與 Windows `skia.lib` 符號確認，預編譯 Skia 內含 libpng、libjpeg-turbo、zlib、Expat、Wuffs、D3D12 Memory Allocator；FreeType、HarfBuzz、ICU、libwebp 未編入。依 Skia `m153-0.101.2` 的 `DEPS` 釘選版本，自上游 googlesource 取得各授權全文放入 `licenses/Skia/third_party/`（Wuffs 無 NOTICE）；Linux 版另依 DEPS 附 Vulkan Memory Allocator 授權，但未實際建置 Linux 版驗證。
+- `THIRD_PARTY_NOTICES.md` 加入元件表與 IJG 要求的致謝句；打包改為複製整個 `licenses/Skia/`。
+
 ## 2026-11-10（改用 Skia、批次欄寬拖曳修正，分支 `slint-rego`，基於 `2e87553`）
 
 - 使用者比較後選定 Skia：繪圖引擎固定為 Skia，移除 femtovg 與 `skia` 建置選項。授權清單重新產生（含 skia-safe／skia-bindings），另附 Skia 本身的 BSD-3 全文 `licenses/Skia/LICENSE`，聲明檔列出預編譯檔內含的 libjpeg-turbo、libpng、zlib、Wuffs 等元件（各元件授權全文尚未逐一附上）。

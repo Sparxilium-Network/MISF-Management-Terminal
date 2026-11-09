@@ -54,10 +54,29 @@ The interface is drawn with [Skia](https://skia.org), copyright Google Inc.,
 under the BSD 3-Clause license; the full text is in `licenses/Skia/LICENSE`.
 The Skia library is linked from the prebuilt binaries published by the
 [rust-skia](https://github.com/rust-skia/rust-skia) project (`skia-bindings`
-0.153.3, built with the `gl`, `d3d`, JPEG and PDF features). Those binaries also
-contain third-party code that Skia bundles, such as libjpeg-turbo, libpng, zlib
-and Wuffs, each under its own permissive license; see Skia's `third_party`
-directory for their texts.
+0.153.3, Skia `m153-0.101.2`, built for Windows with the `gl`, `d3d`, JPEG and
+PDF features). Skia's color management (skcms) is part of Skia itself.
+
+Those binaries also contain the following third-party libraries that Skia
+bundles. Their license texts, taken from the revisions pinned in Skia's `DEPS`,
+are in `licenses/Skia/third_party/`:
+
+| Library | Revision | License | Text |
+| --- | --- | --- | --- |
+| libpng | `d5515b5b8be3` | PNG Reference Library License v2 / libpng | `libpng/LICENSE` |
+| libjpeg-turbo (Chromium) | `e14cbfaa8552` | IJG License, Modified BSD (3-clause), zlib | `libjpeg-turbo/LICENSE.md`, `libjpeg-turbo/README.ijg` |
+| zlib (Chromium) | `646b7f569718` | zlib License | `zlib/LICENSE` |
+| Expat | `6154446fccef` | MIT | `expat/COPYING` |
+| Wuffs | `e3f919ccfe3e` | Apache License 2.0 | `wuffs/LICENSE` |
+| D3D12 Memory Allocator | `169895d529df` | MIT | `D3D12MemoryAllocator/LICENSE.txt` |
+| Vulkan Memory Allocator (Linux build) | `eb744ea7a2b1` | MIT | `VulkanMemoryAllocator/LICENSE.txt` |
+
+This software is based in part on the work of the Independent JPEG Group.
+
+The Windows build does not use FreeType, HarfBuzz, ICU or libwebp. The Linux build
+links the system's FreeType and fontconfig dynamically (not bundled) and is built
+with `gl` and `vulkan` instead of `d3d`; the D3D12 Memory Allocator applies to
+Windows only.
 
 ## Noto Sans TC
 
