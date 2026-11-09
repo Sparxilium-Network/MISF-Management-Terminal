@@ -740,6 +740,73 @@ fn pages_respond_to_clicks() {
     assert_eq!(app.view, View::Host);
     drop(app);
 
+    // The package window opens over the batch table and Escape closes it.
+    ctx.update(|app| {
+        app.set_view(View::Batch);
+        app.batch_popup = true;
+    });
+    assert!(main.global::<BatchState>().get_popup_shown());
+    let escape: slint::SharedString = slint::platform::Key::Escape.into();
+    main.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+            text: escape.clone(),
+        });
+    main.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyReleased { text: escape });
+    assert!(!ctx.app.borrow().batch_popup);
+
+    // Hovering over a control shows its hint only after a pause.
+    ctx.update(|app| {
+        app.selected = "web".into();
+        app.set_view(View::Host);
+    });
+    let test = first(&main, t.get("host.test"));
+    let (at, size) = (test.absolute_position(), test.size());
+    let over = slint::LogicalPosition::new(at.x + size.width / 2.0, at.y + size.height / 2.0);
+    main.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerMoved { position: over });
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(1000));
+    assert!(!main.global::<super::Tip>().get_shown());
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(700));
+    let tip = main.global::<super::Tip>();
+    assert!(tip.get_shown());
+    assert_eq!(tip.get_hint().title.as_str(), t.get("hint.test_title"));
+    // Moving away hides it.
+    main.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerMoved {
+            position: slint::LogicalPosition::new(700.0, 700.0),
+        });
+    assert!(!tip.get_shown());
+
+    // Dragging lab-01 above web-01 in the sidebar saves the new order.
+    ctx.update(|app| {
+        app.set_view(View::Host);
+        app.busy = false;
+    });
+    let card = |name: &str| {
+        ElementHandle::find_by_accessible_label(&main, name)
+            .find(|e| e.size().width > 0.0 && e.absolute_position().x < 280.0)
+            .unwrap_or_else(|| panic!("{name} not in the sidebar"))
+    };
+    let (lab, web) = (card("lab-01"), card("web-01"));
+    let from = lab.absolute_position();
+    let to = web.absolute_position();
+    let window = main.window();
+    let mut position = slint::LogicalPosition::new(from.x + 4.0, from.y + 4.0);
+    window.dispatch_event(slint::platform::WindowEvent::PointerMoved { position });
+    window.dispatch_event(slint::platform::WindowEvent::PointerPressed { position, button });
+    for step in 1..=10 {
+        position.y = from.y + 4.0 + (to.y - from.y) * step as f32 / 10.0;
+        window.dispatch_event(slint::platform::WindowEvent::PointerMoved { position });
+    }
+    assert!(ctx.app.borrow().drag.is_some());
+    window.dispatch_event(slint::platform::WindowEvent::PointerReleased { position, button });
+    assert!(ctx.app.borrow().drag.is_none());
+    let request = commands.try_recv().expect("no arrange request");
+    assert_eq!(request["action"], "arrange");
+    assert_eq!(request["hosts"][0]["id"], "lab");
+    ctx.update(|app| app.busy = false);
+
     // The settings tree opens pages and collapses the Preferences branch.
     ctx.update(|app| {
         app.settings_page = SettingsPage::Vault;

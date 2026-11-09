@@ -1,5 +1,7 @@
 // The main window: top bar, host list, the host or batch page, the status line, and the
 // dialogs and menus drawn over them.
+// Noto Sans TC (SIL OFL 1.1), embedded so every system draws the same text.
+import "../../assets/fonts/NotoSansTC-VariableFont_wght.ttf";
 import { Button, Spinner } from "std-widgets.slint";
 import { Theme, T, AppearanceSync } from "theme.slint";
 import { HintData, Tip, Clip, ClipboardSink, TipOverlay, ColorButton, TextButton, Tabs, Card, Modal, Notice } from "widgets.slint";
@@ -176,6 +178,7 @@ export component AppWindow inherits Window {
     preferred-height: 820px;
     background: Theme.background;
     default-font-size: 14px;
+    default-font-family: "Noto Sans TC";
     AppearanceSync { }
     ClipboardSink { }
     VerticalLayout {

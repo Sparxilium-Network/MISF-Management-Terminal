@@ -362,7 +362,7 @@ export component BatchPage inherits VerticalLayout {
     Card {
         property <length> full: (BatchState.rows.length + 1) * 34px + 36px;
         vertical-stretch: BatchState.detail-inline ? 0 : 1;
-        min-height: min(self.full, 120px);
+        min-height: min(self.full, 170px);
         preferred-height: BatchState.detail-inline ? min(self.full, 276px) : self.full;
         max-height: BatchState.detail-inline ? min(self.full, 276px) : max(self.full, 100000px);
         if BatchState.rows.length == 0: Text {

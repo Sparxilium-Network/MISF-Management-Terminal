@@ -18,9 +18,12 @@ try {
     Copy-Item -LiteralPath 'README.md' -Destination $outputPath
     # AGPL-3.0 full text for MISF itself, and every notice for code compiled into the binary.
     Copy-Item -LiteralPath 'LICENSE' -Destination $outputPath
-    New-Item -ItemType Directory -Path "$outputPath/licenses/LUKSbox", "$outputPath/licenses/egui-fonts" -Force | Out-Null
+    # Rebuilt each time, so notices for code no longer compiled in do not linger.
+    if (Test-Path -LiteralPath "$outputPath/licenses") { Remove-Item -LiteralPath "$outputPath/licenses" -Recurse -Force }
+    New-Item -ItemType Directory -Path "$outputPath/licenses/LUKSbox" -Force | Out-Null
     Get-ChildItem -LiteralPath 'third_party/LUKSbox' -File | Copy-Item -Destination "$outputPath/licenses/LUKSbox"
-    Get-ChildItem -LiteralPath 'licenses/egui-fonts' -File | Copy-Item -Destination "$outputPath/licenses/egui-fonts"
+    New-Item -ItemType Directory -Path "$outputPath/licenses/NotoSansTC" -Force | Out-Null
+    Copy-Item -LiteralPath 'assets/fonts/OFL.txt' -Destination "$outputPath/licenses/NotoSansTC"
     Copy-Item -LiteralPath 'licenses/THIRD_PARTY_LICENSES.html' -Destination "$outputPath/licenses"
     Copy-Item -LiteralPath 'THIRD_PARTY_NOTICES.md' -Destination $outputPath
     New-Item -ItemType Directory -Path "$outputPath/docs" -Force | Out-Null

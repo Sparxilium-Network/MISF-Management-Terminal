@@ -1,5 +1,13 @@
 # 全工作區檢查結果
 
+## 2026-11-10（Slint 版補完：Noto Sans TC、授權、Esc、互動測試，分支 `slint-rego`，基於 `a20ea4e`）
+
+- 介面字型改為使用者提供的 Noto Sans TC 可變字重字型，內嵌於執行檔（約多 12 MB）；OFL 授權放在 `assets/fonts/OFL.txt`，打包時附為 `licenses/NotoSansTC/OFL.txt`。側欄卡片高度配合新字型的行高調整。
+- 授權：Slint 依 GPL-3.0-only 使用，`deny.toml`／`about.toml` 加入 GPL-3.0-only，移除已不再使用的 OFL-1.1、Ubuntu-font-1.0 套件授權；刪除 `licenses/egui-fonts/`，重新產生 `THIRD_PARTY_LICENSES.html`；`THIRD_PARTY_NOTICES.md` 改寫 egui 段落為 Slint 與 Noto Sans TC。打包時先清空輸出的 `licenses/`，避免舊的 egui 字型授權殘留。
+- 批次套件明細視窗與「需要 dist-upgrade」報告可按 Esc 關閉（與 egui 版相同，其他對話框不受 Esc 影響）。
+- fmt、Clippy（`--all-features -D warnings`）通過；`cargo test --workspace` 全部通過（22、20、57、24 項）。Slint 測試後端以實際指標與鍵盤事件驗證：側欄拖曳排序送出新順序、懸停 1 秒不出現而 1.7 秒出現提示且移開即消失、Esc 關閉明細視窗、批次表格雙擊、進階選單、設定樹。
+- 截圖確認新字型的主機頁、批次頁、緊湊側欄與設定視窗。仍未在執行中的 app 實際等待閒置自動鎖定（winit 輸入監看與每秒檢查無法在測試後端執行；計時邏輯有單元測試），右鍵複製只驗證了複製內容，未實際開啟右鍵選單。
+
 ## 2026-11-10（UI 改用 Slint，分支 `slint-rego`，基於 `1c6f0cf`）
 
 - 移除 eframe／egui，畫面改以 Slint 1.18.1（GPLv3 授權選項、fluent 樣式、winit＋femtovg）宣告於 `app/ui/*.slint`；原 6300 行的 `ui.rs` 拆成 `app/src/ui/` 下的狀態模組與各頁模組，最大檔約 900 行。設定改為獨立系統視窗。

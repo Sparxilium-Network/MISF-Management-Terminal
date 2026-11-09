@@ -240,13 +240,14 @@ impl App {
                     .last_check
                     .as_ref()
                     .is_some_and(|r| r.status == "success");
+                // Heights fit Noto Sans TC's line height: 15 px names, 11 px details.
                 let height = if compact {
-                    22.0
+                    24.0
                 } else if lines.is_empty() {
                     // A card with only its name is shorter, to fit more hosts.
-                    39.0
+                    42.0
                 } else {
-                    48.0 + 16.0 * lines.len() as f32
+                    55.0 + 18.0 * lines.len() as f32
                 };
                 let row = SidebarRow {
                     kind: HOST,

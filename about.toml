@@ -14,8 +14,8 @@ accepted = [
     "0BSD",
     "Unlicense",
     "Unicode-3.0",
-    "OFL-1.1",
-    "Ubuntu-font-1.0",
+    # Last, so permissive licenses win; Slint is used under this option.
+    "GPL-3.0-only",
 ]
 # Only the shipped platforms; other targets' dependencies are not in the binary.
 targets = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"]

@@ -10,6 +10,8 @@
 | `icons/misf-{16,24,32,48,64,128,256,512}.png` | 各尺寸透明 PNG；程式視窗內嵌使用 256 像素版本 |
 | `linux/org.sparxilium.misf.desktop` | Linux 應用程式選單項目，與視窗的 application ID 對應 |
 
+`fonts/` 內是使用者提供的 `Noto_Sans_TC.zip` 中的可變字重字型 `NotoSansTC-VariableFont_wght.ttf` 與其授權 `OFL.txt`（SIL Open Font License 1.1），原樣匯入。Slint 在編譯時把字型內嵌進執行檔，作為兩個視窗的預設字型；靜態字重檔未匯入，因為可變字重檔已涵蓋所有字重。等寬的指令文字仍使用系統的 Consolas。
+
 Windows 使用 `app/build.rs` 與 `winresource` 將 ICO 編入 `misf.exe`，視窗圖示則由 `app/src/main.rs` 直接內嵌 PNG。執行時不需要另外讀取圖示檔。
 
 `package.ps1` 在兩個平台的套件附上本資料夾。Linux 套件另附 `share/applications/org.sparxilium.misf.desktop` 與 `share/icons/hicolor/`，供使用者安裝選單圖示；單純執行 `./misf` 不會修改桌面設定。

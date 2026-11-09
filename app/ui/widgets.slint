@@ -429,28 +429,42 @@ export component Tabs inherits HorizontalLayout {
 export component Modal {
     in property <length> panel-width: 560px;
     in property <length> max-panel-height: root.height - 60px;
+    // Called for Escape and for a click outside the panel.
     callback dismissed();
-    Rectangle {
-        background: #00000073;
-        TouchArea {
-            clicked => { root.dismissed(); }
+    init => { keys.focus(); }
+    // Keys the dialog's inputs do not use, such as Escape, end up here.
+    keys := FocusScope {
+        width: root.width;
+        height: root.height;
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                root.dismissed();
+                return accept;
+            }
+            reject
         }
-    }
-    panel := Rectangle {
-        width: min(root.panel-width, root.width - 40px);
-        height: min(root.max-panel-height, body.preferred-height);
-        background: Theme.surface;
-        border-radius: 8px;
-        border-color: Theme.border;
-        border-width: 1px;
-        drop-shadow-blur: 16px;
-        drop-shadow-color: #00000060;
-        // Swallows clicks so they never reach the dim layer.
-        TouchArea { }
-        body := VerticalLayout {
-            padding: 20px;
-            spacing: 8px;
-            @children
+        Rectangle {
+            background: #00000073;
+            TouchArea {
+                clicked => { root.dismissed(); }
+            }
+        }
+        panel := Rectangle {
+            width: min(root.panel-width, root.width - 40px);
+            height: min(root.max-panel-height, body.preferred-height);
+            background: Theme.surface;
+            border-radius: 8px;
+            border-color: Theme.border;
+            border-width: 1px;
+            drop-shadow-blur: 16px;
+            drop-shadow-color: #00000060;
+            // Swallows clicks so they never reach the dim layer.
+            TouchArea { }
+            body := VerticalLayout {
+                padding: 20px;
+                spacing: 8px;
+                @children
+            }
         }
     }
 }

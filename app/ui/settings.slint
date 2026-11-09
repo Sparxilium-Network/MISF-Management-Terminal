@@ -1,4 +1,6 @@
 // The settings window: a category tree on the left and the chosen page on the right.
+// Noto Sans TC (SIL OFL 1.1), embedded so every system draws the same text.
+import "../../assets/fonts/NotoSansTC-VariableFont_wght.ttf";
 import { Button, ComboBox, CheckBox, SpinBox, ScrollView } from "std-widgets.slint";
 import { Theme, T, AppearanceSync } from "theme.slint";
 import { ColorButton, TextButton, SectionTitle, Note, Notice, Body, HintArea, TipOverlay } from "widgets.slint";
@@ -438,6 +440,7 @@ export component SettingsWindow inherits Window {
     preferred-height: 400px;
     background: Theme.background;
     default-font-size: 14px;
+    default-font-family: "Noto Sans TC";
     AppearanceSync { }
     HorizontalLayout {
         padding: 12px;

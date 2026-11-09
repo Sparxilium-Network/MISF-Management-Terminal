@@ -16,8 +16,9 @@ allow = [
     "0BSD",
     "Unlicense",
     "Unicode-3.0",
-    "OFL-1.1",
-    "Ubuntu-font-1.0",
+    # Slint (the GUI) is used under its GPL-3.0-only option, which AGPL v3 section 13
+    # allows combining with MISF.
+    "GPL-3.0-only",
 ]
 confidence-threshold = 0.9
 # MISF's own crates (AGPL-3.0, root LICENSE) and the local LUKSbox FIDO2 copy.

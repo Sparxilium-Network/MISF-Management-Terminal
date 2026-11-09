@@ -38,13 +38,25 @@ SQLite 3.54.1 is compiled in through `libsqlite3-sys` (bundled). SQLite is in
 the public domain. `ring` includes code derived from BoringSSL and OpenSSL;
 its ISC and Apache-2.0 texts are included in the generated file.
 
-## Fonts embedded by egui
+## Slint
 
-eframe's `default_fonts` feature embeds Ubuntu Light (Ubuntu Font Licence 1.0),
-Hack Regular (MIT, with Bitstream Vera and DejaVu notices), and a five-glyph
-subset of emoji-icon-font (MIT). Their license texts are in
-`licenses/egui-fonts/`. Noto Emoji is not embedded. Fonts loaded from the
-system at run time are not distributed with MISF.
+The user interface is built with [Slint](https://slint.dev) 1.18.1 (the `slint`
+and `i-slint-*` crates), copyright SixtyFPS GmbH. Slint is offered under
+GPL-3.0-only, the Slint Royalty-free License 2.0, or the Slint Software License
+3.0; MISF uses it under **GPL-3.0-only**, which section 13 of the GNU AGPL v3
+allows combining with MISF. The full GPL v3 text is in
+`licenses/THIRD_PARTY_LICENSES.html`. The source of the Slint version used is
+available from crates.io and https://github.com/slint-ui/slint.
+
+## Noto Sans TC
+
+The interface font, Noto Sans TC (variable weight,
+`assets/fonts/NotoSansTC-VariableFont_wght.ttf`), is embedded in the binary.
+Copyright 2014-2021 Adobe (http://www.adobe.com/), with Reserved Font Name
+'Source'. It is licensed under the SIL Open Font License 1.1; the full text is
+in `assets/fonts/OFL.txt` (distributed as `licenses/NotoSansTC/OFL.txt`).
+Other fonts, such as the monospace font for commands, are loaded from the system
+at run time and are not distributed with MISF.
 
 ## MISF
 
