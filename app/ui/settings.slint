@@ -40,6 +40,8 @@ export global SettingsState {
     // Preferences, as indexes into each list.
     // Choice labels, from the same lists the preferences are stored by.
     in property <[string]> appearances;
+    in property <[string]> fonts;
+    in property <int> font;
     in property <[string]> densities;
     in property <[string]> host-details;
     in property <[string]> batch-orders;
@@ -285,6 +287,14 @@ component PreferencesPage inherits VerticalLayout {
                 model: SettingsState.appearances;
             }
         }
+        FormRow {
+            label: T.get("font.title");
+            Choice {
+                key: "font";
+                index: SettingsState.font;
+                model: SettingsState.fonts;
+            }
+        }
         SectionTitle {
             text: T.get("settings.section_host_list");
         }
@@ -440,7 +450,8 @@ export component SettingsWindow inherits Window {
     preferred-height: 400px;
     background: Theme.background;
     default-font-size: 14px;
-    default-font-family: "Noto Sans TC";
+    default-font-family: Theme.font-family;
+    default-font-weight: Theme.font-weight;
     AppearanceSync { }
     HorizontalLayout {
         padding: 12px;
@@ -482,6 +493,10 @@ export component SettingsWindow inherits Window {
         }
     }
     TipOverlay {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
         window-width: root.width;
         window-height: root.height;
     }

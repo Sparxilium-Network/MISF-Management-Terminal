@@ -1,5 +1,12 @@
 # 全工作區檢查結果
 
+## 2026-11-10（字型選項、Skia 比較版、提示位置修正，分支 `slint-rego`，基於 `62da7a9`）
+
+- 使用者回報兩處跑版：主機頁「刪除」的提示區域把整列剩餘寬度吃掉（提示元件預設改為不橫向伸展），以及提示框在右下角超出視窗（覆蓋層沒有指定位置，被置中擺放而整體偏移約 100 px；改為鋪滿視窗並把提示框限制在視窗內）。新增測試：提示放在右下角時提示框仍完整在視窗內。
+- 新增偏好設定「字型」：Noto Sans TC、Noto Sans TC 粗體、系統字型（原本的字型），兩個視窗同時套用；偏好設定往返與預設值有測試，三種選項截圖確認。
+- 使用者回報字型霧霧的：femtovg 只做灰階反鋸齒、沒有字型微調。依使用者要求另建 Skia 版（`--features skia`）供並排比較，截圖上 Skia 的筆畫明顯較清楚。DPI 方面 winit 已設為每螢幕 DPI 感知，不是點陣放大造成。
+- fmt、Clippy（`--all-features -D warnings`，含 Skia）通過；`cargo test --workspace` 全部通過（22、20、57、24 項）。
+
 ## 2026-11-10（Slint 版補完：Noto Sans TC、授權、Esc、互動測試，分支 `slint-rego`，基於 `a20ea4e`）
 
 - 介面字型改為使用者提供的 Noto Sans TC 可變字重字型，內嵌於執行檔（約多 12 MB）；OFL 授權放在 `assets/fonts/OFL.txt`，打包時附為 `licenses/NotoSansTC/OFL.txt`。側欄卡片高度配合新字型的行高調整。

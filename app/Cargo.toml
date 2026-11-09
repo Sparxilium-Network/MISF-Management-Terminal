@@ -12,6 +12,8 @@ slint-build = "1.18.1"
 
 [features]
 capture = ["dep:image"]
+# Draws with Skia instead of femtovg, for comparing text rendering.
+skia = ["slint/renderer-skia"]
 
 [dependencies]
 misf-core = { path = "../core" }

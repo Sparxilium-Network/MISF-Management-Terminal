@@ -11,7 +11,7 @@ use crate::{
     i18n::{Language, Translator},
     preferences::{
         AUTO_LOCK_DEFAULT, AUTO_LOCK_MAX, BatchColumn, BatchDetail, BatchOrder, Density,
-        HostDetail, SETTINGS_DEFAULT, UnlockMethod,
+        HostDetail, InterfaceFont, SETTINGS_DEFAULT, UnlockMethod,
     },
     theme::Appearance,
 };
@@ -93,6 +93,7 @@ impl App {
             "appearance" => {
                 prefs.appearance = Appearance::ALL.get(index).copied().unwrap_or_default()
             }
+            "font" => prefs.font = InterfaceFont::ALL.get(index).copied().unwrap_or_default(),
             "density" => prefs.density = Density::ALL.get(index).copied().unwrap_or_default(),
             "host_detail" => {
                 prefs.host_detail = HostDetail::ALL.get(index).copied().unwrap_or_default()
@@ -217,6 +218,10 @@ pub fn push(app: &mut App, w: &SettingsWindow) {
     let position = |found: Option<usize>| found.unwrap_or(0) as i32;
     state.set_appearances(texts(Appearance::ALL.map(|a| a.label(t))));
     state.set_appearance(prefs.appearance.index());
+    state.set_fonts(texts(InterfaceFont::ALL.map(|f| f.label(t))));
+    state.set_font(position(
+        InterfaceFont::ALL.iter().position(|f| *f == prefs.font),
+    ));
     state.set_densities(texts(Density::ALL.map(|d| d.label(t))));
     state.set_density(position(
         Density::ALL.iter().position(|d| *d == prefs.density),

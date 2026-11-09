@@ -65,7 +65,8 @@ export component HintArea {
     min-height: inner.min-height;
     preferred-width: inner.preferred-width;
     preferred-height: inner.preferred-height;
-    horizontal-stretch: inner.horizontal-stretch;
+    // Only as wide as the control it wraps; a stretching control widens it from outside.
+    horizontal-stretch: 0;
     vertical-stretch: 0;
 
     function show() {
@@ -114,11 +115,19 @@ export component TipOverlay {
     in property <length> window-width;
     in property <length> window-height;
     property <length> w: min(560px, root.window-width - 24px);
-    if Tip.shown: box := Rectangle {
-        x: max(8px, min(Tip.x, root.window-width - self.width - 8px));
-        y: Tip.y + self.height > root.window-height - 8px ? max(8px, Tip.y - self.height - 28px) : Tip.y;
-        width: min(root.w, body.preferred-width);
-        height: body.preferred-height;
+    // Always present, so its size can be read; drawn only while a tip is shown.
+    property <length> box-width: min(root.w, body.preferred-width);
+    property <length> box-height: body.preferred-height;
+    box := Rectangle {
+        visible: Tip.shown;
+        // Kept inside the window: left of the pointer when there is no room on its right,
+        // above it when there is no room below.
+        x: Tip.x + root.box-width <= root.window-width - 8px ? Tip.x
+            : max(8px, root.window-width - root.box-width - 8px);
+        y: Tip.y + root.box-height <= root.window-height - 8px ? Tip.y
+            : max(8px, Tip.y - root.box-height - 28px);
+        width: root.box-width;
+        height: root.box-height;
         background: Theme.surface;
         border-color: Theme.border;
         border-width: 1px;

@@ -178,7 +178,8 @@ export component AppWindow inherits Window {
     preferred-height: 820px;
     background: Theme.background;
     default-font-size: 14px;
-    default-font-family: "Noto Sans TC";
+    default-font-family: Theme.font-family;
+    default-font-weight: Theme.font-weight;
     AppearanceSync { }
     ClipboardSink { }
     VerticalLayout {
@@ -305,6 +306,10 @@ export component AppWindow inherits Window {
         }
     }
     TipOverlay {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
         window-width: root.width;
         window-height: root.height;
     }

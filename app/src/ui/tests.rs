@@ -634,6 +634,11 @@ fn settings_tree_groups_preference_pages_under_a_branch() {
         app.preferences.auto_lock_minutes,
         Some(crate::preferences::AUTO_LOCK_MAX)
     );
+    app.set_preference("font", 2);
+    assert_eq!(
+        app.preferences.font,
+        crate::preferences::InterfaceFont::System
+    );
     app.set_preference("language", Language::EnUs.index());
     assert_eq!(app.preferences.language, Language::EnUs);
     let saved = crate::preferences::Preferences::load(&app.settings_path).unwrap();
@@ -777,6 +782,29 @@ fn pages_respond_to_clicks() {
             position: slint::LogicalPosition::new(700.0, 700.0),
         });
     assert!(!tip.get_shown());
+
+    // A tip near the window's bottom-right corner stays inside the window.
+    main.window()
+        .set_size(slint::LogicalSize::new(1280.0, 820.0));
+    tip.set_hint(main.global::<HostState>().get_check_hint());
+    tip.set_plain("".into());
+    tip.set_x(1250.0);
+    tip.set_y(800.0);
+    tip.set_shown(true);
+    let shown = ElementHandle::find_by_element_id(&main, "TipOverlay::box")
+        .next()
+        .expect("no tip box");
+    let (at, size) = (shown.absolute_position(), shown.size());
+    assert!(size.width > 200.0 && size.height > 40.0, "{size:?}");
+    assert!(
+        at.x >= 0.0 && at.x + size.width <= 1280.0,
+        "{at:?} {size:?}"
+    );
+    assert!(
+        at.y >= 0.0 && at.y + size.height <= 820.0,
+        "{at:?} {size:?}"
+    );
+    tip.set_shown(false);
 
     // Dragging lab-01 above web-01 in the sidebar saves the new order.
     ctx.update(|app| {

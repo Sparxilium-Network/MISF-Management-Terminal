@@ -69,11 +69,14 @@ pub fn refresh(app: &mut App, main: &AppWindow, settings: &SettingsWindow) {
     for language in [main.global::<T>(), settings.global::<T>()] {
         language.set_language(app.preferences.language.index());
     }
-    main.global::<Theme>()
-        .set_appearance(app.preferences.appearance.index());
-    settings
-        .global::<Theme>()
-        .set_appearance(app.preferences.appearance.index());
+    let font = crate::preferences::InterfaceFont::ALL
+        .iter()
+        .position(|f| *f == app.preferences.font)
+        .unwrap_or(0) as i32;
+    for theme in [main.global::<Theme>(), settings.global::<Theme>()] {
+        theme.set_appearance(app.preferences.appearance.index());
+        theme.set_font(font);
+    }
     shell::push(app, main);
     sidebar::push(app, main);
     host_page::push(app, main);
@@ -106,6 +109,14 @@ pub fn build(
 pub fn run(paths: RuntimePaths, audit: AuditLog) -> Result<(), slint::PlatformError> {
     slint::BackendSelector::new()
         .backend_name("winit".into())
+        .renderer_name(
+            if cfg!(feature = "skia") {
+                "skia"
+            } else {
+                "femtovg"
+            }
+            .into(),
+        )
         .select()?;
     let wake: crate::worker::Wake = Arc::new(|| {
         let _ = slint::invoke_from_event_loop(|| {

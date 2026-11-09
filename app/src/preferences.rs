@@ -103,6 +103,39 @@ impl Density {
     }
 }
 
+/// The font every window draws its text with.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum InterfaceFont {
+    /// Noto Sans TC, embedded in the binary.
+    #[default]
+    Noto,
+    /// Noto Sans TC at bold weight throughout, for screens where the regular weight looks
+    /// faint.
+    NotoBold,
+    /// The system's own interface font, as the app used before Noto Sans TC.
+    System,
+}
+
+impl InterfaceFont {
+    pub const ALL: [Self; 3] = [Self::Noto, Self::NotoBold, Self::System];
+
+    fn code(self) -> &'static str {
+        match self {
+            Self::Noto => "noto",
+            Self::NotoBold => "noto_bold",
+            Self::System => "system",
+        }
+    }
+
+    pub fn label(self, t: Translator) -> &'static str {
+        match self {
+            Self::Noto => t.get("font.noto"),
+            Self::NotoBold => t.get("font.noto_bold"),
+            Self::System => t.get("font.system"),
+        }
+    }
+}
+
 /// How a locked vault asks to be unlocked when the app starts.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum UnlockMethod {
@@ -431,6 +464,7 @@ impl Default for HostFields {
 pub struct Preferences {
     pub language: Language,
     pub appearance: Appearance,
+    pub font: InterfaceFont,
     pub window: Option<WindowSize>,
     pub settings_window: Option<[f32; 2]>,
     pub host_detail: HostDetail,
@@ -484,6 +518,10 @@ impl Preferences {
                 .as_str()
                 .and_then(Appearance::from_code)
                 .unwrap_or_default(),
+            font: value["font"]
+                .as_str()
+                .and_then(|code| InterfaceFont::ALL.into_iter().find(|f| f.code() == code))
+                .unwrap_or_default(),
             window: WindowSize::from_json(&value["window"]),
             settings_window: size_from_json(&value["settings_window"], SETTINGS_MIN),
             host_detail: value["host_list"]["detail"]
@@ -529,6 +567,7 @@ impl Preferences {
             "version": 1,
             "language": self.language.code(),
             "appearance": self.appearance.code(),
+            "font": self.font.code(),
             "host_list": {
                 "detail": self.host_detail.code(),
                 "fields": HostFields::CODES
@@ -653,6 +692,7 @@ mod tests {
             batch_columns: columns,
             batch_detail: BatchDetail::Popup,
             auto_lock_minutes: Some(30),
+            font: InterfaceFont::NotoBold,
             ..Default::default()
         };
         preferences.save(&path).unwrap();
@@ -667,6 +707,7 @@ mod tests {
         assert_eq!(loaded.batch_columns, columns);
         assert_eq!(loaded.batch_detail, BatchDetail::Popup);
         assert_eq!(loaded.auto_lock_minutes, Some(30));
+        assert_eq!(loaded.font, InterfaceFont::NotoBold);
         let shown: Vec<_> = columns.visible().into_iter().map(|(_, c)| c).collect();
         assert_eq!(
             shown[..3],
@@ -696,6 +737,7 @@ mod tests {
         assert_eq!(loaded.batch_columns, BatchColumns::default());
         assert_eq!(loaded.batch_detail, BatchDetail::Inline);
         assert_eq!(loaded.auto_lock_minutes, None);
+        assert_eq!(loaded.font, InterfaceFont::Noto);
         // An idle time outside 1 minute to 1 day never locks rather than guessing.
         for minutes in [json!(0), json!(1441), json!(-5), json!("15")] {
             std::fs::write(

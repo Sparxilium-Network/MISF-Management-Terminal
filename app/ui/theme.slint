@@ -4,6 +4,10 @@ import { Palette } from "std-widgets.slint";
 export global Theme {
     // 0 follows the system, 1 light, 2 dark.
     in property <int> appearance;
+    // 0 Noto Sans TC, 1 Noto Sans TC bold, 2 the system font.
+    in property <int> font;
+    out property <string> font-family: root.font == 2 ? "" : "Noto Sans TC";
+    out property <int> font-weight: root.font == 1 ? 700 : 400;
     // The fluent style draws pure white text only in its dark scheme, which also covers
     // "follow the system", where the scheme itself is not readable.
     out property <bool> dark: Palette.foreground == #ffffff;
