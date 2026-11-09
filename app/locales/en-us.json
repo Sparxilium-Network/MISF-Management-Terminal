@@ -405,7 +405,7 @@
   "batch.detail": "Packages on {name}",
   "batch.previous": "‹ Previous",
   "batch.next": "Next ›",
-  "advanced.button": "Advanced ⏷",
+  "advanced.button": "Advanced",
   "hint.commands": "Commands run on the remote host:",
   "hint.copy_tip": "Right-click to copy these commands.",
   "hint.copy_commands": "Copy the commands to run",

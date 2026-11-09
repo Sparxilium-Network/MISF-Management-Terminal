@@ -2066,7 +2066,11 @@ impl ManagementApp {
             }
             // Upgrades and the reboot change the host, so they sit in one menu. It closes only on
             // a click outside, so each item keeps its hover hint and right-click copy menu.
-            let advanced = ui.add(danger(t.get("advanced.button")));
+            let label = RichText::new(t.get("advanced.button"))
+                .color(Color32::WHITE)
+                .strong();
+            let advanced =
+                ui.add(egui::Button::new((label, drop_arrow(self.advanced_open))).fill(RED));
             if advanced.clicked() {
                 self.advanced_open = !self.advanced_open;
             }
@@ -5005,6 +5009,26 @@ fn user_input(event: &egui::Event) -> bool {
             | egui::Event::Touch { .. }
             | egui::Event::Zoom(_)
     )
+}
+/// A menu button's small triangle, drawn rather than typed because the loaded fonts lack
+/// the arrow glyphs; it points up while the menu is open.
+fn drop_arrow<'a>(open: bool) -> egui::Atom<'a> {
+    egui::Atom::paint(egui::vec2(10.0, 8.0), move |ui, args| {
+        let c = args.rect.center();
+        let (w, h) = (4.5, 3.0);
+        let (tip, base) = if open { (-h, h) } else { (h, -h) };
+        let points = vec![
+            c + egui::vec2(-w, base),
+            c + egui::vec2(w, base),
+            c + egui::vec2(0.0, tip),
+        ];
+        // White, like the label on the red button.
+        ui.painter().add(egui::Shape::convex_polygon(
+            points,
+            Color32::WHITE,
+            Stroke::NONE,
+        ));
+    })
 }
 /// An item of the host page's advanced menu.
 #[derive(Clone, Copy, Debug, PartialEq)]

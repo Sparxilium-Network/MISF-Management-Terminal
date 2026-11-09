@@ -405,7 +405,7 @@
   "batch.detail": "{name} 的套件",
   "batch.previous": "‹ 上一台",
   "batch.next": "下一台 ›",
-  "advanced.button": "進階操作 ⏷",
+  "advanced.button": "進階操作",
   "hint.commands": "將在遠端執行的命令：",
   "hint.copy_tip": "按右鍵可複製這些命令。",
   "hint.copy_commands": "複製將執行的命令",
