@@ -1,8 +1,8 @@
 use crate::{
     i18n::{Language, Translator},
     preferences::{
-        BatchColumn, BatchDetail, BatchOrder, Density, HostDetail, Preferences, SETTINGS_DEFAULT,
-        SETTINGS_MIN, UnlockMethod, WindowSize,
+        AUTO_LOCK_DEFAULT, AUTO_LOCK_MAX, BatchColumn, BatchDetail, BatchOrder, Density,
+        HostDetail, Preferences, SETTINGS_DEFAULT, SETTINGS_MIN, UnlockMethod, WindowSize,
     },
     session_log::SessionLog,
     theme::{self, Appearance, Palette},
@@ -18,7 +18,11 @@ use misf_core::{
     vault::{MIN_PASSPHRASE_CHARS, PassphraseProblem, passphrase_problem},
 };
 use serde_json::{Value, json};
-use std::{collections::BTreeSet, path::PathBuf};
+use std::{
+    collections::BTreeSet,
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 use zeroize::Zeroize;
 
 const NAVY: Color32 = Color32::from_rgb(19, 36, 59);
@@ -290,6 +294,9 @@ pub struct ManagementApp {
     /// Whether the host page's advanced menu is open; kept here, not in egui's single popup
     /// slot, so an item's right-click copy menu does not close it.
     advanced_open: bool,
+    /// The last user input, or the last moment auto-lock could not apply; idle time counts
+    /// from here.
+    last_activity: Instant,
     /// The one package manager the batch selection may contain.
     batch_manager: String,
     upgrade_confirm: Option<UpgradeConfirm>,
@@ -373,6 +380,7 @@ impl ManagementApp {
             batch_selected: BTreeSet::new(),
             batch_popup: false,
             advanced_open: false,
+            last_activity: Instant::now(),
             batch_manager: String::new(),
             upgrade_confirm: None,
             batch_failure: None,
@@ -704,6 +712,11 @@ impl ManagementApp {
                                 );
                             }
                         });
+                    ui.end_row();
+                    ui.label(t.get("auto_lock.title"));
+                    ui.horizontal(|ui| self.auto_lock_setting(ui, t))
+                        .response
+                        .on_hover_text(t.get("auto_lock.hint"));
                     ui.end_row();
                     ui.label(t.get("batch_order.title"));
                     egui::ComboBox::from_id_salt("batch_order")
@@ -3584,8 +3597,69 @@ impl ManagementApp {
         self.after_trust = None;
         self.batch_selected.clear();
         self.upgrade_confirm = None;
+        self.reboot_confirm = None;
+        self.kept_back_report.clear();
+        self.batch_popup = false;
+        self.advanced_open = false;
         self.ssh_keys.clear();
         self.key_dialog = None;
+    }
+
+    /// Never, or after a number of minutes without input.
+    fn auto_lock_setting(&mut self, ui: &mut egui::Ui, t: Translator) {
+        let mut enabled = self.preferences.auto_lock_minutes.is_some();
+        egui::ComboBox::from_id_salt("auto_lock")
+            .selected_text(if enabled {
+                t.get("auto_lock.after")
+            } else {
+                t.get("auto_lock.never")
+            })
+            .width(165.0)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut enabled, false, t.get("auto_lock.never"));
+                ui.selectable_value(&mut enabled, true, t.get("auto_lock.after"));
+            });
+        let minutes = &mut self.preferences.auto_lock_minutes;
+        match (enabled, minutes.as_mut()) {
+            (false, _) => *minutes = None,
+            (true, None) => *minutes = Some(AUTO_LOCK_DEFAULT),
+            (true, Some(value)) => {
+                ui.add(
+                    egui::DragValue::new(value)
+                        .range(1..=AUTO_LOCK_MAX)
+                        .speed(0.2),
+                );
+                ui.label(t.get("auto_lock.minutes"));
+            }
+        }
+    }
+
+    /// Locks an unlocked vault once nothing was typed or clicked for the chosen minutes.
+    /// Running work restarts the count. Returns how long until the
+    /// next check is due.
+    fn auto_lock(&mut self, now: Instant, active: bool) -> Option<Duration> {
+        let minutes = self.preferences.auto_lock_minutes?;
+        if self.busy || self.locked || !self.encrypted {
+            self.last_activity = now;
+            return None;
+        }
+        let limit = Duration::from_secs(u64::from(minutes) * 60);
+        // Checked before this frame's input, so the first move after a long minimized idle
+        // still locks instead of restarting the count.
+        let idle = now.saturating_duration_since(self.last_activity);
+        if idle < limit {
+            if active {
+                self.last_activity = now;
+                return Some(limit);
+            }
+            return Some(limit - idle);
+        }
+        self.last_activity = now;
+        self.log(Action::VaultAutoLock, Outcome::Started);
+        // Drop the hosts now, not when the worker answers, so nothing stays on screen.
+        self.clear_host_cache();
+        self.send(json!({"action":"vault_lock"}));
+        None
     }
 
     /// Starts the unlock method chosen in preferences, so a passkey prompt appears without
@@ -4509,6 +4583,10 @@ impl eframe::App for ManagementApp {
         self.process_events();
         let ctx = ui.ctx().clone();
         self.track_window(&ctx);
+        let active = ctx.input(|i| i.events.iter().any(user_input));
+        if let Some(wait) = self.auto_lock(Instant::now(), active) {
+            ctx.request_repaint_after(wait);
+        }
         egui::Panel::top("preferences")
             .frame(
                 egui::Frame::new()
@@ -4910,6 +4988,23 @@ fn status_label(t: Translator, host: &Host) -> &'static str {
         },
         None => t.get("apt.not_checked"),
     }
+}
+/// Input from the person at the keyboard or mouse, which restarts the auto-lock count.
+fn user_input(event: &egui::Event) -> bool {
+    matches!(
+        event,
+        egui::Event::PointerMoved(_)
+            | egui::Event::MouseMoved(_)
+            | egui::Event::PointerButton { .. }
+            | egui::Event::MouseWheel { .. }
+            | egui::Event::Key { .. }
+            | egui::Event::Text(_)
+            | egui::Event::Paste(_)
+            | egui::Event::Copy
+            | egui::Event::Cut
+            | egui::Event::Touch { .. }
+            | egui::Event::Zoom(_)
+    )
 }
 /// An item of the host page's advanced menu.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -5695,6 +5790,71 @@ mod tests {
         let labels = frame(&mut app, vec![]);
         assert!(find(&labels, "bravo").left() > find(&labels, "alpha").left());
         assert!(find(&labels, "charlie").height() < 20.0);
+    }
+
+    #[test]
+    fn idle_vault_locks_after_the_chosen_minutes_but_not_while_working() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = RuntimePaths {
+            store: directory.path().join("hosts.db"),
+            debug: true,
+            debug_allow_passkey: false,
+        };
+        let ctx = egui::Context::default();
+        let (requests, commands) = mpsc::channel();
+        let (_events, results) = mpsc::channel();
+        let mut app = ManagementApp::initialize(
+            &ctx,
+            paths,
+            AuditLog::new(directory.path()).unwrap(),
+            Worker {
+                requests,
+                events: results,
+                decisions: tokio::sync::mpsc::unbounded_channel().0,
+            },
+        );
+        while commands.try_recv().is_ok() {}
+        app.received(
+            "list",
+            json!({"hosts": [{"id": "u1", "name": "ubuntu1", "address": "10.0.0.5", "port": 22,
+                "username": "ops", "os": "Linux"}]}),
+        );
+        (app.encrypted, app.locked, app.busy) = (true, false, false);
+        let start = Instant::now();
+        app.last_activity = start;
+        let minute = Duration::from_secs(60);
+        // Never is the default and does nothing.
+        assert_eq!(app.auto_lock(start + 600 * minute, false), None);
+        app.last_activity = start;
+        app.preferences.auto_lock_minutes = Some(5);
+        assert_eq!(app.auto_lock(start + 4 * minute, false), Some(minute));
+        // Input restarts the count.
+        assert_eq!(app.auto_lock(start + 4 * minute, true), Some(5 * minute));
+        assert_eq!(app.auto_lock(start + 8 * minute, false), Some(minute));
+        // So does running work, which is never interrupted.
+        app.busy = true;
+        assert_eq!(app.auto_lock(start + 20 * minute, false), None);
+        app.busy = false;
+        assert_eq!(app.auto_lock(start + 24 * minute, false), Some(minute));
+        assert!(commands.try_recv().is_err());
+        assert_eq!(app.hosts.len(), 1);
+        app.advanced_open = true;
+        assert_eq!(app.auto_lock(start + 25 * minute, false), None);
+        assert_eq!(commands.try_recv().unwrap()["action"], "vault_lock");
+        assert!(app.hosts.is_empty());
+        assert!(!app.advanced_open);
+        assert!(app.busy);
+        // Input arriving after the limit, like the first move after a long minimized idle,
+        // still locks.
+        while commands.try_recv().is_ok() {}
+        (app.locked, app.busy) = (false, false);
+        app.last_activity = start;
+        assert_eq!(app.auto_lock(start + 60 * minute, true), None);
+        assert_eq!(commands.try_recv().unwrap()["action"], "vault_lock");
+        // A plain, unencrypted store has nothing to lock.
+        (app.encrypted, app.busy) = (false, false);
+        assert_eq!(app.auto_lock(start + 90 * minute, false), None);
+        assert!(commands.try_recv().is_err());
     }
 
     #[test]

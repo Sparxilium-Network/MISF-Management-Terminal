@@ -62,6 +62,8 @@ pub enum Action {
     VaultCreate,
     VaultUnlock,
     VaultLock,
+    /// The UI locked the vault after the chosen idle time.
+    VaultAutoLock,
     VaultAddKey,
     VaultAddPasskey,
     VaultUnlockPasskey,

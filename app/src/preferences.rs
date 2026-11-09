@@ -444,7 +444,14 @@ pub struct Preferences {
     pub ungrouped_at: Option<usize>,
     pub ungrouped_collapsed: bool,
     pub unlock_method: UnlockMethod,
+    /// Minutes without input before an unlocked vault locks itself; `None` never locks.
+    pub auto_lock_minutes: Option<u16>,
 }
+
+/// The longest idle time the auto-lock setting accepts, one day.
+pub const AUTO_LOCK_MAX: u16 = 24 * 60;
+/// The idle time first offered when auto-lock is turned on.
+pub const AUTO_LOCK_DEFAULT: u16 = 15;
 
 impl Preferences {
     /// What host cards show at the chosen level.
@@ -507,6 +514,10 @@ impl Preferences {
                 .as_str()
                 .and_then(|code| UnlockMethod::ALL.iter().copied().find(|m| m.code() == code))
                 .unwrap_or_default(),
+            auto_lock_minutes: value["auto_lock_minutes"]
+                .as_u64()
+                .and_then(|minutes| u16::try_from(minutes).ok())
+                .filter(|minutes| (1..=AUTO_LOCK_MAX).contains(minutes)),
         })
     }
 
@@ -533,6 +544,7 @@ impl Preferences {
             "batch_columns": self.batch_columns.to_json(),
             "batch_detail": self.batch_detail.code(),
             "unlock_method": self.unlock_method.code(),
+            "auto_lock_minutes": self.auto_lock_minutes,
         });
         if let Some(window) = self.window {
             value["window"] = json!({
@@ -640,6 +652,7 @@ mod tests {
             unlock_method: UnlockMethod::SecurityKey,
             batch_columns: columns,
             batch_detail: BatchDetail::Popup,
+            auto_lock_minutes: Some(30),
             ..Default::default()
         };
         preferences.save(&path).unwrap();
@@ -653,6 +666,7 @@ mod tests {
         assert_eq!(loaded.unlock_method, UnlockMethod::SecurityKey);
         assert_eq!(loaded.batch_columns, columns);
         assert_eq!(loaded.batch_detail, BatchDetail::Popup);
+        assert_eq!(loaded.auto_lock_minutes, Some(30));
         let shown: Vec<_> = columns.visible().into_iter().map(|(_, c)| c).collect();
         assert_eq!(
             shown[..3],
@@ -681,6 +695,16 @@ mod tests {
         assert_eq!(loaded.unlock_method, UnlockMethod::Password);
         assert_eq!(loaded.batch_columns, BatchColumns::default());
         assert_eq!(loaded.batch_detail, BatchDetail::Inline);
+        assert_eq!(loaded.auto_lock_minutes, None);
+        // An idle time outside 1 minute to 1 day never locks rather than guessing.
+        for minutes in [json!(0), json!(1441), json!(-5), json!("15")] {
+            std::fs::write(
+                &path,
+                json!({"version": 1, "auto_lock_minutes": minutes}).to_string(),
+            )
+            .unwrap();
+            assert_eq!(Preferences::load(&path).unwrap().auto_lock_minutes, None);
+        }
         // Hiding the host column is ignored; unusable widths are clamped.
         std::fs::write(
             &path,
