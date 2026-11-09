@@ -398,6 +398,8 @@
   "batch.previous": "‹ Previous",
   "batch.next": "Next ›",
   "hint.commands": "Commands run on the remote host:",
+  "hint.copy_tip": "Right-click to copy these commands.",
+  "hint.copy_commands": "Copy the commands to run",
   "hint.test_title": "Test connection",
   "hint.test_effect": "Effect: signs in with the saved password or key and only reads system information (uname, /etc/os-release) to detect the package manager. Nothing on the host changes.",
   "hint.test_risk": "Risk: low. After fingerprint verification, your SSH credentials are sent to this host; make sure the address is correct.",

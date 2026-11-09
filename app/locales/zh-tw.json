@@ -398,6 +398,8 @@
   "batch.previous": "‹ 上一台",
   "batch.next": "下一台 ›",
   "hint.commands": "將在遠端執行的命令：",
+  "hint.copy_tip": "按右鍵可複製這些命令。",
+  "hint.copy_commands": "複製將執行的命令",
   "hint.test_title": "測試連線",
   "hint.test_effect": "作用：使用已保存的帳密或私鑰登入，只讀取系統資訊（uname、/etc/os-release）並偵測套件管理器，不修改遠端。",
   "hint.test_risk": "風險：低。指紋確認後會將 SSH 憑證送往此主機；請確認主機位址正確。",

@@ -4906,8 +4906,8 @@ fn hint(
     effect: &str,
     risk: &str,
 ) -> egui::Response {
-    let warning = Palette::for_context(&response.ctx).warning;
-    response.on_hover_ui(|ui| {
+    let palette = Palette::for_context(&response.ctx);
+    let response = response.on_hover_ui(|ui| {
         ui.set_max_width(560.0);
         ui.label(RichText::new(title).strong());
         if !commands.is_empty() {
@@ -4917,8 +4917,25 @@ fn hint(
             }
         }
         ui.label(effect);
-        ui.colored_label(warning, risk);
-    })
+        ui.colored_label(palette.warning, risk);
+        if !commands.is_empty() {
+            ui.colored_label(palette.muted, t.get("hint.copy_tip"));
+        }
+    });
+    if !commands.is_empty() {
+        response.context_menu(|ui| {
+            if ui.button(t.get("hint.copy_commands")).clicked() {
+                ui.ctx().copy_text(copied_commands(commands));
+            }
+        });
+    }
+    response
+}
+/// The commands a control runs, one per paragraph, as they would be copied.
+fn copied_commands(commands: &[&str]) -> String {
+    let mut text = commands.join("\n\n");
+    text.push('\n');
+    text
 }
 fn stat(ui: &mut egui::Ui, title: &str, value: &str) {
     let palette = Palette::for_context(ui.ctx());
@@ -4973,6 +4990,14 @@ fn format_time(value: &str) -> String {
 mod tests {
     use super::*;
     use std::sync::mpsc;
+
+    #[test]
+    fn copied_commands_are_one_paragraph_each_and_unchanged() {
+        assert_eq!(
+            copied_commands(&["apt-get update", "sh -c 'echo a; echo b'"]),
+            "apt-get update\n\nsh -c 'echo a; echo b'\n"
+        );
+    }
 
     #[test]
     fn connection_rows_explain_aead_post_quantum_and_unreached_steps() {
