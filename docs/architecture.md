@@ -1,6 +1,6 @@
 # MISF Management Terminal 架構
 
-> 最後修改：2026-11-08 ｜ 基於 commit：`ee69d1b`
+> 最後修改：2026-11-08 ｜ 基於 commit：`69cd0ec`
 
 > [!WARNING]
 > **本專案仍處於開發階段，請勿用於正式環境。** 相關安全保護機制尚未完善。
@@ -165,7 +165,7 @@ Passkey 只使用 `Fido2HmacSecret` 包裝槽。Windows 透過 `windows_passkey.
 
 ## 介面與背景工作
 
-UI 把請求放入工作佇列，由背景執行緒與 Tokio runtime 執行 SSH 與磁碟操作，期間停用衝突操作。關閉程式會結束本機連線，但不能保證中止遠端已開始的套件程序。「設定」視窗集中語言、外觀、偏好與 LUKSbox 管理，並顯示程式版本（Cargo 套件版本）、主機庫格式與結構版本；容器內仍為 JSON 時提供「轉換為 SQLite 資料庫」（`convert_storage`）。偏好存在 `ui-settings.json`，以暫存檔原子替換，主機庫鎖定時也能讀寫。自動鎖定（`auto_lock_minutes`，1～1440，預設不啟用）由 UI 計算閒置時間：只有滑鼠、鍵盤、捲動、貼上等使用者輸入會重新計時，worker 忙碌時也重新計時以免中斷作業；時間到時 UI 先清除主機快取與相關視窗，再送出 `vault_lock`，稽核記為 `vault_auto_lock`。
+UI 把請求放入工作佇列，由背景執行緒與 Tokio runtime 執行 SSH 與磁碟操作，期間停用衝突操作。關閉程式會結束本機連線，但不能保證中止遠端已開始的套件程序。「設定」視窗以左側分類樹集中語言、外觀、偏好（再分為外觀與主機清單、安全性、批次作業）與 LUKSbox 管理，並顯示程式版本（Cargo 套件版本）、主機庫格式與結構版本；容器內仍為 JSON 時提供「轉換為 SQLite 資料庫」（`convert_storage`）。偏好存在 `ui-settings.json`，以暫存檔原子替換，主機庫鎖定時也能讀寫。自動鎖定（`auto_lock_minutes`，1～1440，預設不啟用）由 UI 計算閒置時間：只有滑鼠、鍵盤、捲動、貼上等使用者輸入會重新計時，worker 忙碌時也重新計時以免中斷作業；時間到時 UI 先清除主機快取與相關視窗，再送出 `vault_lock`，稽核記為 `vault_auto_lock`。
 
 ## 測試與限制
 

@@ -172,14 +172,24 @@ impl Drop for KeyDialog {
         self.passphrase.zeroize();
     }
 }
-/// A page of the settings window, picked from its side list.
-#[derive(Clone, Copy, PartialEq)]
+/// A page of the settings window, picked from its side tree.
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum SettingsPage {
     Vault,
-    Preferences,
+    /// Preferences > Appearance and host list.
+    Appearance,
+    /// Preferences > Security: unlock method and auto-lock.
+    Security,
+    /// Preferences > Batch operations: order, details and columns.
+    Batch,
     Language,
     Log,
     About,
+}
+
+impl SettingsPage {
+    /// The pages under the Preferences branch of the settings tree.
+    const PREFERENCES: [Self; 3] = [Self::Appearance, Self::Security, Self::Batch];
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum View {
@@ -271,6 +281,8 @@ pub struct ManagementApp {
     preferences: Preferences,
     settings_open: bool,
     settings_page: SettingsPage,
+    /// Whether the Preferences branch of the settings tree is expanded.
+    preferences_expanded: bool,
     worker: Worker,
     hosts: Vec<Host>,
     groups: Vec<HostGroup>,
@@ -358,6 +370,7 @@ impl ManagementApp {
             preferences,
             settings_open: false,
             settings_page: SettingsPage::Vault,
+            preferences_expanded: true,
             worker,
             hosts: vec![],
             groups: vec![],
@@ -420,12 +433,14 @@ impl ManagementApp {
             app.open_vault_dialog(VaultMode::Passkey);
         }
         #[cfg(feature = "capture")]
-        if let Ok(page @ ("1" | "about" | "preferences")) =
+        if let Ok(page @ ("1" | "about" | "preferences" | "security" | "batch")) =
             std::env::var("MISF_OPEN_SETTINGS").as_deref()
         {
             match page {
                 "about" => app.settings_page = SettingsPage::About,
-                "preferences" => app.settings_page = SettingsPage::Preferences,
+                "preferences" => app.settings_page = SettingsPage::Appearance,
+                "security" => app.settings_page = SettingsPage::Security,
+                "batch" => app.settings_page = SettingsPage::Batch,
                 _ => {}
             }
             app.settings_open = true;
@@ -473,9 +488,12 @@ impl ManagementApp {
         }
         let t = Translator(self.preferences.language);
         let mut open = self.settings_open;
+        let preferences = t.get("settings.nav_preferences");
         let pages = [
             (SettingsPage::Vault, t.get("settings.nav_vault")),
-            (SettingsPage::Preferences, t.get("settings.nav_preferences")),
+            (SettingsPage::Appearance, t.get("settings.nav_appearance")),
+            (SettingsPage::Security, t.get("settings.nav_security")),
+            (SettingsPage::Batch, t.get("settings.nav_batch")),
             (SettingsPage::Language, t.get("settings.nav_language")),
             (SettingsPage::Log, t.get("settings.nav_log")),
             (SettingsPage::About, t.get("settings.about")),
@@ -491,48 +509,45 @@ impl ManagementApp {
             .show(ctx, |ui| {
                 ui.horizontal_top(|ui| {
                     ui.allocate_ui_with_layout(
-                        [170.0, ui.available_height()].into(),
+                        [190.0, ui.available_height()].into(),
                         egui::Layout::top_down_justified(egui::Align::LEFT),
-                        |ui| {
-                            for (page, label) in pages {
-                                if ui
-                                    .selectable_label(self.settings_page == page, label)
-                                    .clicked()
-                                {
-                                    self.settings_page = page;
-                                }
-                            }
-                        },
+                        |ui| self.settings_tree(ui, &pages, preferences),
                     );
                     ui.separator();
                     ui.vertical(|ui| {
-                        let title = pages
+                        let label = pages
                             .iter()
                             .find(|(page, _)| *page == self.settings_page)
                             .map_or("", |(_, label)| label);
+                        // A page in a branch shows its path, like "Preferences › Security".
+                        let title = if SettingsPage::PREFERENCES.contains(&self.settings_page) {
+                            format!("{preferences}  ›  {label}")
+                        } else {
+                            label.to_owned()
+                        };
                         ui.heading(title);
                         ui.add_space(10.0);
                         match self.settings_page {
                             SettingsPage::Vault => self.vault_settings(ui),
-                            SettingsPage::Preferences | SettingsPage::Language => {
+                            SettingsPage::Log => self.log_settings(ui),
+                            SettingsPage::About => {
+                                if self.about_section(ui) {
+                                    self.send(json!({"action":"convert_storage"}));
+                                }
+                            }
+                            _ => {
                                 egui::ScrollArea::vertical()
                                     .id_salt("preferences_page")
                                     .auto_shrink([false, true])
                                     .show(ui, |ui| {
                                         self.preferences_form(ui);
-                                        ui.add_space(12.0);
+                                        ui.add_space(16.0);
                                         ui.label(
                                             RichText::new(t.get("settings.plaintext_notice"))
                                                 .size(12.0)
                                                 .color(Palette::for_context(ui.ctx()).muted),
                                         );
                                     });
-                            }
-                            SettingsPage::Log => self.log_settings(ui),
-                            SettingsPage::About => {
-                                if self.about_section(ui) {
-                                    self.send(json!({"action":"convert_storage"}));
-                                }
                             }
                         }
                     });
@@ -545,6 +560,45 @@ impl ManagementApp {
         self.settings_open = open;
         if !self.settings_open {
             self.log(Action::SettingsClose, Outcome::Succeeded);
+        }
+    }
+
+    /// The settings tree: top-level pages, and the Preferences branch with its pages
+    /// indented beneath it. The branch row expands or collapses it and opens its first page.
+    fn settings_tree(
+        &mut self,
+        ui: &mut egui::Ui,
+        pages: &[(SettingsPage, &str)],
+        preferences: &str,
+    ) {
+        ui.spacing_mut().item_spacing.y = 2.0;
+        let in_branch = SettingsPage::PREFERENCES.contains(&self.settings_page);
+        for &(page, label) in pages {
+            let child = SettingsPage::PREFERENCES.contains(&page);
+            if page == SettingsPage::PREFERENCES[0] {
+                let row = egui::Button::selectable(
+                    in_branch && !self.preferences_expanded,
+                    (tree_arrow(self.preferences_expanded), preferences),
+                );
+                if ui.add(row).clicked() {
+                    self.preferences_expanded = !self.preferences_expanded || !in_branch;
+                    if !in_branch {
+                        self.settings_page = page;
+                    }
+                }
+            }
+            if child && !self.preferences_expanded {
+                continue;
+            }
+            // Blank space lines labels up with the branch label, children one step further in.
+            let indent = if child { 26.0 } else { 10.0 };
+            let row = egui::Button::selectable(
+                self.settings_page == page,
+                (egui::Atom::paint(egui::vec2(indent, 8.0), |_, _| {}), label),
+            );
+            if ui.add(row).clicked() {
+                self.settings_page = page;
+            }
         }
     }
 
@@ -638,15 +692,14 @@ impl ManagementApp {
         convert
     }
 
-    /// The language row on the Language page, the appearance row on Preferences.
+    /// The chosen preferences page, in titled sections; changes apply and save at once.
     fn preferences_form(&mut self, ui: &mut egui::Ui) {
         let before = self.preferences;
         let t = Translator(before.language);
-        let language_page = self.settings_page == SettingsPage::Language;
-        egui::Grid::new("preferences_form")
-            .spacing([24.0, 16.0])
-            .show(ui, |ui| {
-                if !language_page {
+        match self.settings_page {
+            SettingsPage::Appearance => {
+                settings_section(ui, t.get("settings.section_appearance"));
+                form_grid(ui, "appearance_form", |ui| {
                     ui.label(t.get("settings.appearance"));
                     egui::ComboBox::from_id_salt("appearance")
                         .selected_text(self.preferences.appearance.label(t))
@@ -661,6 +714,9 @@ impl ManagementApp {
                             }
                         });
                     ui.end_row();
+                });
+                settings_section(ui, t.get("settings.section_host_list"));
+                form_grid(ui, "host_list_form", |ui| {
                     ui.label(t.get("density.title"));
                     egui::ComboBox::from_id_salt("density")
                         .selected_text(self.preferences.density.label(t))
@@ -699,6 +755,11 @@ impl ManagementApp {
                         });
                         ui.end_row();
                     }
+                });
+            }
+            SettingsPage::Security => {
+                settings_section(ui, t.get("settings.section_unlock"));
+                form_grid(ui, "unlock_form", |ui| {
                     ui.label(t.get("unlock_method.title"));
                     egui::ComboBox::from_id_salt("unlock_method")
                         .selected_text(self.preferences.unlock_method.label(t))
@@ -713,11 +774,18 @@ impl ManagementApp {
                             }
                         });
                     ui.end_row();
+                });
+                settings_section(ui, t.get("auto_lock.title"));
+                form_grid(ui, "auto_lock_form", |ui| {
                     ui.label(t.get("auto_lock.title"));
-                    ui.horizontal(|ui| self.auto_lock_setting(ui, t))
-                        .response
-                        .on_hover_text(t.get("auto_lock.hint"));
+                    ui.horizontal(|ui| self.auto_lock_setting(ui, t));
                     ui.end_row();
+                });
+                setting_note(ui, t.get("auto_lock.hint"));
+            }
+            SettingsPage::Batch => {
+                settings_section(ui, t.get("settings.section_batch_order"));
+                form_grid(ui, "batch_form", |ui| {
                     ui.label(t.get("batch_order.title"));
                     egui::ComboBox::from_id_salt("batch_order")
                         .selected_text(self.preferences.batch_order.label(t))
@@ -746,50 +814,58 @@ impl ManagementApp {
                             }
                         });
                     ui.end_row();
-                    return;
-                }
-                ui.label(t.get("settings.language"));
-                egui::ComboBox::from_id_salt("language")
-                    .selected_text(self.preferences.language.name())
-                    .width(165.0)
-                    .show_ui(ui, |ui| {
-                        for language in Language::ALL {
-                            ui.selectable_value(
-                                &mut self.preferences.language,
-                                language,
-                                language.name(),
-                            );
+                });
+                settings_section(ui, t.get("batch_columns.title"));
+                ui.horizontal(|ui| {
+                    ui.add_space(16.0);
+                    ui.vertical(|ui| {
+                        egui::Grid::new("batch_columns_grid")
+                            .spacing([24.0, 8.0])
+                            .show(ui, |ui| {
+                                let columns = &mut self.preferences.batch_columns;
+                                for (i, column) in BatchColumn::ALL.into_iter().enumerate() {
+                                    if column == BatchColumn::Host {
+                                        ui.add_enabled(
+                                            false,
+                                            egui::Checkbox::new(&mut true, column.label(t)),
+                                        );
+                                    } else {
+                                        ui.checkbox(&mut columns.shown[i], column.label(t));
+                                    }
+                                    if i % 4 == 3 {
+                                        ui.end_row();
+                                    }
+                                }
+                            });
+                        ui.add_space(8.0);
+                        if ui
+                            .button(t.get("batch_columns.reset_widths"))
+                            .on_hover_text(t.get("batch_columns.drag_hint"))
+                            .clicked()
+                        {
+                            self.preferences.batch_columns.reset_widths();
                         }
                     });
-                ui.end_row();
-            });
-        if !language_page {
-            // Below the grid, so its label stays at the top of this tall block.
-            ui.add_space(16.0);
-            ui.label(t.get("batch_columns.title"));
-            ui.add_space(6.0);
-            egui::Grid::new("batch_columns_grid")
-                .spacing([24.0, 8.0])
-                .show(ui, |ui| {
-                    let columns = &mut self.preferences.batch_columns;
-                    for (i, column) in BatchColumn::ALL.into_iter().enumerate() {
-                        if column == BatchColumn::Host {
-                            ui.add_enabled(false, egui::Checkbox::new(&mut true, column.label(t)));
-                        } else {
-                            ui.checkbox(&mut columns.shown[i], column.label(t));
-                        }
-                        if i % 4 == 3 {
-                            ui.end_row();
-                        }
-                    }
                 });
-            ui.add_space(6.0);
-            if ui
-                .button(t.get("batch_columns.reset_widths"))
-                .on_hover_text(t.get("batch_columns.drag_hint"))
-                .clicked()
-            {
-                self.preferences.batch_columns.reset_widths();
+            }
+            _ => {
+                settings_section(ui, t.get("settings.nav_language"));
+                form_grid(ui, "language_form", |ui| {
+                    ui.label(t.get("settings.language"));
+                    egui::ComboBox::from_id_salt("language")
+                        .selected_text(self.preferences.language.name())
+                        .width(165.0)
+                        .show_ui(ui, |ui| {
+                            for language in Language::ALL {
+                                ui.selectable_value(
+                                    &mut self.preferences.language,
+                                    language,
+                                    language.name(),
+                                );
+                            }
+                        });
+                    ui.end_row();
+                });
             }
         }
         if self.preferences != before {
@@ -4993,6 +5069,68 @@ fn status_label(t: Translator, host: &Host) -> &'static str {
         None => t.get("apt.not_checked"),
     }
 }
+/// A settings section: a muted title with a rule running to the right edge.
+fn settings_section(ui: &mut egui::Ui, title: &str) {
+    ui.add_space(6.0);
+    let palette = Palette::for_context(ui.ctx());
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(title).strong().color(palette.muted));
+        let rect = ui.available_rect_before_wrap();
+        let y = rect.center().y;
+        ui.painter().hline(
+            rect.left() + 4.0..=rect.right(),
+            y,
+            Stroke::new(1.0, palette.border),
+        );
+    });
+    ui.add_space(8.0);
+}
+/// A settings section's label and control rows, indented under its title.
+fn form_grid(ui: &mut egui::Ui, id: &str, rows: impl FnOnce(&mut egui::Ui)) {
+    ui.horizontal(|ui| {
+        ui.add_space(16.0);
+        egui::Grid::new(id).spacing([24.0, 14.0]).show(ui, rows);
+    });
+    ui.add_space(10.0);
+}
+/// A muted explanation under a section's rows.
+fn setting_note(ui: &mut egui::Ui, text: &str) {
+    ui.horizontal(|ui| {
+        ui.add_space(16.0);
+        ui.add(
+            egui::Label::new(
+                RichText::new(text)
+                    .size(12.0)
+                    .color(Palette::for_context(ui.ctx()).muted),
+            )
+            .wrap(),
+        );
+    });
+}
+/// A tree branch's triangle: right while collapsed, down while expanded.
+fn tree_arrow<'a>(expanded: bool) -> egui::Atom<'a> {
+    egui::Atom::paint(egui::vec2(10.0, 8.0), move |ui, args| {
+        let c = args.rect.center();
+        let points = if expanded {
+            vec![
+                c + egui::vec2(-4.0, -2.5),
+                c + egui::vec2(4.0, -2.5),
+                c + egui::vec2(0.0, 2.5),
+            ]
+        } else {
+            vec![
+                c + egui::vec2(-2.5, -4.0),
+                c + egui::vec2(2.5, 0.0),
+                c + egui::vec2(-2.5, 4.0),
+            ]
+        };
+        ui.painter().add(egui::Shape::convex_polygon(
+            points,
+            args.fallback_text_color,
+            Stroke::NONE,
+        ));
+    })
+}
 /// Input from the person at the keyboard or mouse, which restarts the auto-lock count.
 fn user_input(event: &egui::Event) -> bool {
     matches!(
@@ -5814,6 +5952,110 @@ mod tests {
         let labels = frame(&mut app, vec![]);
         assert!(find(&labels, "bravo").left() > find(&labels, "alpha").left());
         assert!(find(&labels, "charlie").height() < 20.0);
+    }
+
+    #[test]
+    fn settings_tree_groups_preference_pages_under_a_branch() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = RuntimePaths {
+            store: directory.path().join("hosts.db"),
+            debug: true,
+            debug_allow_passkey: false,
+        };
+        let ctx = egui::Context::default();
+        let (requests, _commands) = mpsc::channel();
+        let (_events, results) = mpsc::channel();
+        let mut app = ManagementApp::initialize(
+            &ctx,
+            paths,
+            AuditLog::new(directory.path()).unwrap(),
+            Worker {
+                requests,
+                events: results,
+                decisions: tokio::sync::mpsc::unbounded_channel().0,
+            },
+        );
+        app.preferences.language = Language::EnUs;
+        app.settings_open = true;
+        let t = Translator(Language::EnUs);
+        let frame = |app: &mut ManagementApp, events: Vec<egui::Event>| {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200.0, 800.0),
+                )),
+                events,
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| app.settings_window(ui.ctx()));
+            output.textures_delta.clear();
+            let mut labels = Vec::new();
+            for clipped in output.shapes {
+                if let egui::epaint::Shape::Text(text) = clipped.shape {
+                    labels.push((text.galley.job.text.clone(), text.visual_bounding_rect()));
+                }
+            }
+            labels
+        };
+        let find = |labels: &[(String, egui::Rect)], text: &str| {
+            labels
+                .iter()
+                .find(|(drawn, _)| drawn == text)
+                .map(|(_, rect)| rect.center())
+        };
+        let click = |app: &mut ManagementApp, pos| {
+            let button = |pressed| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            };
+            frame(app, vec![egui::Event::PointerMoved(pos)]);
+            frame(app, vec![button(true)]);
+            frame(app, vec![button(false)]);
+            frame(app, vec![])
+        };
+        frame(&mut app, vec![]);
+        let labels = frame(&mut app, vec![]);
+        let branch = find(&labels, t.get("settings.nav_preferences")).unwrap();
+        let security = find(&labels, t.get("settings.nav_security")).unwrap();
+        // Children sit indented under the branch.
+        let left = |text: &str| {
+            labels
+                .iter()
+                .find(|(drawn, _)| drawn == text)
+                .unwrap()
+                .1
+                .left()
+        };
+        assert!(
+            left(t.get("settings.nav_security")) > left(t.get("settings.nav_preferences")) + 10.0
+        );
+        let labels = click(&mut app, security);
+        assert_eq!(app.settings_page, SettingsPage::Security);
+        let heading = format!(
+            "{}  ›  {}",
+            t.get("settings.nav_preferences"),
+            t.get("settings.nav_security")
+        );
+        assert!(find(&labels, &heading).is_some());
+        assert!(find(&labels, t.get("auto_lock.title")).is_some());
+        assert!(find(&labels, t.get("batch_order.title")).is_none());
+        // The branch row collapses the branch, then expands it again.
+        let labels = click(&mut app, branch);
+        assert!(!app.preferences_expanded);
+        assert!(find(&labels, t.get("settings.nav_security")).is_none());
+        let labels = click(&mut app, branch);
+        assert!(app.preferences_expanded);
+        assert!(find(&labels, t.get("settings.nav_batch")).is_some());
+        // From another page, the branch row opens its first page.
+        let about = find(&labels, t.get("settings.about")).unwrap();
+        click(&mut app, about);
+        assert_eq!(app.settings_page, SettingsPage::About);
+        let labels = click(&mut app, branch);
+        assert_eq!(app.settings_page, SettingsPage::Appearance);
+        assert!(app.preferences_expanded);
+        assert!(find(&labels, t.get("settings.section_host_list")).is_some());
     }
 
     #[test]
