@@ -178,11 +178,18 @@ pub(crate) fn load(conn: &Connection) -> Result<Database> {
         let result = CheckResult {
             checked_at: row.get(1)?,
             // Read back from the saved transcript, so no column is needed for it.
-            phased: if operation == "upgrade" {
+            // Read back from the saved transcript, so no column is needed for these.
+            phased: if matches!(operation.as_str(), "upgrade" | "dist_upgrade") {
                 crate::package_manager::apt::parse_phased(&output)
             } else {
                 vec![]
             },
+            kept_back: if matches!(operation.as_str(), "upgrade" | "dist_upgrade") {
+                crate::package_manager::apt::parse_kept_back(&output)
+            } else {
+                vec![]
+            },
+            plan: crate::package_manager::apt::parse_plan(&output),
             operation,
             status: row.get(3)?,
             distro: row.get(4)?,

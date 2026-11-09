@@ -96,6 +96,7 @@ impl Translator {
             "正在升級可升級套件…" => "progress.apt_upgrade",
             "正在重新讀取剩餘待更新套件…" => "progress.apt_relist",
             "正在讀取重新啟動狀態…" => "progress.restart",
+            "正在模擬 dist-upgrade…" => "progress.simulate",
             "正在排程重新開機…" => "progress.reboot",
             _ => return message.into(),
         };

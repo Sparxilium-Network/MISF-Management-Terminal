@@ -1,6 +1,6 @@
 # MISF Management Terminal 開發說明
 
-> 最後修改：2026-11-08 ｜ 基於 commit：`c5bfe1e`
+> 最後修改：2026-11-08 ｜ 基於 commit：`6519027`
 
 一般使用方式見 [README](../README.md) 與 [使用指南](user-guide.md)。本文件是開發文件的入口，給開發者與維護者，記錄建置、儲存格式、安全設計細節與測試方式。
 
@@ -92,7 +92,8 @@ Linux／macOS 可使用 `cargo run --locked -p misf`，須在對應平台建置�
 - 系統偵測讀取 `uname` 與 `/etc/os-release`。偵測結果只來自主機本身，編輯主機不能改寫；位址或埠變更時清除。手動指定的套件管理器必須確實存在於主機上，否則在執行任何套件指令前停止。
 - 檢查先更新索引（`apt-get update`／`dnf makecache --refresh`／`yum makecache`／`pkg update`），停用動態下載進度。
 - 升級：APT 執行 `apt-get -y upgrade`（`DEBIAN_FRONTEND=noninteractive`、`--force-confold`、`NEEDRESTART_MODE=l`），只升級既有套件；DNF／YUM 執行 `-y upgrade`（可能依相依關係安裝或移除套件，新設定檔另存為 `.rpmnew`）；pkg 執行 `pkg upgrade -y`。索引更新上限 5 分鐘、升級上限 30 分鐘。
-- 重啟提示只限 APT 的 root 帳號：檢查或升級後另外執行固定、唯讀的 `apt::STATUS`（`/var/run/reboot-required` 與 `needrestart -r l -b`），不解析升級輸出；讀取失敗不影響主結果。MISF 從不重啟服務。重新開機以固定命令 `shutdown -r +1` 執行，只限 APT 主機，UI 需兩次確認。
+- 重啟提示只限 APT：檢查或升級後另外執行固定、唯讀的狀態命令（`/var/run/reboot-required` 與 `needrestart -r l -b`），一般帳號整段 `sh -c` 放在 sudo 裡執行，與 update／upgrade 相同；不解析升級輸出，讀取失敗不影響主結果。
+- APT 升級若有 kept back 套件，記入 `kept_back` 並以唯讀的 `apt-get -s dist-upgrade` 模擬變動；操作結束時 UI 彈出報告。`dist-upgrade` 是另一個需確認的操作，只限 APT，可能安裝或移除套件。MISF 從不重啟服務。重新開機以固定命令 `shutdown -r +1` 執行，只限 APT 主機，UI 需兩次確認。
 - APT 升級輸出中「Not upgrading yet due to phasing:」或舊版「The following upgrades have been deferred due to phasing:」之下縮排列出的套件，記為該次結果的 `phased`。它不另存欄位，載入時從保存的升級輸出重新解析，因此資料庫結構不變。
 - FreeBSD／DragonFly 的偵測命令以 `sh -c` 包裝，`pkg` 命令以 `env` 設定環境變數，csh 登入 shell 也能執行。
 - sudo 密碼以 SSH channel 標準輸入傳送，不放在命令列。PTY 預設開啟（類似 `ssh -t`）。

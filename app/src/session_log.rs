@@ -9,6 +9,7 @@
 use crate::i18n::Translator;
 use chrono::Local;
 use misf_core::model::{CheckResult, Host, Package};
+use misf_core::transcript::heading;
 use serde_json::Value;
 use std::collections::VecDeque;
 use std::fmt::Write as _;
@@ -28,7 +29,6 @@ const SECRET_FIELDS: [&str; 6] = [
     "pin",
 ];
 const MASK: &str = "[已遮蔽]";
-const RULE: &str = "********";
 
 #[derive(Default)]
 pub struct SessionLog {
@@ -112,7 +112,8 @@ impl SessionLog {
     /// Marks the start of something the user did, such as a batch upgrade.
     pub fn banner(&mut self, title: &str) {
         let mut entry = Zeroizing::new(String::new());
-        let _ = write!(entry, "\n{RULE}\n{title}  ({})\n{RULE}\n\n", now());
+        entry.push_str(&heading(&format!("{title}  ({})", now())));
+        entry.push('\n');
         self.push(entry);
     }
 
@@ -130,7 +131,7 @@ impl SessionLog {
     /// One host's check or upgrade: who it is, what changed, and its remote output.
     pub fn host(&mut self, t: Translator, name: &str, host: Option<&Host>, result: &CheckResult) {
         let mut entry = Zeroizing::new(String::new());
-        let _ = writeln!(entry, "\n{RULE}\n{name}\n{RULE}");
+        entry.push_str(&heading(name));
         let line = |entry: &mut String, label: &str, value: &str| {
             let _ = writeln!(entry, "{label}: {value}");
         };
@@ -182,6 +183,29 @@ impl SessionLog {
         if !result.phased.is_empty() {
             line(&mut entry, t.get("log.phased"), &result.phased.join(", "));
         }
+        if !result.kept_back.is_empty() {
+            line(
+                &mut entry,
+                t.get("log.kept_back"),
+                &result.kept_back.join(", "),
+            );
+        }
+        if let Some(plan) = &result.plan {
+            let _ = writeln!(entry, "{}", t.get("log.plan"));
+            for (label, list) in [
+                ("install", &plan.install),
+                ("upgrade", &plan.upgrade),
+                ("remove", &plan.remove),
+            ] {
+                for p in list.iter() {
+                    let _ = writeln!(
+                        entry,
+                        "    {label} {} {} -> {}",
+                        p.name, p.current_version, p.candidate_version
+                    );
+                }
+            }
+        }
         if let Some(restart) = &result.restart {
             let _ = writeln!(
                 entry,
@@ -211,7 +235,8 @@ impl SessionLog {
         if !result.output.ends_with('\n') {
             entry.push('\n');
         }
-        let _ = writeln!(entry, "\n{RULE}\nEND OF {name}\n{RULE}\n");
+        entry.push_str(&heading(&format!("END OF {name}")));
+        entry.push('\n');
         self.push(entry);
     }
 
@@ -321,14 +346,18 @@ mod tests {
         };
         log.host(T, "UBUNTU1", Some(&host), &result);
         let text = log.render();
-        assert!(text.contains("\n********\n使用者 進行批次 APT 升級（1 台）  ("));
-        let block = &text[text.find("\n********\nUBUNTU1\n********\n").unwrap()..];
+        assert!(text.contains("\n* 使用者 進行批次 APT 升級（1 台）  ("));
+        let block = &text[text
+            .find("\n***********\n* UBUNTU1 *\n***********\n")
+            .unwrap()..];
         assert!(block.contains("h1"));
         assert!(block.contains("deploy@10.0.0.5:22"));
         assert!(block.contains("SHA256:abc"));
         assert!(block.contains("    openssl 3.0.16 -> 3.0.17"));
         assert!(block.contains("Setting up openssl (3.0.17) ...\n"));
-        assert!(block.ends_with("\n********\nEND OF UBUNTU1\n********\n\n"));
+        assert!(
+            block.ends_with("\n******************\n* END OF UBUNTU1 *\n******************\n\n")
+        );
     }
 
     #[test]

@@ -2,7 +2,7 @@ use misf_core::{
     batch::{self, Decision},
     dispatch, dispatch_with,
     model::{CheckResult, Host},
-    package_manager::{self, Manager, apt, dnf},
+    package_manager::{self, Manager, Mode, apt, dnf},
     reboot, ssh,
     store::Store,
 };
@@ -34,6 +34,8 @@ struct State {
     wrong_sudo: bool,
     /// Set once an upgrade ran: later listings report only the held-back package.
     upgraded: AtomicBool,
+    /// Set once a dist-upgrade ran: later listings are empty.
+    dist_upgraded: AtomicBool,
 }
 
 impl State {
@@ -43,7 +45,9 @@ impl State {
             (self.detect.clone(), 0)
         } else if command == apt::LIST {
             let held = "libc6/stable 2.36-9 amd64 [upgradable from: 2.36-8]\n";
-            let listing = if upgraded {
+            let listing = if self.dist_upgraded.load(Ordering::SeqCst) {
+                "Listing...\n".into()
+            } else if upgraded {
                 format!("Listing...\n{held}")
             } else {
                 format!(
@@ -65,14 +69,26 @@ impl State {
                 ),
                 100,
             )
-        } else if [
-            apt::UPGRADE,
-            apt::SUDO_UPGRADE,
-            dnf::UPGRADE,
-            dnf::SUDO_UPGRADE,
-        ]
-        .contains(&command)
-        {
+        } else if [apt::UPGRADE, apt::SUDO_UPGRADE].contains(&command) {
+            self.upgraded.store(true, Ordering::SeqCst);
+            // libc6 needs a new package, so a plain upgrade keeps it back.
+            (
+                "Setting up openssl (3.0.17) ...\r\nThe following packages have been kept back:\r\n  libc6\r\n1 upgraded, 0 newly installed, 0 to remove and 1 not upgraded.\r\n".into(),
+                0,
+            )
+        } else if command == apt::SIMULATE {
+            (
+                "NOTE: This is only a simulation!\nInst libc6 [2.36-8] (2.36-9 Debian:13/stable [amd64])\nInst libc6-extra (2.36-9 Debian:13/stable [amd64])\nRemv old-libc [1.0]\n".into(),
+                0,
+            )
+        } else if [apt::DIST_UPGRADE, apt::SUDO_DIST_UPGRADE].contains(&command) {
+            self.upgraded.store(true, Ordering::SeqCst);
+            self.dist_upgraded.store(true, Ordering::SeqCst);
+            (
+                "Setting up openssl (3.0.17) ...\r\nSetting up libc6 (2.36-9) ...\r\n".into(),
+                0,
+            )
+        } else if [dnf::UPGRADE, dnf::SUDO_UPGRADE].contains(&command) {
             self.upgraded.store(true, Ordering::SeqCst);
             ("Setting up openssl (3.0.17) ...\r\n".into(), 0)
         } else if [apt::UPDATE, apt::SUDO_UPDATE].contains(&command) {
@@ -93,7 +109,7 @@ impl State {
             } else {
                 ("Metadata cache created.\r\n".into(), 0)
             }
-        } else if command == apt::STATUS {
+        } else if [apt::STATUS, apt::SUDO_STATUS].contains(&command) {
             (
                 "__MISF_REBOOT__\n__MISF_REBOOT_PKG__linux-image-7.0.0-43-generic\nNEEDRESTART-VER: 3.6\nNEEDRESTART-KCUR: 7.0.0-42-generic\nNEEDRESTART-KEXP: 7.0.0-43-generic\nNEEDRESTART-KSTA: 3\nNEEDRESTART-SVC: systemd-logind.service\nNEEDRESTART-SVC: dbus.service\n".into(),
                 0,
@@ -318,7 +334,8 @@ async fn password_pty_sudo_and_packages_work_end_to_end() {
     assert_eq!(check.packages[0].candidate_version, "3.0.17");
     assert_eq!(check.distro, "Debian 13");
     assert_eq!(check.package_manager, "apt");
-    assert_eq!(fixture.state.pty_count.load(Ordering::SeqCst), 1);
+    // The index update and the restart status both go through sudo with a PTY.
+    assert_eq!(fixture.state.pty_count.load(Ordering::SeqCst), 2);
     assert!(!check.output.contains("sudo-secret"));
     assert!(!check.output.contains("__MISF_SUDO_PROMPT__"));
     assert!(!check.output.contains(['\r', '\x1b']));
@@ -357,11 +374,30 @@ async fn sudo_upgrade_reports_installed_and_held_back_packages() {
     assert_eq!(result.packages[0].name, "libc6");
     assert!(result.output.contains("Setting up openssl"));
     assert!(!result.output.contains("sudo-secret"));
-    assert_eq!(fixture.state.pty_count.load(Ordering::SeqCst), 2);
+    // Update, upgrade and restart status use sudo; listings and the simulation do not.
+    assert_eq!(fixture.state.pty_count.load(Ordering::SeqCst), 3);
+    // libc6 was kept back, so the dist-upgrade plan was simulated, changing nothing.
+    assert_eq!(result.kept_back, ["libc6"]);
+    let plan = result.plan.as_ref().unwrap();
+    assert_eq!(plan.upgrade[0].name, "libc6");
+    assert_eq!(plan.install[0].name, "libc6-extra");
+    assert_eq!(plan.remove[0].name, "old-libc");
+    // Section titles are boxed to their display width: five CJK characters are ten columns.
+    assert!(
+        result
+            .output
+            .contains("\n**************\n* 待更新套件 *\n**************\n")
+    );
     let commands = fixture.state.commands.lock().unwrap();
     assert_eq!(
         *commands,
-        package_manager::package_commands(&fixture.host, true)
+        package_manager::package_commands(&fixture.host, Mode::Upgrade)
+    );
+    assert!(commands.iter().any(|c| c == apt::SIMULATE));
+    assert!(
+        !commands
+            .iter()
+            .any(|c| c.contains("dist-upgrade") && c != apt::SIMULATE)
     );
     assert!(
         commands
@@ -383,7 +419,7 @@ async fn root_upgrade_runs_without_sudo() {
     // Restart status is read last, after the upgrade and the second listing.
     assert_eq!(
         *commands,
-        package_manager::package_commands(&fixture.host, true)
+        package_manager::package_commands(&fixture.host, Mode::Upgrade)
     );
     assert_eq!(commands.last().unwrap(), apt::STATUS);
     let restart = result.restart.unwrap();
@@ -395,19 +431,48 @@ async fn root_upgrade_runs_without_sudo() {
 }
 
 #[tokio::test]
-async fn regular_accounts_never_read_restart_status() {
+async fn regular_accounts_read_restart_status_through_sudo() {
     let fixture = fixture(false, false).await;
-    let result = package_manager::upgrade(&fixture.host, &|_| {}).await;
+    let result = package_manager::check(&fixture.host, &|_| {}).await;
     assert_eq!(result.status, "success", "{}", result.error);
-    assert!(result.restart.is_none());
-    assert!(
-        !fixture
-            .state
-            .commands
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|c| c.contains("needrestart"))
+    assert!(result.restart.unwrap().reboot_required);
+    let commands = fixture.state.commands.lock().unwrap();
+    assert_eq!(commands.last().unwrap(), apt::SUDO_STATUS);
+    assert!(!commands.iter().any(|c| c == apt::STATUS));
+}
+
+#[tokio::test]
+async fn dist_upgrade_runs_only_its_own_command_and_clears_kept_back_packages() {
+    let fixture = fixture(false, false).await;
+    let result = package_manager::dist_upgrade(&fixture.host, &|_| {}).await;
+    assert_eq!(result.status, "success", "{}", result.error);
+    assert_eq!(result.operation, "dist_upgrade");
+    assert!(result.is_upgrade());
+    assert_eq!(result.upgraded.len(), 2);
+    assert!(result.packages.is_empty() && result.kept_back.is_empty());
+    assert!(result.plan.is_none());
+    assert!(result.output.contains("* APT dist-upgrade *"));
+    // Nothing was kept back, so no simulation ran.
+    assert_eq!(
+        *fixture.state.commands.lock().unwrap(),
+        [
+            package_manager::DETECT,
+            apt::SUDO_UPDATE,
+            apt::LIST,
+            apt::SUDO_DIST_UPGRADE,
+            apt::LIST,
+            apt::SUDO_STATUS,
+        ]
+    );
+
+    // Other managers have no dist-upgrade and stop before touching packages.
+    let rocky = fixture_on(DNF_HOST, false, false).await;
+    let result = package_manager::dist_upgrade(&rocky.host, &|_| {}).await;
+    assert_eq!(result.status, "failed");
+    assert!(result.error.contains("dist-upgrade"), "{}", result.error);
+    assert_eq!(
+        *rocky.state.commands.lock().unwrap(),
+        [package_manager::DETECT]
     );
 }
 
@@ -470,7 +535,7 @@ async fn sudo_dnf_upgrade_parses_wrapped_rows_and_reports_held_back_packages() {
     let commands = fixture.state.commands.lock().unwrap();
     assert_eq!(
         *commands,
-        package_manager::package_commands(&fixture.host, true)
+        package_manager::package_commands(&fixture.host, Mode::Upgrade)
     );
     assert!(commands[1..].iter().all(|c| !c.contains("apt")));
 }
@@ -505,7 +570,7 @@ async fn chosen_package_manager_overrides_detection_only_when_installed() {
     fixture.host.manager_choice = "yum".into();
     let result = package_manager::check(&fixture.host, &|_| {}).await;
     let commands = fixture.state.commands.lock().unwrap().clone();
-    let expected = package_manager::package_commands(&fixture.host, false);
+    let expected = package_manager::package_commands(&fixture.host, Mode::Check);
     assert!(expected[1].contains("yum"), "{expected:?}");
     assert_eq!(commands[..2], expected[..2], "{}", result.error);
     // The detected manager is still recorded as detected.

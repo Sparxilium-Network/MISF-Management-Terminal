@@ -1,7 +1,7 @@
 //! APT (Debian, Ubuntu).
 
 use super::Commands;
-use crate::model::{Package, RestartStatus};
+use crate::model::{Package, RestartStatus, UpgradePlan};
 use anyhow::{Result, bail, ensure};
 
 pub const UPDATE: &str = "LC_ALL=C apt-get -q=1 -o APT::Update::Error-Mode=any update";
@@ -11,23 +11,41 @@ pub const LIST: &str = "LC_ALL=C apt list --upgradable";
 pub const UPGRADE: &str = "LC_ALL=C DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l apt-get -y -q=1 -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade";
 // sudo resets the environment, so the variables go through `env` after it.
 pub const SUDO_UPGRADE: &str = "LC_ALL=C sudo -S -p '__MISF_SUDO_PROMPT__' -- env LC_ALL=C DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l apt-get -y -q=1 -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade";
+// Same safeguards as the upgrade, but may install new packages and remove installed ones.
+pub const DIST_UPGRADE: &str = "LC_ALL=C DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l apt-get -y -q=1 -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold dist-upgrade";
+pub const SUDO_DIST_UPGRADE: &str = "LC_ALL=C sudo -S -p '__MISF_SUDO_PROMPT__' -- env LC_ALL=C DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l apt-get -y -q=1 -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold dist-upgrade";
+/// `-s` only prints what dist-upgrade would do; it takes no lock and needs no root.
+pub const SIMULATE: &str = "LC_ALL=C apt-get -s -q=1 dist-upgrade";
 
-/// Read-only restart status, run as root only: `reboot-required` plus needrestart in
-/// list mode (`-r l`) with batch output (`-b`); it never restarts anything.
-pub const STATUS: &str = "sh -c 'if [ -f /var/run/reboot-required ]; then echo __MISF_REBOOT__; if [ -r /var/run/reboot-required.pkgs ]; then sed \"s/^/__MISF_REBOOT_PKG__/\" /var/run/reboot-required.pkgs; fi; fi; if command -v needrestart >/dev/null 2>&1; then LC_ALL=C needrestart -r l -b; else echo __MISF_NO_NEEDRESTART__; fi'";
+/// Read-only restart status: `reboot-required` plus needrestart in list mode (`-r l`)
+/// with batch output (`-b`); it never restarts anything.
+macro_rules! status_script {
+    () => {
+        "sh -c 'if [ -f /var/run/reboot-required ]; then echo __MISF_REBOOT__; if [ -r /var/run/reboot-required.pkgs ]; then sed \"s/^/__MISF_REBOOT_PKG__/\" /var/run/reboot-required.pkgs; fi; fi; if command -v needrestart >/dev/null 2>&1; then LC_ALL=C needrestart -r l -b; else echo __MISF_NO_NEEDRESTART__; fi'"
+    };
+}
+pub const STATUS: &str = status_script!();
+/// The whole script runs inside sudo, like the update and upgrade.
+pub const SUDO_STATUS: &str = concat!(
+    "LC_ALL=C sudo -S -p '__MISF_SUDO_PROMPT__' -- ",
+    status_script!()
+);
 
 pub(super) const ROOT: Commands = Commands {
     update: UPDATE,
     list: LIST,
     upgrade: UPGRADE,
+    dist_upgrade: Some(DIST_UPGRADE),
+    simulate: Some(SIMULATE),
     status: Some(STATUS),
 };
 pub(super) const SUDO: Commands = Commands {
     update: SUDO_UPDATE,
     list: LIST,
     upgrade: SUDO_UPGRADE,
-    // needrestart only sees every process as root; regular accounts get no restart status.
-    status: None,
+    dist_upgrade: Some(SUDO_DIST_UPGRADE),
+    simulate: Some(SIMULATE),
+    status: Some(SUDO_STATUS),
 };
 
 /// A repository that failed to download still lets `apt-get update` exit 0.
@@ -85,6 +103,72 @@ pub fn parse_phased(output: &str) -> Vec<String> {
     phased
 }
 
+/// Packages listed under "have been kept back", which need a dist-upgrade.
+pub fn parse_kept_back(output: &str) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    let mut inside = false;
+    for line in output.lines() {
+        if line
+            .trim_start()
+            .starts_with("The following packages have been kept back")
+        {
+            inside = true;
+        } else if inside && line.starts_with(' ') {
+            for name in line.split_whitespace() {
+                if !names.iter().any(|known| known == name) {
+                    names.push(name.into());
+                }
+            }
+        } else {
+            inside = false;
+        }
+    }
+    names
+}
+
+/// Reads `apt-get -s dist-upgrade`: `Inst name [old] (new …)`, `Inst name (new …)` and
+/// `Remv name [old]` lines; `None` when there are none.
+pub fn parse_plan(output: &str) -> Option<UpgradePlan> {
+    let mut plan = UpgradePlan::default();
+    for line in output.lines().map(str::trim) {
+        let (install, rest) = if let Some(rest) = line.strip_prefix("Inst ") {
+            (true, rest)
+        } else if let Some(rest) = line.strip_prefix("Remv ") {
+            (false, rest)
+        } else {
+            continue;
+        };
+        let (name, rest) = rest.split_once(' ').unwrap_or((rest, ""));
+        let mut package = Package {
+            name: name.into(),
+            ..Default::default()
+        };
+        let mut rest = rest.trim();
+        if let Some(inner) = rest.strip_prefix('[')
+            && let Some((current, after)) = inner.split_once(']')
+        {
+            package.current_version = current.into();
+            rest = after.trim();
+        }
+        if let Some(inner) = rest.strip_prefix('(') {
+            let inner = inner.trim_end_matches(')');
+            let mut fields = inner.split_whitespace();
+            package.candidate_version = fields.next().unwrap_or_default().into();
+            package.repository = fields.next().unwrap_or_default().into();
+            if let Some(start) = inner.rfind('[') {
+                package.architecture = inner[start + 1..].trim_end_matches(']').into();
+            }
+        }
+        match (install, package.current_version.is_empty()) {
+            (false, _) => plan.remove.push(package),
+            (true, true) => plan.install.push(package),
+            (true, false) => plan.upgrade.push(package),
+        }
+    }
+    (!plan.install.is_empty() || !plan.upgrade.is_empty() || !plan.remove.is_empty())
+        .then_some(plan)
+}
+
 /// Reads [`STATUS`] output; `None` when neither part of it ran.
 pub fn parse_restart(code: u32, output: &str) -> Option<RestartStatus> {
     let mut status = RestartStatus::default();
@@ -127,6 +211,41 @@ pub fn parse_restart(code: u32, output: &str) -> Option<RestartStatus> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kept_back_packages_and_the_dist_upgrade_plan() {
+        let upgrade = "Calculating upgrade...
+The following packages have been kept back:
+  linux-generic linux-headers-generic
+  linux-image-generic
+0 upgraded, 0 newly installed, 0 to remove and 3 not upgraded.
+";
+        assert_eq!(
+            parse_kept_back(upgrade),
+            [
+                "linux-generic",
+                "linux-headers-generic",
+                "linux-image-generic"
+            ]
+        );
+        assert!(parse_kept_back("Setting up openssl (3.0.17) ...").is_empty());
+        let simulation = "NOTE: This is only a simulation!
+Inst linux-image-7.0.0-43-generic (7.0.0-43.43 Ubuntu:26.04/resolute-updates [amd64])
+Inst linux-generic [7.0.0-42.42] (7.0.0-43.43 Ubuntu:26.04/resolute-updates [amd64])
+Remv old-tool [1.2-3]
+Conf linux-generic (7.0.0-43.43 Ubuntu:26.04/resolute-updates [amd64])
+";
+        let plan = parse_plan(simulation).unwrap();
+        assert_eq!(plan.install[0].name, "linux-image-7.0.0-43-generic");
+        assert_eq!(plan.install[0].candidate_version, "7.0.0-43.43");
+        assert_eq!(plan.install[0].architecture, "amd64");
+        assert_eq!(plan.upgrade[0].name, "linux-generic");
+        assert_eq!(plan.upgrade[0].current_version, "7.0.0-42.42");
+        assert_eq!(plan.upgrade[0].repository, "Ubuntu:26.04/resolute-updates");
+        assert_eq!(plan.remove[0].name, "old-tool");
+        assert_eq!(plan.remove[0].current_version, "1.2-3");
+        assert!(parse_plan("0 upgraded, 0 newly installed").is_none());
+    }
 
     #[test]
     fn restart_status_reads_reboot_required_and_needrestart_batch_output() {

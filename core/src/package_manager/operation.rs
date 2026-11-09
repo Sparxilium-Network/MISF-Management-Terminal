@@ -1,8 +1,10 @@
-//! One check or upgrade on one host: detect, refresh the index, list, and maybe upgrade.
+//! One check, upgrade or dist-upgrade on one host: detect, refresh the index, list, and
+//! maybe upgrade.
 
-use super::{DETECT, Manager, Platform, parse_platform};
-use crate::model::{CheckResult, Host, Package, RestartStatus};
+use super::{DETECT, Manager, Mode, Platform, parse_platform};
+use crate::model::{CheckResult, Host, Package, RestartStatus, UpgradePlan};
 use crate::ssh::{self, Session};
+use crate::transcript::heading;
 use anyhow::{Context, Result, ensure};
 use chrono::Utc;
 
@@ -13,11 +15,15 @@ const UPGRADE_SECONDS: u64 = 30 * 60;
 const STATUS_SECONDS: u64 = 2 * 60;
 
 pub async fn check(host: &Host, progress: &dyn Fn(&str)) -> CheckResult {
-    run(host, false, progress).await
+    run(host, Mode::Check, progress).await
 }
 
 pub async fn upgrade(host: &Host, progress: &dyn Fn(&str)) -> CheckResult {
-    run(host, true, progress).await
+    run(host, Mode::Upgrade, progress).await
+}
+
+pub async fn dist_upgrade(host: &Host, progress: &dyn Fn(&str)) -> CheckResult {
+    run(host, Mode::DistUpgrade, progress).await
 }
 
 /// What a finished operation found; the remote transcript is kept even when it fails.
@@ -26,6 +32,8 @@ struct Outcome {
     pending: Vec<Package>,
     upgraded: Vec<Package>,
     phased: Vec<String>,
+    kept_back: Vec<String>,
+    plan: Option<UpgradePlan>,
     restart: Option<RestartStatus>,
 }
 
@@ -40,7 +48,7 @@ struct Run<'a> {
 // Generic so a batch task's no-op progress keeps the future `Send`.
 pub(crate) async fn run<P: Fn(&str) + ?Sized>(
     host: &Host,
-    upgrade: bool,
+    mode: Mode,
     progress: &P,
 ) -> CheckResult {
     let checked_at = Utc::now().to_rfc3339();
@@ -55,48 +63,66 @@ pub(crate) async fn run<P: Fn(&str) + ?Sized>(
             transcript: String::new(),
             platform: None,
         };
-        let outcome = run.operate(upgrade, progress).await;
+        let outcome = run.operate(mode, progress).await;
         (transcript, platform) = (run.transcript, run.platform);
         ssh::disconnect(&session).await;
         outcome
     }
     .await;
-    record(host, checked_at, upgrade, &transcript, platform, result)
+    record(host, checked_at, mode, &transcript, platform, result)
 }
 
 impl Run<'_> {
-    async fn operate<P: Fn(&str) + ?Sized>(
-        &mut self,
-        upgrade: bool,
-        progress: &P,
-    ) -> Result<Outcome> {
+    async fn operate<P: Fn(&str) + ?Sized>(&mut self, mode: Mode, progress: &P) -> Result<Outcome> {
         let manager = self.detect().await?;
         let commands = manager.commands(self.host.username == "root");
+        let install = match mode {
+            Mode::Check => None,
+            Mode::Upgrade => Some(commands.upgrade),
+            Mode::DistUpgrade => Some(commands.dist_upgrade.with_context(|| {
+                format!("{} 沒有 dist-upgrade；只有 APT 支援", manager.label())
+            })?),
+        };
         progress("正在更新套件索引…");
         self.refresh(manager, commands.update).await?;
         progress("正在讀取待更新套件…");
         let pending = self.pending(manager, commands.list).await?;
-        let mut outcome = if !upgrade || pending.is_empty() {
-            Outcome {
+        let mut outcome = match install {
+            Some(command) if !pending.is_empty() => {
+                progress("正在升級可升級套件…");
+                let output = self.install(manager, mode, command).await?;
+                progress("正在重新讀取剩餘待更新套件…");
+                let remaining = self.pending(manager, commands.list).await?;
+                let upgraded = pending
+                    .into_iter()
+                    .filter(|package| !remaining.iter().any(|left| left.name == package.name))
+                    .collect();
+                let phased = manager.held_back(&output);
+                let kept_back = manager
+                    .kept_back(&output)
+                    .into_iter()
+                    .filter(|name| !phased.contains(name))
+                    .collect();
+                Outcome {
+                    pending: remaining,
+                    upgraded,
+                    phased,
+                    kept_back,
+                    ..Default::default()
+                }
+            }
+            _ => Outcome {
                 pending,
                 ..Default::default()
-            }
-        } else {
-            progress("正在升級可升級套件…");
-            let phased = self.install(manager, commands.upgrade).await?;
-            progress("正在重新讀取剩餘待更新套件…");
-            let remaining = self.pending(manager, commands.list).await?;
-            let upgraded = pending
-                .into_iter()
-                .filter(|package| !remaining.iter().any(|left| left.name == package.name))
-                .collect();
-            Outcome {
-                pending: remaining,
-                upgraded,
-                phased,
-                restart: None,
-            }
+            },
         };
+        // Kept-back packages need a dist-upgrade; show what it would change, without doing it.
+        if let Some(command) = commands.simulate
+            && !outcome.kept_back.is_empty()
+        {
+            progress("正在模擬 dist-upgrade…");
+            outcome.plan = self.simulate(command).await;
+        }
         if let Some(command) = commands.status {
             progress("正在讀取重新啟動狀態…");
             outcome.restart = self.restart(command).await;
@@ -104,27 +130,41 @@ impl Run<'_> {
         Ok(outcome)
     }
 
-    /// Reads what needs a restart; a failure leaves it unknown and never fails the run.
-    async fn restart(&mut self, command: &str) -> Option<RestartStatus> {
-        let read = ssh::execute(self.session, command, false, "", STATUS_SECONDS).await;
-        self.transcript.push_str(
-            "
---- 重新啟動狀態 ---
-",
-        );
+    /// Runs a read-only command whose failure never fails the run.
+    async fn optional(&mut self, title: &str, command: &str) -> Option<(u32, String)> {
+        let read = if command.contains("sudo -S") {
+            self.privileged(command, STATUS_SECONDS).await
+        } else {
+            ssh::execute(self.session, command, false, "", STATUS_SECONDS).await
+        };
+        self.transcript.push_str(&heading(title));
         match read {
             Ok((code, output)) => {
                 self.transcript.push_str(&output);
-                super::apt::parse_restart(code, &output)
+                Some((code, output))
             }
             Err(error) => {
-                self.transcript.push_str(&format!(
-                    "{error:#}
-"
-                ));
+                self.transcript.push_str(&format!("{error:#}\n"));
                 None
             }
         }
+    }
+
+    /// Reads what needs a restart; a failure leaves it unknown.
+    async fn restart(&mut self, command: &str) -> Option<RestartStatus> {
+        let (code, output) = self.optional("重新啟動狀態", command).await?;
+        super::apt::parse_restart(code, &output)
+    }
+
+    /// What `dist-upgrade` would install, upgrade and remove; nothing is changed.
+    async fn simulate(&mut self, command: &str) -> Option<UpgradePlan> {
+        let (code, output) = self
+            .optional("dist-upgrade 模擬（不會變更系統）", command)
+            .await?;
+        if code != 0 {
+            return None;
+        }
+        super::apt::parse_plan(&output)
     }
 
     /// Runs DETECT and settles which manager may run; never a different one than confirmed.
@@ -139,6 +179,7 @@ impl Run<'_> {
 
     async fn refresh(&mut self, manager: Manager, command: &str) -> Result<()> {
         let (code, output) = self.privileged(command, UPDATE_SECONDS).await?;
+        self.transcript.push_str(&heading("更新套件索引"));
         self.transcript.push_str(&output);
         let failed = output
             .lines()
@@ -156,20 +197,23 @@ impl Run<'_> {
         } else {
             ssh::execute(self.session, command, false, "", LIST_SECONDS).await?
         };
-        self.transcript.push_str("\n--- 待更新套件 ---\n");
+        self.transcript.push_str(&heading("待更新套件"));
         self.transcript.push_str(&output);
         ensure!(manager.listed(code), "無法讀取待更新套件（退出碼 {code}）");
         manager.parse_pending(&output)
     }
 
-    /// Upgrades and returns what the manager held back on purpose.
-    async fn install(&mut self, manager: Manager, command: &str) -> Result<Vec<String>> {
+    /// Upgrades and returns the manager's output for what it held or kept back.
+    async fn install(&mut self, manager: Manager, mode: Mode, command: &str) -> Result<String> {
         let (code, output) = self.privileged(command, UPGRADE_SECONDS).await?;
-        self.transcript
-            .push_str(&format!("\n--- {} upgrade ---\n", manager.label()));
+        self.transcript.push_str(&heading(&format!(
+            "{} {}",
+            manager.label(),
+            mode.command_name()
+        )));
         self.transcript.push_str(&output);
         validate_upgrade(code, &output)?;
-        Ok(manager.held_back(&output))
+        Ok(output)
     }
 
     /// A command that may hit a sudo prompt: uses the host's PTY setting and sudo password.
@@ -224,14 +268,14 @@ fn validate_upgrade(code: u32, output: &str) -> Result<()> {
 fn record(
     host: &Host,
     checked_at: String,
-    upgrade: bool,
+    mode: Mode,
     transcript: &str,
     platform: Option<Platform>,
     result: Result<Outcome>,
 ) -> CheckResult {
     let mut check = CheckResult {
         checked_at,
-        operation: if upgrade { "upgrade" } else { "check" }.into(),
+        operation: mode.id().into(),
         output: host.redact(transcript),
         ..Default::default()
     };
@@ -248,6 +292,8 @@ fn record(
             check.packages = outcome.pending;
             check.upgraded = outcome.upgraded;
             check.phased = outcome.phased;
+            check.kept_back = outcome.kept_back;
+            check.plan = outcome.plan;
             check.restart = outcome.restart;
         }
         Err(error) => {

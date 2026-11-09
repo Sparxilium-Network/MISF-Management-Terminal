@@ -71,7 +71,7 @@ impl Session {
         if self.debug {
             let remote = matches!(
                 name.as_str(),
-                "probe" | "test" | "check" | "upgrade" | "batch" | "reboot"
+                "probe" | "test" | "check" | "upgrade" | "dist_upgrade" | "batch" | "reboot"
             );
             let blocked = (matches!(name.as_str(), "vault_add_passkey" | "vault_unlock_passkey")
                 && !self.allow_passkey)
@@ -122,7 +122,8 @@ impl Session {
             })
         } else {
             let succeeded = result.as_ref().is_ok_and(|value| {
-                !matches!(name.as_str(), "check" | "upgrade") || value["status"] == "success"
+                !matches!(name.as_str(), "check" | "upgrade" | "dist_upgrade")
+                    || value["status"] == "success"
             });
             self.audit.record(
                 action,

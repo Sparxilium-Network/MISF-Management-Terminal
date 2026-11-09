@@ -15,7 +15,7 @@ pub mod yum;
 
 pub use detect::{DETECT, Platform, parse_platform};
 pub(crate) use operation::run;
-pub use operation::{check, upgrade};
+pub use operation::{check, dist_upgrade, upgrade};
 
 use crate::model::{Host, Package};
 use anyhow::Result;
@@ -23,7 +23,44 @@ use anyhow::Result;
 /// The marker every sudo command prints as its password prompt; the SSH layer answers it.
 pub const SUDO_PROMPT: &str = "__MISF_SUDO_PROMPT__";
 
-/// The three commands one manager runs, for root or through sudo.
+/// What an operation does after listing pending packages.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    /// Lists only.
+    Check,
+    /// Upgrades installed packages without installing or removing any.
+    Upgrade,
+    /// APT only: may also install new packages and remove installed ones.
+    DistUpgrade,
+}
+
+impl Mode {
+    /// The request and stored operation name.
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Check => "check",
+            Self::Upgrade => "upgrade",
+            Self::DistUpgrade => "dist_upgrade",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Self> {
+        [Self::Check, Self::Upgrade, Self::DistUpgrade]
+            .into_iter()
+            .find(|mode| mode.id() == id)
+    }
+
+    /// The package manager subcommand, as shown in the transcript.
+    fn command_name(self) -> &'static str {
+        match self {
+            Self::Check => "list",
+            Self::Upgrade => "upgrade",
+            Self::DistUpgrade => "dist-upgrade",
+        }
+    }
+}
+
+/// The commands one manager runs, for root or through sudo.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Commands {
     /// Refreshes the package index.
@@ -32,7 +69,11 @@ pub struct Commands {
     pub list: &'static str,
     /// Upgrades installed packages.
     pub upgrade: &'static str,
-    /// Reads what needs a restart afterwards; only APT as root has one.
+    /// Upgrades and may install or remove packages; only APT has one.
+    pub dist_upgrade: Option<&'static str>,
+    /// Read-only simulation of `dist_upgrade`, run when an upgrade kept packages back.
+    pub simulate: Option<&'static str>,
+    /// Reads what needs a restart afterwards; only APT has one.
     pub status: Option<&'static str>,
 }
 
@@ -120,23 +161,38 @@ impl Manager {
             Self::Dnf | Self::Yum | Self::Pkg => vec![],
         }
     }
+
+    /// Packages the upgrade could not take without installing or removing others.
+    fn kept_back(self, output: &str) -> Vec<String> {
+        match self {
+            Self::Apt => apt::parse_kept_back(output),
+            Self::Dnf | Self::Yum | Self::Pkg => vec![],
+        }
+    }
 }
 
 /// The commands an operation with this manager runs, in order.
-pub fn manager_commands(manager: Manager, root: bool, upgrade: bool) -> Vec<&'static str> {
+/// The simulation runs only when packages were kept back, and the restart status last.
+pub fn manager_commands(manager: Manager, root: bool, mode: Mode) -> Vec<&'static str> {
     let commands = manager.commands(root);
     let mut list = vec![DETECT, commands.update, commands.list];
-    if upgrade {
-        list.extend([commands.upgrade, commands.list]);
+    let install = match mode {
+        Mode::Check => None,
+        Mode::Upgrade => Some(commands.upgrade),
+        Mode::DistUpgrade => commands.dist_upgrade,
+    };
+    if let Some(install) = install {
+        list.extend([install, commands.list]);
+        list.extend(commands.simulate);
     }
     list.extend(commands.status);
     list
 }
 
-/// The commands a check or upgrade runs on this host; only DETECT until its manager is known.
-pub fn package_commands(host: &Host, upgrade: bool) -> Vec<&'static str> {
+/// The commands an operation runs on this host; only DETECT until its manager is known.
+pub fn package_commands(host: &Host, mode: Mode) -> Vec<&'static str> {
     match Manager::from_id(host.manager()) {
-        Some(manager) => manager_commands(manager, host.username == "root", upgrade),
+        Some(manager) => manager_commands(manager, host.username == "root", mode),
         None => vec![DETECT],
     }
 }
@@ -167,10 +223,21 @@ mod tests {
             {
                 assert!(!command.contains("sudo"), "{command}");
             }
-            // Restart status is APT-only and never offered to a regular account.
-            assert_eq!(root.status.is_some(), manager == Manager::Apt);
+            // Restart status, dist-upgrade and its simulation are APT-only.
+            let apt = manager == Manager::Apt;
+            assert_eq!(root.status.is_some(), apt);
+            assert_eq!(root.dist_upgrade.is_some(), apt);
+            assert_eq!(root.simulate.is_some(), apt);
+            for command in root.dist_upgrade.into_iter().chain(root.simulate) {
+                assert!(!command.contains("sudo"), "{command}");
+            }
             let user = manager.commands(false);
-            assert_eq!(user.status, None);
+            // The status script and dist-upgrade go through sudo like the upgrade does.
+            for command in user.status.into_iter().chain(user.dist_upgrade) {
+                assert!(command.contains(&sudo), "{command}");
+            }
+            // The simulation changes nothing, so it never needs sudo.
+            assert_eq!(user.simulate, root.simulate);
             for command in [user.update, user.upgrade] {
                 assert!(command.contains(&sudo), "{command}");
             }

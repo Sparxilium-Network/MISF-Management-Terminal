@@ -2,6 +2,34 @@
 
 /// Preserve line boundaries and diagnostics, removing terminal presentation controls.
 /// Also used when displaying older saved results that may still contain escapes.
+/// A boxed section title for transcripts and logs, sized to the title's display width:
+///
+/// ```text
+/// ************
+/// * 待更新套件 *
+/// ************
+/// ```
+pub fn heading(title: &str) -> String {
+    let width: usize = title.chars().map(display_width).sum::<usize>() + 4;
+    let rule = "*".repeat(width);
+    format!("\n{rule}\n* {title} *\n{rule}\n")
+}
+
+/// East Asian wide characters take two terminal columns.
+fn display_width(c: char) -> usize {
+    match c as u32 {
+        0x1100..=0x115F
+        | 0x2E80..=0xA4CF
+        | 0xAC00..=0xD7A3
+        | 0xF900..=0xFAFF
+        | 0xFE30..=0xFE4F
+        | 0xFF00..=0xFF60
+        | 0xFFE0..=0xFFE6
+        | 0x20000..=0x3FFFD => 2,
+        _ => 1,
+    }
+}
+
 pub fn readable_output(input: &str) -> String {
     let mut output = String::with_capacity(input.len());
     let mut chars = input.chars().peekable();

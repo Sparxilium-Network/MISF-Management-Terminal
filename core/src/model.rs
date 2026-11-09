@@ -273,7 +273,7 @@ pub struct Package {
 #[serde(default)]
 pub struct CheckResult {
     pub checked_at: String,
-    /// "check" or "upgrade"; empty in records saved before upgrades existed.
+    /// "check", "upgrade" or "dist_upgrade"; empty in records saved before upgrades existed.
     pub operation: String,
     pub status: String,
     /// What detection found on this run; empty when it never got that far.
@@ -287,8 +287,31 @@ pub struct CheckResult {
     pub phased: Vec<String>,
     pub output: String,
     pub error: String,
-    /// What still needs a restart after this run; only collected for APT as root.
+    /// Packages an APT upgrade kept back because they need new packages or removals.
+    /// Read back from the saved transcript, like `phased`.
+    pub kept_back: Vec<String>,
+    /// What a dist-upgrade would change, simulated when packages were kept back.
+    pub plan: Option<UpgradePlan>,
+    /// What still needs a restart after this run; only collected for APT.
     pub restart: Option<RestartStatus>,
+}
+
+impl CheckResult {
+    /// An upgrade or dist-upgrade, as opposed to a check.
+    pub fn is_upgrade(&self) -> bool {
+        matches!(self.operation.as_str(), "upgrade" | "dist_upgrade")
+    }
+}
+
+/// What `apt-get dist-upgrade` would do, from a simulation; nothing was changed.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(default)]
+pub struct UpgradePlan {
+    /// New packages; `current_version` is empty.
+    pub install: Vec<Package>,
+    pub upgrade: Vec<Package>,
+    /// Installed packages that would be removed; only `current_version` is set.
+    pub remove: Vec<Package>,
 }
 
 /// Reboot and restart needs read by a fixed status command after a check or upgrade.

@@ -2,7 +2,7 @@
 //! a failed host pauses new starts until the caller decides to continue or stop.
 
 use crate::model::{CheckResult, Host};
-use crate::package_manager;
+use crate::package_manager::{self, Mode};
 use crate::store::Store;
 use anyhow::{Context, Result, ensure};
 use chrono::Utc;
@@ -62,10 +62,8 @@ pub(crate) async fn run(
     progress: &dyn Fn(&str),
     observer: &dyn Observer,
 ) -> Result<Value> {
-    let upgrade = match request["operation"].as_str() {
-        Some("check") => false,
-        Some("upgrade") => true,
-        _ => anyhow::bail!("不支援的批次操作"),
+    let Some(mode) = request["operation"].as_str().and_then(Mode::from_id) else {
+        anyhow::bail!("不支援的批次操作");
     };
     let database = store.read()?;
     let hosts = ids(request)?
@@ -101,8 +99,8 @@ pub(crate) async fn run(
                 break;
             };
             let id = host.id.clone();
-            let handle = tasks
-                .spawn(async move { package_manager::run(&host, upgrade, &|_: &str| {}).await });
+            let handle =
+                tasks.spawn(async move { package_manager::run(&host, mode, &|_: &str| {}).await });
             running.insert(handle.id(), id);
         }
         if tasks.is_empty() && asking.is_none() {
@@ -121,7 +119,7 @@ pub(crate) async fn run(
                     Ok((task, result)) => (running.remove(&task).unwrap_or_default(), result),
                     Err(error) => {
                         let id = running.remove(&error.id()).unwrap_or_default();
-                        (id, crashed(upgrade))
+                        (id, crashed(mode))
                     }
                 };
                 // Saved one by one, so closing the app mid-batch keeps every finished host.
@@ -157,10 +155,10 @@ pub(crate) async fn run(
 }
 
 /// A host whose task panicked; recorded as failed so the batch keeps the rest.
-fn crashed(upgrade: bool) -> CheckResult {
+fn crashed(mode: Mode) -> CheckResult {
     CheckResult {
         checked_at: Utc::now().to_rfc3339(),
-        operation: if upgrade { "upgrade" } else { "check" }.into(),
+        operation: mode.id().into(),
         status: "failed".into(),
         error: "批次工作異常結束；遠端可能已部分執行，請查看主機狀態".into(),
         ..Default::default()

@@ -303,13 +303,10 @@ pub async fn dispatch_with(
                 "test": test,
             }))
         }
-        "check" | "upgrade" => {
+        "check" | "upgrade" | "dist_upgrade" => {
             let host = store.host(id)?;
-            let result = if action == "upgrade" {
-                package_manager::upgrade(&host, progress).await
-            } else {
-                package_manager::check(&host, progress).await
-            };
+            let mode = package_manager::Mode::from_id(action).context("不支援的操作")?;
+            let result = package_manager::run(&host, mode, progress).await;
             save_results(store, vec![(id.to_owned(), result.clone())])?;
             Ok(json!(result))
         }

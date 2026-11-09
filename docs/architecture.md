@@ -1,6 +1,6 @@
 # MISF Management Terminal 架構
 
-> 最後修改：2026-11-08 ｜ 基於 commit：`c5bfe1e`
+> 最後修改：2026-11-08 ｜ 基於 commit：`6519027`
 
 > [!WARNING]
 > **本專案仍處於開發階段，請勿用於正式環境。** 相關安全保護機制尚未完善。
@@ -40,9 +40,9 @@ flowchart LR
 | `core/src/vault.rs` | `StorageSession`：容器建立、解鎖、金鑰槽、備份、舊版明文轉入與刪除 |
 | `core/src/passkey.rs`、`core/src/windows_passkey.rs` | FIDO2／Windows WebAuthn 解鎖 |
 | `core/src/store.rs`、`core/src/sqlite.rs`、`core/src/db_upgrade/` | 資料模型的讀寫、SQLite 強化與結構遷移 |
-| `core/src/ssh.rs`、`core/src/transcript.rs` | SSH 傳輸：主機指紋、認證、執行單一命令（含 sudo 提示）、測試連線；輸出清理 |
-| `core/src/package_manager/` | 套件管理：`mod.rs`（`Manager` 與分派）、`detect.rs`（系統偵測）、`operation.rs`（檢查／升級流程）、`apt.rs`、`dnf.rs`、`yum.rs`、`pkg.rs`（各自的固定命令、失敗判斷與解析）、`rpm.rs`（DNF／YUM 共用的清單解析） |
-| `core/src/model.rs` | `Host`、`SshKey`、`HostGroup`、`CheckResult`、`ConnectionTest` |
+| `core/src/ssh.rs`、`core/src/transcript.rs` | SSH 傳輸：主機指紋、認證、執行單一命令（含 sudo 提示）、測試連線；輸出清理與 `heading` 區段標題框 |
+| `core/src/package_manager/` | 套件管理：`mod.rs`（`Manager` 與分派）、`detect.rs`（系統偵測）、`operation.rs`（檢查／升級／dist-upgrade 流程）、`apt.rs`、`dnf.rs`、`yum.rs`、`pkg.rs`（各自的固定命令、失敗判斷與解析）、`rpm.rs`（DNF／YUM 共用的清單解析） |
+| `core/src/model.rs` | `Host`、`SshKey`、`HostGroup`、`CheckResult`、`UpgradePlan`、`RestartStatus`、`ConnectionTest` |
 | `core/src/audit.rs`、`core/src/runtime.rs` | 操作日誌；資料目錄與 `--debug.*` 參數 |
 
 ## 請求協定
@@ -76,18 +76,25 @@ UI 與 CLI 都送出 `{"action": …}` JSON 給 `Session::handle`。CLI 從 stdi
 
 | 管理器 | 檢查 | 升級 | 實機測試 |
 | --- | --- | --- | --- |
-| APT | `apt-get -q=1 update`，再以英文 locale 列出待更新套件 | `apt-get -y upgrade`（`DEBIAN_FRONTEND=noninteractive`、`NEEDRESTART_MODE=l`、`--force-confdef --force-confold`） | 已測試 |
+| APT | `apt-get -q=1 update`，再以英文 locale 列出待更新套件 | `apt-get -y upgrade`（`DEBIAN_FRONTEND=noninteractive`、`NEEDRESTART_MODE=l`、`--force-confdef --force-confold`）；另有使用者明確選擇的 `dist-upgrade`（相同參數） | upgrade 已測試；dist-upgrade 未實機測試 |
 | DNF／YUM | `makecache`，再 `check-update -C` 並輸出 `rpm -qa` 版本；退出碼 0／100 為成功 | `-y upgrade` | 未測試 |
 | pkg | `pkg update`，`pkg version -URv -l '<'` | `pkg upgrade -y` | 未測試 |
 
 - 索引更新失敗不讀套件清單，也不開始升級。APT 輸出含 `E:`、DNF／YUM 含 `Error:`／`Failed to download metadata`／`Ignoring repositories`，或非零退出碼，即為失敗；升級失敗時提示遠端可能已部分升級。索引更新上限 5 分鐘，升級上限 30 分鐘。
-- 升級前後各讀一次待更新清單：`CheckResult.upgraded` 為升級後消失的套件，`packages` 為剩餘套件，`operation` 區分 check／upgrade。APT 的 phasing 延後套件在載入時從保存的升級輸出解析。
-- 輸出統一換行、移除 ANSI 與終端控制字串後保存，UI 以可選取的等寬文字顯示。每台主機只保存最近一次檢查或升級。
+- 升級前後各讀一次待更新清單：`CheckResult.upgraded` 為升級後消失的套件，`packages` 為剩餘套件，`operation` 為 `check`／`upgrade`／`dist_upgrade`。APT 的 phasing 延後套件與 kept back 套件在載入時從保存的升級輸出解析，不另存欄位。
+- 輸出統一換行、移除 ANSI 與終端控制字串後保存，UI 以可選取的等寬文字顯示。每個步驟以 `transcript::heading` 產生的星號框標題分段（更新套件索引、待更新套件、APT upgrade、dist-upgrade 模擬、重新啟動狀態），框寬依標題的顯示寬度（中文算兩格）。每台主機只保存最近一次檢查或升級。
+
+### Kept back 與 dist-upgrade（只限 APT）
+
+- `apt-get upgrade` 不安裝新套件也不移除套件，所以需要新套件的更新（例如核心的 `linux-generic` 需要新的 `linux-image-*`）會被列在「The following packages have been kept back:」，退出碼仍為 0。MISF 解析這份清單存入 `CheckResult.kept_back`（扣除 phasing 延後的套件）。
+- 有 kept back 時，接著執行唯讀的 `apt::SIMULATE`（`apt-get -s dist-upgrade`，不取鎖、不需 sudo、不變更系統），解析 `Inst`／`Remv` 行為 `UpgradePlan`：新安裝、升級（舊→新版本）與移除。模擬失敗只讓 `plan` 為空。
+- 操作結束時（單台升級或整個批次結束後），UI 彈出報告，列出需要 dist-upgrade 的主機、被保留的套件與模擬出的變動，並可直接對這些主機開啟 dist-upgrade 確認。
+- `dist_upgrade` 請求（單台與批次 `operation: "dist_upgrade"`）只有 APT 有命令，其他套件管理器在任何套件命令前就失敗。確認視窗列出實際命令、較強的風險說明，以及各主機上次模擬的新裝／升級／移除數量與將移除的套件。稽核動作為 `dist_upgrade`、`batch_dist_upgrade`。
 
 ### 重啟提示與重新開機（只限 APT）
 
 - **不解析升級輸出**：needrestart 在升級時印出的文字是給人看的，格式會隨版本與設定改變，也只在 MISF 升級時才出現。改為在檢查或升級成功讀完清單後，另外執行固定、唯讀的 `apt::STATUS`：讀 `/var/run/reboot-required`（與 `.pkgs`），再以 `needrestart -r l -b`（只列出、機器可讀格式）取得目前／預期核心（`KSTA` ≥ 2 視為需要重新開機）、需要重啟的服務、容器與使用者工作階段。沒有 needrestart 時只回報 reboot-required，服務清單標示為未知而不是「沒有」。
-- **只限 root 帳號**：needrestart 要以 root 才看得到所有行程，一般帳號不執行這條命令（`Commands::status` 為 `None`），也不顯示重啟提示。這條命令列在確認視窗的命令清單中。
+- **與 update／upgrade 相同的 sudo 機制**：root 直接執行 `apt::STATUS`；一般帳號執行 `apt::SUDO_STATUS`，整段 `sh -c` 放在 `sudo -S -p` 裡跑，sudo 密碼同樣經 channel stdin 傳送。needrestart 以 root 身分掃描所有行程，主機需保持更新（舊版有 CVE-2024-48990 等本機提權漏洞）。這條命令列在確認視窗的命令清單中。
 - **不影響主結果**：讀取失敗或逾時（2 分鐘）只讓 `CheckResult.restart` 為空，檢查／升級仍算成功；原始輸出附在執行輸出的「重新啟動狀態」段落。
 - **永不自動重啟服務**：升級命令固定帶 `NEEDRESTART_MODE=l`，MISF 不提供重啟個別服務的功能（那需要把服務名稱組進命令）。UI 只顯示需要重啟的項目：主機頁的警示列、結果卡片的「重啟提示」分頁與批次表格的「重啟提示」欄。
 - **重新開機**：`{"action":"reboot","id":…}` 只接受已偵測為 APT 的主機，執行固定命令 `shutdown -r +1`（root 直接執行，一般帳號經 `sudo -S`），1 分鐘後才重開，主機上可用 `shutdown -c` 取消，SSH 命令也能正常結束。UI 需兩次確認：第一個視窗列出命令與風險並要求勾選，第二個視窗再問一次主機名稱與位址。稽核記錄 `reboot`、`reboot_prompt`、`reboot_cancel`；debug 模式只允許 loopback 主機。

@@ -16,12 +16,16 @@ pub(super) const ROOT: Commands = Commands {
     update: UPDATE,
     list: LIST,
     upgrade: UPGRADE,
+    dist_upgrade: None,
+    simulate: None,
     status: None,
 };
 pub(super) const SUDO: Commands = Commands {
     update: SUDO_UPDATE,
     list: LIST,
     upgrade: SUDO_UPGRADE,
+    dist_upgrade: None,
+    simulate: None,
     status: None,
 };
 

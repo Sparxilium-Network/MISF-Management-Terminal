@@ -10,7 +10,7 @@ use crate::{
 };
 use chrono::{DateTime, Local};
 use eframe::egui::{self, Color32, RichText, Stroke};
-use misf_core::model::{CheckResult, ConnectionTest, Host, HostGroup, RestartStatus};
+use misf_core::model::{CheckResult, ConnectionTest, Host, HostGroup, RestartStatus, UpgradePlan};
 use misf_core::{
     audit::{Action, AuditLog, Outcome},
     batch, package_manager,
@@ -186,7 +186,16 @@ enum View {
 struct UpgradeConfirm {
     ids: Vec<String>,
     batch: bool,
+    /// [`package_manager::Mode::Upgrade`] or [`package_manager::Mode::DistUpgrade`].
+    mode: package_manager::Mode,
     acknowledged: bool,
+}
+/// A host whose upgrade kept packages back, for the report shown when an operation ends.
+struct KeptBack {
+    id: String,
+    name: String,
+    packages: Vec<String>,
+    plan: Option<UpgradePlan>,
 }
 /// A reboot awaiting two confirmations: the risks first, then a final yes.
 struct RebootConfirm {
@@ -283,6 +292,8 @@ pub struct ManagementApp {
     upgrade_confirm: Option<UpgradeConfirm>,
     batch_failure: Option<BatchFailure>,
     reboot_confirm: Option<RebootConfirm>,
+    /// Hosts that need a dist-upgrade, reported once the operation that found them ends.
+    kept_back_report: Vec<KeptBack>,
     /// This run's full log; memory only, gone when the app closes.
     session_log: SessionLog,
     /// The error last copied into [`Self::session_log`], so each is logged once.
@@ -362,6 +373,7 @@ impl ManagementApp {
             upgrade_confirm: None,
             batch_failure: None,
             reboot_confirm: None,
+            kept_back_report: Vec::new(),
             session_log: SessionLog::new(),
             logged_error: None,
             encrypted: false,
@@ -869,7 +881,7 @@ impl ManagementApp {
                     );
                     self.batch_failure = Some(BatchFailure {
                         name,
-                        upgrade: result.operation == "upgrade",
+                        upgrade: result.is_upgrade(),
                         error: result.error,
                     });
                 }
@@ -1114,25 +1126,30 @@ impl ManagementApp {
                 let name = self.current().map(|h| h.name.clone()).unwrap_or_default();
                 self.status = t.format("reboot.scheduled", &[("name", name)]);
             }
-            "check" | "upgrade" => match serde_json::from_value::<CheckResult>(data) {
-                Ok(result) => {
-                    self.status = match (action, result.status == "success") {
-                        ("check", true) => t.get("status.apt_done"),
-                        ("check", false) => t.get("status.apt_failed"),
-                        (_, true) => t.get("status.upgrade_done"),
-                        (_, false) => t.get("status.upgrade_failed"),
+            "check" | "upgrade" | "dist_upgrade" => {
+                match serde_json::from_value::<CheckResult>(data) {
+                    Ok(result) => {
+                        self.status = match (action, result.status == "success") {
+                            ("check", true) => t.get("status.apt_done"),
+                            ("check", false) => t.get("status.apt_failed"),
+                            (_, true) => t.get("status.upgrade_done"),
+                            (_, false) => t.get("status.upgrade_failed"),
+                        }
+                        .into();
+                        if let Some(host) = self.hosts.iter_mut().find(|h| h.id == self.selected) {
+                            record_result(host, result);
+                        }
+                        self.prune_batch();
+                        self.report_kept_back(vec![self.selected.clone()]);
                     }
-                    .into();
-                    if let Some(host) = self.hosts.iter_mut().find(|h| h.id == self.selected) {
-                        record_result(host, result);
-                    }
-                    self.prune_batch();
+                    Err(error) => self.error = Some(error.to_string()),
                 }
-                Err(error) => self.error = Some(error.to_string()),
-            },
+            }
             "batch" => {
                 let (mut succeeded, mut failed) = (0, 0);
+                let mut finished = vec![];
                 for entry in data["results"].as_array().into_iter().flatten() {
+                    finished.extend(entry["id"].as_str().map(str::to_owned));
                     let Ok(result) = serde_json::from_value::<CheckResult>(entry["result"].clone())
                     else {
                         failed += 1;
@@ -1160,6 +1177,7 @@ impl ManagementApp {
                     counts.push(("skipped", skipped.to_string()));
                     t.format("status.batch_aborted", &counts)
                 };
+                self.report_kept_back(finished);
             }
             _ => {}
         }
@@ -2021,7 +2039,7 @@ impl ManagementApp {
                 check,
                 t,
                 &t.format("hint.check_title", &manager),
-                &package_manager::package_commands(&host, false),
+                &package_manager::package_commands(&host, package_manager::Mode::Check),
                 &check_effect,
                 t.get("hint.check_risk"),
             )
@@ -2035,13 +2053,31 @@ impl ManagementApp {
                 upgrade.on_disabled_hover_text(t.get("apt.upgrade_needs_detect")),
                 t,
                 &t.format("hint.upgrade_title", &manager),
-                &package_manager::package_commands(&host, true),
+                &package_manager::package_commands(&host, package_manager::Mode::Upgrade),
                 t.get("hint.upgrade_effect"),
                 t.get("hint.upgrade_risk"),
             )
             .clicked()
             {
-                self.prompt_upgrade(vec![host.id.clone()], false);
+                self.prompt_upgrade(vec![host.id.clone()], false, package_manager::Mode::Upgrade);
+            }
+            // APT only: may install new packages and remove installed ones.
+            let dist = ui.add_enabled(host.manager() == "apt", danger(t.get("apt.dist_upgrade")));
+            if hint(
+                dist.on_disabled_hover_text(t.get("apt.dist_upgrade_needs_apt")),
+                t,
+                t.get("hint.dist_upgrade_title"),
+                &package_manager::package_commands(&host, package_manager::Mode::DistUpgrade),
+                t.get("hint.dist_upgrade_effect"),
+                t.get("hint.dist_upgrade_risk"),
+            )
+            .clicked()
+            {
+                self.prompt_upgrade(
+                    vec![host.id.clone()],
+                    false,
+                    package_manager::Mode::DistUpgrade,
+                );
             }
             // Only APT hosts with a confirmed key; the command is fixed per account type.
             let can_reboot = host.manager() == "apt" && !host.fingerprint.is_empty();
@@ -2105,6 +2141,19 @@ impl ManagementApp {
                     .unwrap_or("—".into()),
             );
         });
+        if let Some(r) = result.filter(|r| r.is_upgrade() && !r.kept_back.is_empty()) {
+            ui.add_space(10.0);
+            ui.colored_label(
+                palette.warning,
+                t.format(
+                    "kept_back.banner",
+                    &[
+                        ("count", r.kept_back.len().to_string()),
+                        ("packages", r.kept_back.join(", ")),
+                    ],
+                ),
+            );
+        }
         if let Some(restart) = result.and_then(|r| r.restart.as_ref())
             && let Some(summary) = restart_summary(t, restart)
         {
@@ -2123,7 +2172,7 @@ impl ManagementApp {
         let palette = Palette::for_context(ui.ctx());
         let t = Translator(self.preferences.language);
         let result = host.last_check.as_ref();
-        let upgrade = result.filter(|r| r.operation == "upgrade");
+        let upgrade = result.filter(|r| r.is_upgrade());
         card(ui).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.horizontal(|ui| {
@@ -2198,7 +2247,7 @@ impl ManagementApp {
             } else {
                 let message = match result {
                     Some(r) if r.status == "success" => {
-                        match (r.operation == "upgrade", r.packages.is_empty()) {
+                        match (r.is_upgrade(), r.packages.is_empty()) {
                             (false, true) => t.get("apt.up_to_date"),
                             (false, false) => t.get("apt.available_description"),
                             (true, true) => t.get("apt.upgrade_clean"),
@@ -2314,12 +2363,16 @@ impl ManagementApp {
             }
         });
         let manager = [("manager", manager_label(t, &self.batch_manager).to_owned())];
-        let commands = |upgrade| {
+        let commands = |mode| {
             package_manager::Manager::from_id(&self.batch_manager)
-                .map(|m| package_manager::manager_commands(m, false, upgrade))
+                .map(|m| package_manager::manager_commands(m, false, mode))
                 .unwrap_or_default()
         };
-        let (check_commands, upgrade_commands) = (commands(false), commands(true));
+        let (check_commands, upgrade_commands, dist_commands) = (
+            commands(package_manager::Mode::Check),
+            commands(package_manager::Mode::Upgrade),
+            commands(package_manager::Mode::DistUpgrade),
+        );
         let (order, headings) = self.batch_order(t);
         // Display order, never the set's order, so the request matches what the user sees.
         let selected: Vec<String> = order
@@ -2383,7 +2436,23 @@ impl ManagementApp {
             )
             .clicked()
             {
-                self.prompt_upgrade(selected.clone(), true);
+                self.prompt_upgrade(selected.clone(), true, package_manager::Mode::Upgrade);
+            }
+            if self.batch_manager == "apt" {
+                let label = t.format("batch.dist_upgrade", &count);
+                let dist = ui.add_enabled(!selected.is_empty(), danger(&label));
+                if hint(
+                    dist,
+                    t,
+                    t.get("hint.batch_dist_upgrade_title"),
+                    &dist_commands,
+                    t.get("hint.dist_upgrade_effect"),
+                    t.get("hint.dist_upgrade_risk"),
+                )
+                .clicked()
+                {
+                    self.prompt_upgrade(selected.clone(), true, package_manager::Mode::DistUpgrade);
+                }
             }
         });
         ui.add_space(8.0);
@@ -2406,7 +2475,7 @@ impl ManagementApp {
                 };
                 let result = h.last_check.as_ref();
                 let success = result.filter(|r| r.status == "success");
-                let upgrade = success.filter(|r| r.operation == "upgrade");
+                let upgrade = success.filter(|r| r.is_upgrade());
                 let dash = || "—".to_owned();
                 let cells = BatchColumn::ALL.map(|column| match column {
                     BatchColumn::Host => h.name.clone(),
@@ -2414,13 +2483,9 @@ impl ManagementApp {
                     BatchColumn::Address => format!("{}:{}", h.address, h.port),
                     BatchColumn::System if h.distro.is_empty() => dash(),
                     BatchColumn::System => system_label(t, h),
-                    BatchColumn::Operation => result.map_or_else(dash, |r| {
-                        if r.operation == "upgrade" {
-                            t.get("batch.operation_upgrade").to_owned()
-                        } else {
-                            t.get("batch.operation_check").to_owned()
-                        }
-                    }),
+                    BatchColumn::Operation => {
+                        result.map_or_else(dash, |r| operation_label(t, &r.operation).to_owned())
+                    }
                     BatchColumn::Status => status_label(t, h).to_owned(),
                     BatchColumn::Pending => {
                         success.map_or_else(dash, |r| r.packages.len().to_string())
@@ -2790,10 +2855,11 @@ impl ManagementApp {
         );
     }
 
-    fn prompt_upgrade(&mut self, ids: Vec<String>, batch: bool) {
+    fn prompt_upgrade(&mut self, ids: Vec<String>, batch: bool, mode: package_manager::Mode) {
         self.upgrade_confirm = Some(UpgradeConfirm {
             ids,
             batch,
+            mode,
             acknowledged: false,
         });
         self.log(Action::UpgradePrompt, Outcome::Succeeded);
@@ -2812,9 +2878,9 @@ impl ManagementApp {
             .collect();
         // A batch shares one manager; root targets simply skip sudo.
         let commands = match targets.first() {
-            Some(host) if !confirm.batch => package_manager::package_commands(host, true),
+            Some(host) if !confirm.batch => package_manager::package_commands(host, confirm.mode),
             Some(host) => package_manager::Manager::from_id(host.manager())
-                .map(|m| package_manager::manager_commands(m, false, true))
+                .map(|m| package_manager::manager_commands(m, false, confirm.mode))
                 .unwrap_or_default(),
             None => vec![],
         };
@@ -2823,17 +2889,28 @@ impl ManagementApp {
             .map(|h| manager_label(t, h.manager()))
             .unwrap_or_default();
         let names: Vec<String> = targets.iter().map(|h| h.name.clone()).collect();
+        let dist = confirm.mode == package_manager::Mode::DistUpgrade;
+        // The last simulation of each host, so removals are seen before confirming.
+        let plans: Vec<(String, UpgradePlan)> = targets
+            .iter()
+            .filter_map(|h| {
+                let plan = h.last_check.as_ref()?.plan.clone()?;
+                Some((h.name.clone(), plan))
+            })
+            .collect();
         let mut proceed = false;
         let mut cancel = false;
         egui::Modal::new(egui::Id::unique("upgrade_confirm")).show(ctx, |ui| {
             ui.set_width(620.0);
-            ui.heading(t.format(
-                "upgrade.title",
-                &[
-                    ("count", names.len().to_string()),
-                    ("manager", manager.into()),
-                ],
-            ));
+            let title = [
+                ("count", names.len().to_string()),
+                ("manager", manager.into()),
+            ];
+            ui.heading(if dist {
+                t.format("upgrade.dist_title", &title)
+            } else {
+                t.format("upgrade.title", &title)
+            });
             ui.label(t.get("upgrade.hosts"));
             egui::ScrollArea::vertical()
                 .id_salt("upgrade_hosts")
@@ -2843,8 +2920,32 @@ impl ManagementApp {
                         ui.label(format!("•  {name}"));
                     }
                 });
-            ui.label(t.get("hint.upgrade_effect"));
-            ui.colored_label(palette.warning, t.get("hint.upgrade_risk"));
+            if dist {
+                ui.label(t.get("hint.dist_upgrade_effect"));
+                ui.colored_label(palette.warning, t.get("hint.dist_upgrade_risk"));
+                for (name, plan) in &plans {
+                    ui.label(t.format(
+                        "upgrade.dist_plan",
+                        &[
+                            ("name", name.clone()),
+                            ("install", plan.install.len().to_string()),
+                            ("upgrade", plan.upgrade.len().to_string()),
+                            ("remove", plan.remove.len().to_string()),
+                        ],
+                    ));
+                    if !plan.remove.is_empty() {
+                        let removed: Vec<&str> =
+                            plan.remove.iter().map(|p| p.name.as_str()).collect();
+                        ui.colored_label(
+                            palette.error,
+                            t.format("upgrade.dist_remove", &[("packages", removed.join(", "))]),
+                        );
+                    }
+                }
+            } else {
+                ui.label(t.get("hint.upgrade_effect"));
+                ui.colored_label(palette.warning, t.get("hint.upgrade_risk"));
+            }
             if confirm.batch {
                 ui.label(t.get("upgrade.batch_notice"));
             }
@@ -2871,15 +2972,145 @@ impl ManagementApp {
         });
         if proceed {
             if confirm.batch {
-                self.send(json!({"action":"batch","operation":"upgrade","ids":confirm.ids}));
+                self.send(
+                    json!({"action":"batch","operation":confirm.mode.id(),"ids":confirm.ids}),
+                );
             } else {
                 self.selected = confirm.ids[0].clone();
-                self.start_connection_action("upgrade");
+                self.start_connection_action(confirm.mode.id());
             }
         } else if cancel {
             self.log(Action::UpgradeCancel, Outcome::Cancelled);
         } else {
             self.upgrade_confirm = Some(confirm);
+        }
+    }
+
+    /// Remembers which of these hosts' upgrades kept packages back, to report them.
+    fn report_kept_back(&mut self, ids: Vec<String>) {
+        let report: Vec<KeptBack> = ids
+            .iter()
+            .filter_map(|id| {
+                let host = self.hosts.iter().find(|h| h.id == *id)?;
+                let check = host.last_check.as_ref()?;
+                (check.is_upgrade() && !check.kept_back.is_empty()).then(|| KeptBack {
+                    id: host.id.clone(),
+                    name: host.name.clone(),
+                    packages: check.kept_back.clone(),
+                    plan: check.plan.clone(),
+                })
+            })
+            .collect();
+        if report.is_empty() {
+            return;
+        }
+        let names: Vec<&str> = report.iter().map(|k| k.name.as_str()).collect();
+        self.session_log.add(
+            "REPORT",
+            &format!("dist-upgrade needed on {}", names.join(", ")),
+            "",
+        );
+        self.kept_back_report = report;
+    }
+
+    /// Lists hosts whose upgrade kept packages back and what a dist-upgrade would change.
+    fn kept_back_dialog(&mut self, ctx: &egui::Context) {
+        if self.kept_back_report.is_empty() {
+            return;
+        }
+        let palette = Palette::for_context(ctx);
+        let t = Translator(self.preferences.language);
+        let (mut close, mut dist) = (false, false);
+        let modal = egui::Modal::new(egui::Id::unique("kept_back_report")).show(ctx, |ui| {
+            ui.set_width(680.0);
+            ui.heading(t.format(
+                "kept_back.title",
+                &[("count", self.kept_back_report.len().to_string())],
+            ));
+            ui.add_space(4.0);
+            ui.label(t.get("kept_back.description"));
+            ui.add_space(6.0);
+            egui::ScrollArea::vertical()
+                .id_salt("kept_back_hosts")
+                .max_height((ctx.content_rect().height() - 300.0).max(160.0))
+                .show(ui, |ui| {
+                    for entry in &self.kept_back_report {
+                        ui.add_space(6.0);
+                        ui.label(RichText::new(&entry.name).strong().size(15.0));
+                        ui.label(t.format(
+                            "kept_back.packages",
+                            &[("packages", entry.packages.join(", "))],
+                        ));
+                        let Some(plan) = &entry.plan else {
+                            ui.label(
+                                RichText::new(t.get("kept_back.no_plan")).color(palette.muted),
+                            );
+                            continue;
+                        };
+                        let rows = |ui: &mut egui::Ui,
+                                    title: String,
+                                    list: &[misf_core::model::Package],
+                                    color| {
+                            if list.is_empty() {
+                                return;
+                            }
+                            ui.label(RichText::new(title).color(color));
+                            for p in list {
+                                let line = if p.candidate_version.is_empty() {
+                                    format!("    {}  {}", p.name, p.current_version)
+                                } else if p.current_version.is_empty() {
+                                    format!("    {}  {}", p.name, p.candidate_version)
+                                } else {
+                                    format!(
+                                        "    {}  {} → {}",
+                                        p.name, p.current_version, p.candidate_version
+                                    )
+                                };
+                                ui.add(
+                                    egui::Label::new(RichText::new(line).monospace().size(12.0))
+                                        .selectable(true),
+                                );
+                            }
+                        };
+                        let count = |list: &[misf_core::model::Package]| {
+                            [("count", list.len().to_string())]
+                        };
+                        rows(
+                            ui,
+                            t.format("kept_back.install", &count(&plan.install)),
+                            &plan.install,
+                            palette.ink,
+                        );
+                        rows(
+                            ui,
+                            t.format("kept_back.upgrade", &count(&plan.upgrade)),
+                            &plan.upgrade,
+                            palette.ink,
+                        );
+                        rows(
+                            ui,
+                            t.format("kept_back.remove", &count(&plan.remove)),
+                            &plan.remove,
+                            palette.error,
+                        );
+                    }
+                });
+            ui.add_space(8.0);
+            ui.colored_label(palette.warning, t.get("kept_back.risk"));
+            ui.add_space(6.0);
+            ui.add_enabled_ui(!self.busy, |ui| {
+                ui.horizontal(|ui| {
+                    dist = ui.add(danger(t.get("kept_back.dist_upgrade"))).clicked();
+                    close = ui.button(t.get("common.close")).clicked();
+                });
+            });
+        });
+        if dist {
+            let ids: Vec<String> = self.kept_back_report.drain(..).map(|k| k.id).collect();
+            let batch = ids.len() > 1;
+            self.prompt_upgrade(ids, batch, package_manager::Mode::DistUpgrade);
+        } else if close || modal.should_close() {
+            self.kept_back_report.clear();
         }
     }
 
@@ -3410,14 +3641,16 @@ impl ManagementApp {
             }
         };
         match action {
-            "check" | "upgrade" => match serde_json::from_value::<CheckResult>(data.clone()) {
-                Ok(check) => {
-                    let name = self.host_name(&self.selected);
-                    let host = self.hosts.iter().find(|h| h.id == self.selected);
-                    self.session_log.host(t, &name, host, &check);
+            "check" | "upgrade" | "dist_upgrade" => {
+                match serde_json::from_value::<CheckResult>(data.clone()) {
+                    Ok(check) => {
+                        let name = self.host_name(&self.selected);
+                        let host = self.hosts.iter().find(|h| h.id == self.selected);
+                        self.session_log.host(t, &name, host, &check);
+                    }
+                    Err(_) => self.session_log.response(action, data),
                 }
-                Err(_) => self.session_log.response(action, data),
-            },
+            }
             "batch" => {
                 let results = data["results"].as_array().map_or(&[][..], Vec::as_slice);
                 let succeeded = results
@@ -3448,27 +3681,23 @@ impl ManagementApp {
         let t = Translator(self.preferences.language);
         let action = request["action"].as_str().unwrap_or_default();
         let name = self.host_name(request["id"].as_str().unwrap_or_default());
-        let operation = |upgrade: bool| {
-            if upgrade {
-                t.get("batch.operation_upgrade")
-            } else {
-                t.get("batch.operation_check")
-            }
-            .to_owned()
-        };
+        let operation = |id: &str| operation_label(t, id).to_owned();
         let title = match action {
             "batch" => t.format(
                 "log.title_batch",
                 &[
                     ("manager", manager_label(t, &self.batch_manager).to_owned()),
-                    ("operation", operation(request["operation"] == "upgrade")),
+                    (
+                        "operation",
+                        operation(request["operation"].as_str().unwrap_or_default()),
+                    ),
                     (
                         "count",
                         request["ids"].as_array().map_or(0, Vec::len).to_string(),
                     ),
                 ],
             ),
-            "check" | "upgrade" => {
+            "check" | "upgrade" | "dist_upgrade" => {
                 let manager = self
                     .hosts
                     .iter()
@@ -3478,7 +3707,7 @@ impl ManagementApp {
                     "log.title_single",
                     &[
                         ("manager", manager_label(t, manager).to_owned()),
-                        ("operation", operation(action == "upgrade")),
+                        ("operation", operation(action)),
                         ("name", name),
                     ],
                 )
@@ -4216,6 +4445,7 @@ impl ManagementApp {
             }
         }
         self.upgrade_dialog(ctx);
+        self.kept_back_dialog(ctx);
         self.batch_failure_dialog(ctx);
         self.reboot_dialog(ctx);
         self.vault_dialog(ctx);
@@ -4541,6 +4771,15 @@ fn pending_count(host: &Host) -> usize {
         .filter(|r| r.status == "success")
         .map_or(0, |r| r.packages.len())
 }
+/// The name of a stored or requested operation: check, upgrade or dist-upgrade.
+fn operation_label(t: Translator, operation: &str) -> &'static str {
+    match operation {
+        "upgrade" => t.get("batch.operation_upgrade"),
+        "dist_upgrade" => t.get("batch.operation_dist_upgrade"),
+        _ => t.get("batch.operation_check"),
+    }
+}
+
 /// A short line of what needs restarting, or `None` when nothing does.
 fn restart_summary(t: Translator, restart: &RestartStatus) -> Option<String> {
     let mut parts = vec![];
@@ -4562,9 +4801,6 @@ fn restart_panel(ui: &mut egui::Ui, t: Translator, host: &Host) {
     };
     if host.manager() != "apt" {
         return muted(ui, t.get("restart.apt_only"));
-    }
-    if host.username != "root" {
-        return muted(ui, t.get("restart.root_only"));
     }
     let Some((checked_at, restart)) = host
         .last_check
@@ -4651,7 +4887,7 @@ fn record_result(host: &mut Host, result: CheckResult) {
 }
 fn status_label(t: Translator, host: &Host) -> &'static str {
     match host.last_check.as_ref() {
-        Some(r) => match (r.status.as_str(), r.operation == "upgrade") {
+        Some(r) => match (r.status.as_str(), r.is_upgrade()) {
             ("success", false) => t.get("apt.complete"),
             ("success", true) => t.get("apt.upgrade_complete"),
             ("unsupported", _) => t.get("apt.unsupported"),
@@ -5005,6 +5241,34 @@ mod tests {
             })
             .unwrap();
         app.process_events();
+        // When the batch ends, hosts with kept-back packages are reported for dist-upgrade.
+        let kept = json!(CheckResult {
+            operation: "upgrade".into(),
+            status: "success".into(),
+            kept_back: vec!["linux-generic".into()],
+            plan: Some(UpgradePlan {
+                install: vec![misf_core::model::Package {
+                    name: "linux-image-7.0.0-43-generic".into(),
+                    candidate_version: "7.0.0-43.43".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        events
+            .send(Event::Done {
+                action: "batch".into(),
+                result: Ok(json!({"results":[{"id":"u1","result":kept}],"skipped":[]})),
+            })
+            .unwrap();
+        app.process_events();
+        assert_eq!(app.kept_back_report.len(), 1);
+        assert_eq!(app.kept_back_report[0].packages, ["linux-generic"]);
+        assert_eq!(
+            app.kept_back_report[0].plan.as_ref().unwrap().install[0].name,
+            "linux-image-7.0.0-43-generic"
+        );
 
         let text = app.session_log.render();
         for secret in ["unlock-secret", "ssh-secret", "sudo-secret", "key-body"] {
@@ -5016,11 +5280,11 @@ mod tests {
             r#""name":"web""#,
             "[RESULT] check failed",
             "[ERROR] 無法連線",
-            "\n********\n使用者 進行批次 APT 升級（1 台）  (",
+            "\n* 使用者 進行批次 APT 升級（1 台）  (",
             r#"[REQUEST] batch {"action":"batch","ids":["u1"],"operation":"upgrade"}"#,
-            "\n********\nUBUNTU1\n********\n主機 ID: u1\n連線: deploy@10.0.0.5:22\n",
+            "\n***********\n* UBUNTU1 *\n***********\n主機 ID: u1\n連線: deploy@10.0.0.5:22\n",
             "遠端原始輸出:\nSetting up openssl (3.0.17) ...\n",
-            "\n********\nEND OF UBUNTU1\n********\n",
+            "\n******************\n* END OF UBUNTU1 *\n******************\n",
         ] {
             assert!(text.contains(expected), "{expected}\n{}", text.as_str());
         }
@@ -5135,7 +5399,7 @@ mod tests {
             assert!(text.contains("Debian 13 · APT"));
             // Hosts with more pending updates come first.
             assert!(text.find("host-busy").unwrap() < text.find("host-trusted").unwrap());
-            app.prompt_upgrade(vec!["trusted".into()], true);
+            app.prompt_upgrade(vec!["trusted".into()], true, package_manager::Mode::Upgrade);
             let text = rendered_text(&ctx, |ui| app.upgrade_dialog(ui.ctx()));
             assert!(text.contains("host-trusted"));
             assert!(text.contains(package_manager::apt::SUDO_UPGRADE));
