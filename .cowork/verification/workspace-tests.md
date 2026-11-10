@@ -1,5 +1,10 @@
 # 全工作區檢查結果
 
+## 2026-11-10（文件對齊 Slint 版現況，分支 `slint-rego`，基於 `f6bbbd4`）
+
+- 只改文件，未改程式碼。逐份對照程式碼修正：進階選單不支援 Esc 關閉（使用指南原寫可以）、字型「系統字型」說明、閒置自動鎖定已存在（PROJECT-DEV、LUKSbox 設計原寫尚未提供）、請求協定與批次補上 `dist_upgrade`、`ui-settings.json` 含字型、Clippy 指令加上 `--all-features`、UI 測試說明、`app/build.rs` 與 `widgets.slint` 職責。`passkey-testing.md`、`dependency-updates.md` 核對後內容仍正確，未改動也未改標頭。
+- 未執行建置或測試（上一筆的檢查結果仍適用）。
+
 ## 2026-11-10（右鍵複製命令修正，分支 `slint-rego`，基於 `3d90ce4`）
 
 - 使用者回報進階選單內的右鍵複製失效。實際上 Slint 版所有 `HintArea` 的右鍵複製都失效：`ContextMenuArea` 包在控制項外層，但 Slint 的 `TouchArea` 對任何按鍵的按下都回傳 `GrabMouse`，事件分派在子項抓取後就停止（`i-slint-core` `input.rs` `send_mouse_event_to_item`），外層 `ContextMenu::input_event` 收不到右鍵。改為把 `ContextMenuArea` 疊在控制項上方：它只接受右鍵按下，其他事件回傳 `EventIgnored` 交給下方按鈕，左鍵與懸停提示不受影響。

@@ -1,6 +1,6 @@
 # 原始碼檔案說明
 
-> 最後修改：2026-11-10 ｜ 基於 commit：`1c6f0cf`
+> 最後修改：2026-11-10 ｜ 基於 commit：`f6bbbd4`
 
 每個 `.rs` 檔案負責什麼。整體設計與資料流見 [架構](architecture.md)，建置與慣例見 [開發說明](PROJECT-DEV.md)。新增、改名或刪除 `.rs` 檔案時，請一併更新本文件。
 
@@ -68,7 +68,7 @@ Workspace 有三個 crate：`core`（`misf-core`，核心函式庫與 JSON CLI�
 
 | 檔案 | 作用 |
 | --- | --- |
-| `app/build.rs` | Windows 建置時嵌入程式圖示與版本資訊資源。 |
+| `app/build.rs` | 以 fluent 樣式編譯 `app/ui/main.slint`（debug 建置保留元件名稱供測試尋找）；Windows 建置時嵌入程式圖示與版本資訊資源。 |
 | `app/src/main.rs` | GUI 執行檔入口：處理 `--help`、解析 `RuntimePaths`、開啟稽核日誌、再交給 `ui::run` 開啟 Slint 視窗；release 版不開主控台視窗。 |
 | `app/src/ui/mod.rs` | 建立主視窗與設定視窗（`build`）、執行事件迴圈（`run`）、`Ctx::update` 修改狀態後以 `refresh` 把狀態推到兩個視窗；監看 winit 輸入事件供閒置自動鎖定、記錄視窗大小；`sync_rows`／`keep_inner` 就地更新清單，避免拖曳或雙擊中的元件被重建；`capture` 功能下的截圖與 `MISF_FIXTURE` 假資料。 |
 | `app/src/ui/app.rs` | 視窗狀態 `App`（原 `ManagementApp`）與對話框資料結構：送出請求、處理背景事件與回應（`received`）、稽核與工作階段記錄、清除主機快取、閒置自動鎖定（`auto_lock`，作業中不鎖）、關閉時儲存視窗大小（`shutdown`）。只送出請求並保存結果，不直接連線或讀寫主機資料。 |
@@ -82,15 +82,15 @@ Workspace 有三個 crate：`core`（`misf-core`，核心函式庫與 JSON CLI�
 | `app/src/ui/dialogs.rs` | 升級確認、「需要 dist-upgrade」報告、重新開機兩次確認、批次失敗詢問、主機指紋、刪除主機、分類名稱與錯誤對話框。 |
 | `app/src/ui/settings.rs` | 獨立的設定視窗：分類樹（`SettingsPage::PREFERENCES` 為「偏好設定」底下的外觀與主機清單／安全性／批次作業）、各偏好的套用與儲存、LOG 頁、關於頁。 |
 | `app/src/ui/logging.rs` | 工作階段記錄：請求標題、結果寫入與匯出。 |
-| `app/src/ui/tests.rs` | 狀態邏輯測試，以及用 Slint 測試後端點擊畫面的測試（進階選單、批次表格雙擊、設定樹）。 |
+| `app/src/ui/tests.rs` | 狀態邏輯測試，以及用 Slint 測試後端送出實際指標與鍵盤事件的畫面測試（進階選單、批次表格雙擊、欄寬拖曳、Esc 關閉明細、懸停提示時機與位置、側欄拖曳排序、右鍵複製命令、設定樹）。 |
 | `app/ui/main.slint` | 主視窗 `AppWindow`：工具列、側欄、工作區、狀態列，以及疊在上方的對話框、進階選單與提示框；匯出所有 global 給 Rust。 |
-| `app/ui/theme.slint` | 配色 `Theme`、翻譯查詢 `T`（向 Rust 的語言目錄查字串）、外觀同步。 |
-| `app/ui/widgets.slint` | 共用元件：懸停提示 `HintArea`（1.5 秒後顯示命令、效果與風險，右鍵複製命令）、提示框、剪貼簿、彩色按鈕、三態勾選框、對話框外框等。 |
+| `app/ui/theme.slint` | 配色 `Theme`、介面字型（Noto Sans TC／粗體／系統字型）、翻譯查詢 `T`（向 Rust 的語言目錄查字串）、外觀同步。 |
+| `app/ui/widgets.slint` | 共用元件：懸停提示 `HintArea`（1.5 秒後顯示命令、效果與風險；右鍵選單疊在控制項上方，因為控制項的 `TouchArea` 會抓住所有按下事件）、提示框、剪貼簿、彩色按鈕、三態勾選框、對話框外框等。 |
 | `app/ui/sidebar.slint`、`host_page.slint`、`result_panel.slint`、`batch_page.slint`、`settings.slint`、`shell.slint` | 各頁畫面與其 global。 |
 | `app/ui/dialogs/*.slint` | 主機編輯、SSH 金鑰、主機庫、確認類與簡短對話框。 |
 | `app/src/session_log.rs` | 只存在記憶體的完整工作階段 LOG：操作標題（`banner`）、完整請求與回應（`mask` 只遮蔽密碼、私鑰、密語、PIN 欄位）、進度、錯誤，以及每台主機的區塊（`host`：ID、帳號@位址、指紋、套件、重啟狀態、遠端原始輸出，以 `END OF` 結束）；超過 16 MiB 捨棄最舊的；`export` 寫成文字檔。以 `Zeroizing` 保存，關閉程式即消失。 |
 | `app/src/worker.rs` | 背景執行緒與 Tokio runtime：從佇列取出請求交給 `Session`，以 `Event` 回傳進度與結果，再以 `Wake` 喚醒 UI 執行緒；`Relay` 是批次觀察者，轉送每台結果與失敗詢問，並等待 UI 經 `decisions` 送回的決定。 |
-| `app/src/preferences.rs` | 未加密的 `ui-settings.json`：語言、外觀、視窗大小、主機清單顯示、批次排序／欄位／明細位置、預設解鎖方式、自動鎖定分鐘數（`AUTO_LOCK_MAX`、`AUTO_LOCK_DEFAULT`）；以暫存檔原子替換寫入。 |
+| `app/src/preferences.rs` | 未加密的 `ui-settings.json`：語言、外觀、介面字型、視窗大小、主機清單顯示、批次排序／欄位／明細位置、預設解鎖方式、自動鎖定分鐘數（`AUTO_LOCK_MAX`、`AUTO_LOCK_DEFAULT`）；以暫存檔原子替換寫入。 |
 | `app/src/i18n.rs` | 語系：內嵌 `app/locales/*.json`，以 key 與 `{name}` 參數取字，缺字時回退繁體中文；測試檢查 UI 用到的 key 在兩種語言都存在且參數一致。 |
 | `app/src/theme.rs` | 外觀選項（跟隨系統／淺色／深色）與其儲存代碼。 |
 

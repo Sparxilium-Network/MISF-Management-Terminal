@@ -1,6 +1,6 @@
 # MISF Management Terminal 架構
 
-> 最後修改：2026-11-10 ｜ 基於 commit：`2e87553`
+> 最後修改：2026-11-10 ｜ 基於 commit：`f6bbbd4`
 
 > [!WARNING]
 > **本專案仍處於開發階段，請勿用於正式環境。** 相關安全保護機制尚未完善。
@@ -31,7 +31,7 @@ flowchart LR
 | `app/src/ui/` | 視窗狀態 `App` 與各頁模組：把狀態填入對應的 Slint global，並處理該頁的操作 |
 | `app/src/session_log.rs` | 只存在記憶體的工作階段 LOG，可在設定中匯出 |
 | `app/src/worker.rs` | 把請求交給背景執行緒與 Tokio runtime，回傳進度與結果；批次中轉送每台結果與失敗詢問 |
-| `app/src/preferences.rs` | 未加密的 `ui-settings.json`（語言、外觀、清單與批次表格偏好、自動鎖定分鐘數） |
+| `app/src/preferences.rs` | 未加密的 `ui-settings.json`（語言、外觀、介面字型、清單與批次表格偏好、自動鎖定分鐘數） |
 | `app/src/i18n.rs`、`app/locales/` | 內嵌的 zh-tw／en-us 語系，以穩定 key 與命名參數取字 |
 | `app/src/theme.rs` | 淺色／深色／跟隨系統的外觀選項（配色在 `app/ui/theme.slint`） |
 | `core/src/lib.rs` | 主機請求的分派（下表） |
@@ -52,7 +52,7 @@ UI 與 CLI 都送出 `{"action": …}` JSON 給 `Session::handle`。CLI 從 stdi
 
 - **儲存**：`storage_status`、`vault_create`、`vault_unlock`、`vault_unlock_passkey`、`vault_lock`、`vault_upgrade`、`vault_upgrade_cancel`、`vault_add_key`、`vault_add_passkey`、`vault_rename_key`、`vault_revoke_key`、`vault_backup`、`vault_delete_plaintext`。
 - **主機資料**（需已解鎖）：`list`、`save`、`delete`、`convert_storage`、`key_add`、`key_delete`、`group_add`、`group_rename`、`group_collapse`、`group_delete`、`arrange`。
-- **遠端**：`probe`、`trust`、`test`、`check`、`upgrade`、`batch`、`reboot`。
+- **遠端**：`probe`、`trust`、`test`、`check`、`upgrade`、`dist_upgrade`、`batch`、`reboot`。
 
 ## 主機、金鑰與分類
 
@@ -102,7 +102,7 @@ UI 與 CLI 都送出 `{"action": …}` JSON 給 `Session::handle`。CLI 從 stdi
 
 ## 批次作業
 
-`{"action":"batch","operation":"check"|"upgrade","ids":[…]}` 去除重複 ID 後讀取主機快照，最多 256 台，以 Tokio JoinSet 最多 8 台並行。任何 ID 不存在、套件管理器未偵測或彼此不同時整批拒絕。
+`{"action":"batch","operation":"check"|"upgrade"|"dist_upgrade","ids":[…]}` 去除重複 ID 後讀取主機快照，最多 256 台，以 Tokio JoinSet 最多 8 台並行。任何 ID 不存在、套件管理器未偵測或彼此不同時整批拒絕。
 
 每台主機一完成就寫回主機庫，再透過 `batch::Observer::finished` 回報；中途關閉程式也保留已完成的主機。某台結果不是 `success`（含工作異常結束，記為失敗）時呼叫 `Observer::failed`，在得到 `Decision` 之前不開始新主機，但已在執行的主機繼續跑完並照常儲存與回報；等待期間的其他失敗排隊依序詢問。`Abort` 後不再開始任何主機，已在執行的不會中途停止（可能正在安裝套件），回應的 `skipped` 列出未執行的主機 ID，稽核日誌記為 `cancelled`。某台結果無法儲存時同樣停止開始新主機，等執行中的跑完後回傳錯誤。
 
@@ -116,7 +116,7 @@ GUI 的 worker 把 `finished` 轉成即時更新表格列、把 `failed` 轉成�
 | --- | --- | --- |
 | `hosts.lbx`（另有 `.header-bak`／`.meta-bak` 復原鏡像） | 主機庫 | 是 |
 | `hosts.lbx.enabled` | 已建立容器的標記，不含資料 | 否 |
-| `ui-settings.json` | 語言、外觀、視窗與清單偏好，不含憑證 | 否 |
+| `ui-settings.json` | 語言、外觀、字型、視窗與清單偏好，不含憑證 | 否 |
 | `logs/actions-YYYY-MM-DD.jsonl` | 操作日誌 | 否 |
 
 ### StorageSession
@@ -173,4 +173,4 @@ UI 把請求放入工作佇列，由背景執行緒與 Tokio runtime 執行 SSH 
 - 整合測試在 loopback 啟動測試 SSH 伺服器，涵蓋密碼／私鑰、指紋、連線資訊、PTY、拆包的 sudo 提示、系統偵測、APT 與 DNF 檢查／升級、套件管理器不符、混合批次、失敗處理與儲存流程；不接觸真實主機。
 - 儲存測試涵蓋未建立容器時拒絕、轉入保留原檔、鎖定與錯誤密碼、多金鑰槽、備份、密文篡改、並行開啟、WAL 與結構竄改拒絕。Passkey 以模擬驗證器測試，實體裝置依 [Passkey 實體測試](passkey-testing.md) 驗證。
 - 實機只測試過 APT；YUM 與 pkg 只有輸出解析的單元測試。
-- 不支援 full-upgrade、任意命令、互動終端、排程、滾動升級或 Ansible；沒有原地改密碼、主金鑰輪替或 TPM。
+- 除了需逐次確認的 APT `dist-upgrade` 外，不支援 full-upgrade 類操作；也不支援任意命令、互動終端、排程、滾動升級或 Ansible；沒有原地改密碼、主金鑰輪替或 TPM。

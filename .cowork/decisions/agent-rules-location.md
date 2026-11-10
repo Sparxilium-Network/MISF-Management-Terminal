@@ -13,3 +13,4 @@
 - `.daybrake/` 是 DayBrake 安全測試的專屬目錄，維持原樣，不搬進 `.cowork/`；摘要見 `verification/storage-security-daybrake.md`。
 - `assets/README.md` 與 `third_party/LUKSbox/PATCHES.md` 是素材／上游修改說明（PATCHES 為 Apache-2.0 修改聲明），不套用 docs 標頭規則，未改動。
 - `.claude/` 已被 `.gitignore` 排除；其中 `AGENT.md`、`Common-dev-instruct.md` 不會被 Claude Code 自動載入。
+- 2026-11-10 使用者同意 Claude 的記憶放在 Claude Code 自己的記憶目錄（`~/.claude/projects/<專案>/memory/`），但必須與 `.claude/MEMORY.md` 保持同步：任一邊新增、修改或刪除記憶時，同一次工作中更新另一邊。

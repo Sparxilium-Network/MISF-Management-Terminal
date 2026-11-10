@@ -1,6 +1,6 @@
 # MISF Management Terminal 開發說明
 
-> 最後修改：2026-11-10 ｜ 基於 commit：`2e87553`
+> 最後修改：2026-11-10 ｜ 基於 commit：`f6bbbd4`
 
 一般使用方式見 [README](../README.md) 與 [使用指南](user-guide.md)。本文件是開發文件的入口，給開發者與維護者，記錄建置、儲存格式、安全設計細節與測試方式。
 
@@ -111,7 +111,7 @@ Linux／macOS 可使用 `cargo run --locked -p misf`，須在對應平台建置�
 - 密碼與 Passkey 合計最多 8 個槽。槽名稱存在加密容器內的主機資料庫。撤銷：核心禁止撤銷最後一個槽及不存在的槽；撤銷立即寫回目前容器，不刪除驗證器端憑證、不關閉已解鎖工作階段、不使舊備份失效。
 - 明文副本刪除只處理該檔案（刪除 `hosts.db` 時一併刪除 `hosts.db-journal`），必須已成功解鎖，且不經資源回收筒；這不是安全抹除。
 - `.lbx.header-bak`／`.lbx.meta-bak` 是上游的加密復原鏡像。
-- 尚未提供原地改密碼、主金鑰輪替、TPM 或自動閒置鎖定。
+- 尚未提供原地改密碼、主金鑰輪替或 TPM。閒置自動鎖定由 UI 計時後送出 `vault_lock`，見[架構](architecture.md#介面與背景工作)。
 
 ### Passkey
 
@@ -156,8 +156,10 @@ cargo run --locked -p misf -- --debug.dir="C:\temp\misf-test"
 ```powershell
 cargo test --locked --workspace
 cargo fmt --all -- --check
-cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 ```
+
+UI 測試在 `app/src/ui/tests.rs`：狀態邏輯測試，加上以 `i-slint-backend-testing` 送出實際指標與鍵盤事件的畫面測試（需要 debug 建置保留元件名稱，`app/build.rs` 已設定）。這個測試後端由整個程序共用，所以畫面測試集中在同一個測試函式 `pages_respond_to_clicks`。
 
 Rust 整合測試在 loopback 啟動測試 SSH 伺服器，驗證密碼／私鑰、指紋、PTY、sudo、系統偵測、APT 與 DNF 檢查／升級、套件管理器不符與混合批次阻擋，不接觸真實遠端主機。
 
