@@ -749,6 +749,29 @@ fn pages_respond_to_clicks() {
     );
     ctx.update(|app| app.upgrade_confirm = None);
 
+    // The reboot dialog's wrapped lines sit in `if` cells, which Slint 1.18.1 measures as
+    // unwrapped; its buttons must still lie inside the panel, even in a narrow window.
+    for width in [1280.0, 520.0] {
+        main.window()
+            .set_size(slint::LogicalSize::new(width, 820.0));
+        ctx.update(|app| app.choose_advanced(Advanced::Reboot));
+        let panel = ElementHandle::find_by_element_id(&main, "Modal::panel")
+            .find(|e| e.size().width > 0.0)
+            .expect("reboot dialog not shown");
+        let next = first(&main, t.get("reboot.next"));
+        let (top, size) = (panel.absolute_position(), panel.size());
+        let (at, button) = (next.absolute_position(), next.size());
+        assert!(
+            at.y + button.height <= top.y + size.height,
+            "at width {width}: button ends at {}, panel at {}",
+            at.y + button.height,
+            top.y + size.height
+        );
+        ctx.update(|app| app.reboot_confirm = None);
+    }
+    main.window()
+        .set_size(slint::LogicalSize::new(1280.0, 820.0));
+
     // A double-click on a host in the batch table opens its page.
     ctx.update(|app| {
         app.set_view(View::Batch);

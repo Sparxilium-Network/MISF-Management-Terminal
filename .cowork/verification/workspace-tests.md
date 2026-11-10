@@ -1,5 +1,14 @@
 # 全工作區檢查結果
 
+## 2026-11-11（對話框按鈕掉出面板，分支 `main`，基於 `3917688`）
+
+- 使用者回報：重新開機確認的「下一步／取消」掉到面板外。原因是 Slint 1.18.1 的回歸（slint-ui/slint#13655、#14863）：`if`／`for` 版面儲存格裡的換行文字，偏好高度以不換行計算，所以每多換一行，面板就少算一行。截圖也發現密碼庫建立與 Passkey 對話框最底下的 DEBUG 提示同樣掉出面板。
+- 修正：`widgets.slint` 的 `Body`／`Notice`／`Heading`／`Mono` 加上 `min-height: self.preferred-height`（上游 issue 與其他專案採用的做法），對話框結構不變。先試過把重新開機對話框攤平成逐行 `if`，也有效，但只修一處，所以改回共用元件修正。
+- 新增測試：`pages_respond_to_clicks` 在 1280 與 520 寬度下，確認重新開機對話框的「下一步」位於 `Modal::panel` 內。暫時移除修正後，測試失敗（按鈕底部 553.5、面板底部 533.5，與截圖一致）；放回修正後通過。
+- 截圖新增 `MISF_OPEN_REBOOT=1`／`final`。截圖目視確認：重新開機兩步、密碼庫建立、Passkey、SSH 金鑰管理、主機頁、編輯主機、設定的「安全性」頁版面正常。
+- fmt、Clippy（`--all-features -D warnings`）通過；`cargo test --workspace` 全部通過（22、20、58、24 項）。
+- 未截圖：升級確認、dist-upgrade 報告、批次失敗、設定的其他頁（共用元件只增加最小高度，預期不會變矮）。
+
 ## 2026-11-10（CI 加入安全公告檢查，分支 `main`，基於 `aec5b64`）
 
 - 使用者同意後，在 `build-prerelease.yml` 的 Linux 工作中，`cargo deny --locked check licenses` 之後加入 `cargo deny --locked check advisories`。步驟改名為「Check dependency licenses and security advisories」；任一失敗，都不會建置發布版本。

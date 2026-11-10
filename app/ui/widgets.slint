@@ -502,10 +502,15 @@ export component Note inherits Text {
 }
 
 // A one-line notice in the warning or error color.
+// Wrapped text below pins its minimum height to its wrapped height. Slint 1.18.1 measures
+// wrapped text inside an `if`/`for` layout cell as if unwrapped (slint-ui/slint#13655), so a
+// dialog laid out from such cells came out one line short per wrapped line and the buttons
+// fell outside its panel.
 export component Notice inherits Text {
     in property <bool> error;
     color: root.error ? Theme.error : Theme.warning;
     wrap: word-wrap;
+    min-height: self.preferred-height;
 }
 
 // Text in the monospace font that can be selected and copied.
@@ -516,6 +521,7 @@ export component Mono inherits TextInput {
     color: Theme.ink;
     wrap: word-wrap;
     single-line: false;
+    min-height: self.preferred-height;
 }
 
 // A tab strip of selectable labels.
@@ -583,10 +589,12 @@ export component Heading inherits Text {
     font-weight: 700;
     color: Theme.ink;
     wrap: word-wrap;
+    min-height: self.preferred-height;
 }
 
 // One label/value line in a grid-like list.
 export component Body inherits Text {
     color: Theme.ink;
     wrap: word-wrap;
+    min-height: self.preferred-height;
 }

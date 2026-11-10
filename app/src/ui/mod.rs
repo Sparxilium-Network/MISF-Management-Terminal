@@ -285,6 +285,16 @@ fn capture(ctx: &Ctx) {
                 c.update(|app| {
                     fixture_hosts(app);
                     open_requested(app);
+                    let reboot = std::env::var("MISF_OPEN_REBOOT");
+                    if matches!(reboot.as_deref(), Ok("1" | "final")) {
+                        app.choose_advanced(host_page::Advanced::Reboot);
+                    }
+                    if reboot.as_deref() == Ok("final")
+                        && let Some(confirm) = &mut app.reboot_confirm
+                    {
+                        confirm.acknowledged = true;
+                        app.reboot_step(true);
+                    }
                 });
                 if std::env::var("MISF_OPEN_MENU").as_deref() == Ok("1")
                     && let Some(main) = c.main.upgrade()
