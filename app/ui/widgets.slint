@@ -49,8 +49,49 @@ export component ClipboardSink {
     }
 }
 
-// Wraps a control: after 1.5 s of hovering shows its hint (or `plain`), and when the
-// hint has commands, a right-click offers to copy them.
+// One line of a right-click menu. `action` names what choosing it does and `arg` is its
+// target; the window runs it (see `run-menu` in main.slint).
+export struct MenuLine {
+    title: string,
+    enabled: bool,
+    action: string,
+    arg: string,
+}
+
+// The window's one right-click menu, drawn by MenuOverlay in the app's own style.
+export global PopMenu {
+    // True only while the right button is held, set by the window's input hook before
+    // the press reaches any element. MenuArea takes presses only then, so left-clicks
+    // and hovering still reach the controls below it.
+    in-out property <bool> right-down;
+    in-out property <bool> shown;
+    in-out property <[MenuLine]> lines;
+    in-out property <length> x;
+    in-out property <length> y;
+    public function open(lines: [MenuLine], x: length, y: length) {
+        self.lines = lines;
+        self.x = x;
+        self.y = y;
+        self.shown = true;
+        Tip.shown = false;
+    }
+}
+
+// Laid over content: a right-click on it opens `lines`. Over a control rather than around
+// it, because the control's own TouchArea grabs every press before a parent sees it.
+export component MenuArea inherits TouchArea {
+    in property <[MenuLine]> lines;
+    enabled: PopMenu.right-down && root.lines.length > 0;
+    pointer-event(event) => {
+        if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+            PopMenu.open(root.lines, self.absolute-position.x + self.mouse-x,
+                self.absolute-position.y + self.mouse-y);
+        }
+    }
+}
+
+// Wraps a control: after 1.5 s of hovering shows its hint (or `plain`). A right-click
+// opens `menu`, or when there is none and the hint has commands, offers to copy them.
 export component HintArea {
     in property <HintData> hint;
     in property <string> plain;
@@ -58,6 +99,7 @@ export component HintArea {
     in property <bool> active: true;
     in property <string> disabled-text;
     in property <duration> delay: 1.5s;
+    in property <[MenuLine]> menu;
     property <bool> has-hint: root.active ? (root.hint.title != "" || root.plain != "") : root.disabled-text != "";
     property <int> mine: -1;
     property <bool> hovering: touch.has-hover;
@@ -91,28 +133,22 @@ export component HintArea {
     }
     Timer {
         interval: root.delay;
-        running: root.hovering && root.has-hint && root.mine < 0;
+        running: root.hovering && root.has-hint && root.mine < 0 && !PopMenu.shown;
         triggered => { root.show(); }
     }
     touch := TouchArea {
         inner := HorizontalLayout {
             @children
         }
-        // Laid over the control rather than around it: the control's own TouchArea
-        // grabs every press, so a menu area around it never sees the right-click. On
-        // top, it takes only right-clicks and lets every other event through.
-        menu := ContextMenuArea {
+        MenuArea {
             x: 0;
             y: 0;
             width: parent.width;
             height: parent.height;
-            enabled: root.active && root.hint.copy != "";
-            Menu {
-                MenuItem {
-                    title: T.get("hint.copy_commands");
-                    activated => { Clip.copy(root.hint.copy); }
-                }
-            }
+            lines: root.menu.length > 0 ? root.menu
+                : root.active && root.hint.copy != ""
+                    ? [{ title: T.get("hint.copy_commands"), enabled: true, action: "copy", arg: root.hint.copy }]
+                    : [];
         }
     }
 }
@@ -289,6 +325,63 @@ export component TextButton {
         vertical-alignment: center;
         horizontal-alignment: root.align;
         overflow: elide;
+    }
+}
+
+// The open right-click menu, drawn like the advanced menu. Placed near the end of a
+// window so it covers everything; a press outside it or Escape closes it.
+export component MenuOverlay {
+    in property <length> window-width;
+    in property <length> window-height;
+    callback chosen(line: MenuLine);
+    init => { keys.focus(); }
+    keys := FocusScope {
+        width: root.window-width;
+        height: root.window-height;
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                PopMenu.shown = false;
+                return accept;
+            }
+            reject
+        }
+        TouchArea {
+            pointer-event(event) => {
+                if (event.kind == PointerEventKind.down) {
+                    PopMenu.shown = false;
+                }
+            }
+        }
+        panel := Rectangle {
+            property <length> w: max(180px, items.preferred-width);
+            property <length> h: items.preferred-height;
+            // Kept inside the window: flipped left or up when there is no room.
+            x: PopMenu.x + self.w <= root.window-width - 8px ? PopMenu.x : max(8px, PopMenu.x - self.w);
+            y: PopMenu.y + self.h <= root.window-height - 8px ? PopMenu.y : max(8px, PopMenu.y - self.h);
+            width: self.w;
+            height: self.h;
+            background: Theme.surface;
+            border-color: Theme.border;
+            border-width: 1px;
+            border-radius: 6px;
+            drop-shadow-blur: 10px;
+            drop-shadow-color: #00000050;
+            // Swallows presses so they never reach the layer that closes the menu.
+            TouchArea { }
+            items := VerticalLayout {
+                padding: 6px;
+                spacing: 2px;
+                for line in PopMenu.lines: TextButton {
+                    text: line.title;
+                    enabled: line.enabled;
+                    horizontal-stretch: 1;
+                    clicked => {
+                        PopMenu.shown = false;
+                        root.chosen(line);
+                    }
+                }
+            }
+        }
     }
 }
 

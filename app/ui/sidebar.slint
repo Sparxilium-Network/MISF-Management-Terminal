@@ -106,56 +106,47 @@ component GroupHeading {
     in property <length> viewport-y;
     in property <length> view-height;
     in property <length> view-width;
-    ContextMenuArea {
-        enabled: root.item.editable && !SidebarState.searching;
-        Menu {
-            MenuItem {
-                title: T.get("group.rename");
-                activated => { SidebarState.rename-group(root.item.id); }
-            }
-            MenuItem {
-                title: T.get("group.delete");
-                activated => { SidebarState.delete-group(root.item.id); }
-            }
-        }
-        HintArea {
-            width: root.width;
-            height: root.height;
-            plain: root.item.editable && !SidebarState.searching ? T.get("group.hint") : "";
-            area := RowArea {
-                item: root.item;
-                viewport-y: root.viewport-y;
-                view-height: root.view-height;
-                view-width: root.view-width;
-                enabled: !SidebarState.searching;
-                tapped => { SidebarState.toggle-group(root.item.id); }
-                HorizontalLayout {
-                    padding-left: 2px;
-                    padding-right: 4px;
-                    spacing: 6px;
-                    Path {
-                        width: 10px;
-                        height: 8px;
-                        y: (parent.height - self.height) / 2;
-                        fill: label.color;
-                        viewbox-width: 10;
-                        viewbox-height: 8;
-                        commands: root.item.collapsed ? "M 3 0 L 8 4 L 3 8 Z" : "M 1 1.5 L 9 1.5 L 5 6.5 Z";
-                    }
-                    label := Text {
-                        text: root.item.text;
-                        font-size: 13px;
-                        color: area.has-hover && !SidebarState.searching ? #dce7f5 : Theme.group-text;
-                        vertical-alignment: center;
-                        overflow: elide;
-                        horizontal-stretch: 1;
-                    }
-                    Text {
-                        text: root.item.count;
-                        font-size: 11px;
-                        color: #7890af;
-                        vertical-alignment: center;
-                    }
+    HintArea {
+        width: root.width;
+        height: root.height;
+        plain: root.item.editable && !SidebarState.searching ? T.get("group.hint") : "";
+        menu: root.item.editable && !SidebarState.searching ? [
+            { title: T.get("group.rename"), enabled: true, action: "rename-group", arg: root.item.id },
+            { title: T.get("group.delete"), enabled: true, action: "delete-group", arg: root.item.id },
+        ] : [];
+        area := RowArea {
+            item: root.item;
+            viewport-y: root.viewport-y;
+            view-height: root.view-height;
+            view-width: root.view-width;
+            enabled: !SidebarState.searching;
+            tapped => { SidebarState.toggle-group(root.item.id); }
+            HorizontalLayout {
+                padding-left: 2px;
+                padding-right: 4px;
+                spacing: 6px;
+                Path {
+                    width: 10px;
+                    height: 8px;
+                    y: (parent.height - self.height) / 2;
+                    fill: label.color;
+                    viewbox-width: 10;
+                    viewbox-height: 8;
+                    commands: root.item.collapsed ? "M 3 0 L 8 4 L 3 8 Z" : "M 1 1.5 L 9 1.5 L 5 6.5 Z";
+                }
+                label := Text {
+                    text: root.item.text;
+                    font-size: 13px;
+                    color: area.has-hover && !SidebarState.searching ? #dce7f5 : Theme.group-text;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+                Text {
+                    text: root.item.count;
+                    font-size: 11px;
+                    color: #7890af;
+                    vertical-alignment: center;
                 }
             }
         }

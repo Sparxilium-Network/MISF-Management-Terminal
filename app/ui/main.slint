@@ -4,7 +4,7 @@
 import "../../assets/fonts/NotoSansTC-VariableFont_wght.ttf";
 import { Button, Spinner } from "std-widgets.slint";
 import { Theme, T, AppearanceSync } from "theme.slint";
-import { HintData, Tip, Clip, ClipboardSink, TipOverlay, ColorButton, TextButton, Tabs, Card, Modal, Notice } from "widgets.slint";
+import { HintData, Tip, Clip, ClipboardSink, TipOverlay, MenuLine, PopMenu, MenuOverlay, ColorButton, TextButton, Tabs, Card, Modal, Notice } from "widgets.slint";
 import { Shell } from "shell.slint";
 import { Sidebar, SidebarState, SidebarRow } from "sidebar.slint";
 import { HostPage, HostState, AdvancedMenu } from "host_page.slint";
@@ -17,7 +17,7 @@ import { UpgradeDialog, UpgradeState, KeptBackDialog, KeptBackState, RebootDialo
 import { TrustDialog, TrustState, DeleteDialog, DeleteState, GroupDialog, GroupState, PlaintextDialog, PlaintextState, SchemaDialog, SchemaState, ErrorDialog, ErrorState } from "dialogs/simple.slint";
 import { SettingsWindow, SettingsState, TreeRow, ColumnToggle } from "settings.slint";
 
-export { HintData, Theme, T, Tip, Clip, Shell, SidebarState, SidebarRow, HostState, ResultState, InfoLine, BatchState, ManagerChoice, BatchColumnView, BatchCell, BatchRowView, EditorState, KeysState, KeyView, VaultState, SlotView, UpgradeState, KeptBackState, RebootState, BatchFailureState, TrustState, DeleteState, GroupState, PlaintextState, SchemaState, ErrorState, SettingsWindow, SettingsState, TreeRow, ColumnToggle }
+export { HintData, Theme, T, Tip, Clip, MenuLine, PopMenu, Shell, SidebarState, SidebarRow, HostState, ResultState, InfoLine, BatchState, ManagerChoice, BatchColumnView, BatchCell, BatchRowView, EditorState, KeysState, KeyView, VaultState, SlotView, UpgradeState, KeptBackState, RebootState, BatchFailureState, TrustState, DeleteState, GroupState, PlaintextState, SchemaState, ErrorState, SettingsWindow, SettingsState, TreeRow, ColumnToggle }
 
 component TopBar inherits Rectangle {
     background: Theme.surface;
@@ -182,6 +182,20 @@ export component AppWindow inherits Window {
     default-font-weight: Theme.font-weight;
     AppearanceSync { }
     ClipboardSink { }
+    // Runs a chosen right-click menu line.
+    function run-menu(line: MenuLine) {
+        if (line.action == "copy") {
+            Clip.copy(line.arg);
+        } else if (line.action == "open-host") {
+            BatchState.open-host(line.arg);
+        } else if (line.action == "open-detail") {
+            BatchState.open-detail(line.arg);
+        } else if (line.action == "rename-group") {
+            SidebarState.rename-group(line.arg);
+        } else if (line.action == "delete-group") {
+            SidebarState.delete-group(line.arg);
+        }
+    }
     VerticalLayout {
         TopBar { }
         HorizontalLayout {
@@ -304,6 +318,15 @@ export component AppWindow inherits Window {
             x: min(HostState.menu-x, root.width - self.width - 8px);
             y: HostState.menu-y;
         }
+    }
+    if PopMenu.shown: MenuOverlay {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        window-width: root.width;
+        window-height: root.height;
+        chosen(line) => { root.run-menu(line); }
     }
     TipOverlay {
         x: 0;

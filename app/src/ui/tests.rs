@@ -862,46 +862,106 @@ fn pages_respond_to_clicks() {
     assert_eq!(request["hosts"][0]["id"], "lab");
     ctx.update(|app| app.busy = false);
 
-    // A right-click on a control with commands opens the copy menu, also inside the
-    // advanced menu, and choosing its item copies exactly the hint's commands.
-    let right_click_copies = |label: &str, commands: slint::SharedString| {
-        let control = first(&main, label);
-        let (at, size) = (control.absolute_position(), control.size());
+    // Right-clicks open the app's own menu. The winit hook sets `right-down` while the
+    // right button is held; the testing backend has no hook, so the test sets it.
+    let right_click = |element: &ElementHandle| {
+        let (at, size) = (element.absolute_position(), element.size());
         let position =
             slint::LogicalPosition::new(at.x + size.width / 2.0, at.y + size.height / 2.0);
         let button = slint::platform::PointerEventButton::Right;
         let window = main.window();
+        let menu = main.global::<super::PopMenu>();
         window.dispatch_event(slint::platform::WindowEvent::PointerMoved { position });
+        menu.set_right_down(true);
         window.dispatch_event(slint::platform::WindowEvent::PointerPressed { position, button });
+        menu.set_right_down(false);
         window.dispatch_event(slint::platform::WindowEvent::PointerReleased { position, button });
-        assert!(
-            ElementHandle::find_by_accessible_label(&main, t.get("hint.copy_commands"))
-                .next()
-                .is_some(),
-            "no copy menu on {label}"
-        );
-        let clip = main.global::<super::Clip>();
-        let before = clip.get_serial();
-        for key in [
-            slint::platform::Key::DownArrow,
-            slint::platform::Key::Return,
-        ] {
-            let text: slint::SharedString = key.into();
-            window.dispatch_event(slint::platform::WindowEvent::KeyPressed { text: text.clone() });
-            window.dispatch_event(slint::platform::WindowEvent::KeyReleased { text });
-        }
-        assert_eq!(clip.get_serial(), before + 1, "{label} copied nothing");
-        assert!(!commands.is_empty());
-        assert_eq!(clip.get_text(), commands);
+        assert!(menu.get_shown(), "no menu at {position:?}");
     };
+    // Choosing a line of the open menu by its label; it closes the menu.
+    let choose = |label: &str| {
+        let line = ElementHandle::find_by_accessible_label(&main, label)
+            .find(|e| e.size().width > 0.0)
+            .unwrap_or_else(|| panic!("{label} not in the menu"));
+        line.invoke_accessible_default_action();
+        assert!(!main.global::<super::PopMenu>().get_shown());
+    };
+    // A left-click while no right button is held still reaches the control below.
+    assert!(!main.global::<super::PopMenu>().get_right_down());
+
+    // On a control with commands, inside the advanced menu too, it copies them exactly.
     let host_state = main.global::<HostState>();
-    right_click_copies(t.get("host.test"), host_state.get_test_hint().copy);
+    let clip = main.global::<super::Clip>();
+    right_click(&first(&main, t.get("host.test")));
+    choose(t.get("hint.copy_commands"));
+    assert_eq!(clip.get_text(), host_state.get_test_hint().copy);
+    assert!(!clip.get_text().is_empty());
     first(&main, t.get("advanced.button")).invoke_accessible_default_action();
     let upgrade = host_state.get_upgrade_label().to_string();
-    right_click_copies(&upgrade, host_state.get_upgrade_hint().copy);
-    // Copying from an item leaves the advanced menu open.
+    right_click(&first(&main, &upgrade));
+    // A press outside the menu closes it without choosing anything.
+    let serial = clip.get_serial();
+    let outside = slint::LogicalPosition::new(700.0, 700.0);
+    let left = slint::platform::PointerEventButton::Left;
+    main.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerPressed {
+            position: outside,
+            button: left,
+        });
+    main.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerReleased {
+            position: outside,
+            button: left,
+        });
+    assert!(!main.global::<super::PopMenu>().get_shown());
+    assert_eq!(clip.get_serial(), serial);
+    // The press closed only the copy menu; the advanced menu is still open.
+    assert!(ctx.app.borrow().advanced_open);
+    right_click(&first(&main, &upgrade));
+    choose(t.get("hint.copy_commands"));
+    assert_eq!(clip.get_text(), host_state.get_upgrade_hint().copy);
     assert!(ctx.app.borrow().advanced_open);
     ctx.update(|app| app.advanced_open = false);
+
+    // On a batch table host: the package window line, then the host page line.
+    ctx.update(|app| {
+        app.set_view(View::Batch);
+        app.preferences.batch_detail = BatchDetail::Popup;
+        app.busy = false;
+    });
+    let in_table = || {
+        ElementHandle::find_by_accessible_label(&main, "lab-01")
+            .find(|e| e.size().width > 0.0 && e.absolute_position().x > 300.0)
+            .expect("lab-01 not in the table")
+    };
+    right_click(&in_table());
+    choose(t.get("batch_detail.open"));
+    assert!(ctx.app.borrow().batch_popup);
+    assert_eq!(ctx.app.borrow().selected, "lab");
+    ctx.update(|app| app.batch_popup = false);
+    right_click(&in_table());
+    choose(t.get("batch.open_host"));
+    assert_eq!(ctx.app.borrow().view, View::Host);
+
+    // On a sidebar group heading: rename opens the name dialog.
+    ctx.update(|app| {
+        app.groups = vec![misf_core::model::HostGroup {
+            id: "g1".into(),
+            name: "Edge".into(),
+            collapsed: false,
+        }];
+        app.busy = false;
+    });
+    let heading = ElementHandle::find_by_accessible_label(&main, "Edge")
+        .find(|e| e.size().width > 0.0)
+        .expect("no group heading");
+    right_click(&heading);
+    choose(t.get("group.rename"));
+    assert!(ctx.app.borrow().group_dialog.is_some());
+    ctx.update(|app| {
+        app.group_dialog = None;
+        app.groups.clear();
+    });
 
     // The settings tree opens pages and collapses the Preferences branch.
     ctx.update(|app| {

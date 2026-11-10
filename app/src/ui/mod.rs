@@ -161,6 +161,25 @@ fn wire(ctx: &Ctx, main: &AppWindow, settings: &SettingsWindow) {
     watch_input(ctx, main, settings);
 }
 
+/// Keeps `PopMenu.right-down` true only while the right button is held. The hook runs
+/// before Slint sees the event, so the menu areas take the right press and no other.
+/// Any other press, the pointer leaving or the window losing focus clears it, so a lost
+/// release can never leave the menu areas swallowing left-clicks.
+fn track_right_button(main: &AppWindow, event: &slint::winit_030::winit::event::WindowEvent) {
+    use slint::winit_030::winit::event::{MouseButton, WindowEvent};
+    let down = match event {
+        WindowEvent::MouseInput { state, button, .. } => {
+            *button == MouseButton::Right && state.is_pressed()
+        }
+        WindowEvent::CursorLeft { .. } | WindowEvent::Focused(false) => false,
+        _ => return,
+    };
+    let menu = main.global::<PopMenu>();
+    if menu.get_right_down() != down {
+        menu.set_right_down(down);
+    }
+}
+
 /// Restarts the auto-lock count on input to either window, tracks the main window's size,
 /// and checks once a second whether the idle time ran out.
 fn watch_input(ctx: &Ctx, main: &AppWindow, settings: &SettingsWindow) {
@@ -178,9 +197,13 @@ fn watch_input(ctx: &Ctx, main: &AppWindow, settings: &SettingsWindow) {
         )
     };
     let c = ctx.clone();
+    let weak = main.as_weak();
     main.window().on_winit_window_event(move |window, event| {
         if input(event) {
             activity(&c);
+        }
+        if let Some(main) = weak.upgrade() {
+            track_right_button(&main, event);
         }
         if let WindowEvent::Resized(_) = event {
             let size = window.size().to_logical(window.scale_factor());
@@ -263,6 +286,11 @@ fn capture(ctx: &Ctx) {
                     fixture_hosts(app);
                     open_requested(app);
                 });
+                if std::env::var("MISF_OPEN_MENU").as_deref() == Ok("1")
+                    && let Some(main) = c.main.upgrade()
+                {
+                    open_sample_menu(&c, &main);
+                }
             }
             if started.elapsed().as_secs_f32() < 2.0 || c.app.borrow().busy {
                 return;
@@ -287,6 +315,27 @@ fn capture(ctx: &Ctx) {
         },
     );
     std::mem::forget(timer);
+}
+
+/// Opens the advanced menu and, over its first item, the copy menu a right-click shows.
+#[cfg(feature = "capture")]
+fn open_sample_menu(ctx: &Ctx, main: &AppWindow) {
+    ctx.update(|app| app.advanced_open = true);
+    let host = main.global::<HostState>();
+    // The button sets these when clicked; here, its place in the 1280×820 capture.
+    host.set_menu_x(616.0);
+    host.set_menu_y(283.0);
+    let line = MenuLine {
+        title: ctx.t().get("hint.copy_commands").into(),
+        enabled: true,
+        action: "copy".into(),
+        arg: host.get_upgrade_hint().copy,
+    };
+    main.global::<PopMenu>().invoke_open(
+        ModelRc::new(VecModel::from(vec![line])),
+        host.get_menu_x() + 60.0,
+        host.get_menu_y() + 22.0,
+    );
 }
 
 /// Opens what the capture's environment asks for.

@@ -112,34 +112,25 @@ component HostCell {
         width: root.width;
         height: root.height;
         plain: BatchState.popup-mode ? T.get("batch_detail.open_hint") : T.get("batch.host_hint");
-        ContextMenuArea {
-            Menu {
-                MenuItem {
-                    title: T.get("batch.open_host");
-                    activated => { BatchState.open-host(root.line.id); }
-                }
-                MenuItem {
-                    title: T.get("batch_detail.open");
-                    enabled: BatchState.popup-mode;
-                    activated => { BatchState.open-detail(root.line.id); }
-                }
+        menu: [
+            { title: T.get("batch.open_host"), enabled: true, action: "open-host", arg: root.line.id },
+            { title: T.get("batch_detail.open"), enabled: BatchState.popup-mode, action: "open-detail", arg: root.line.id },
+        ];
+        touch := TouchArea {
+            mouse-cursor: pointer;
+            clicked => { BatchState.select-host(root.line.id); }
+            double-clicked => { BatchState.open-host(root.line.id); }
+            Rectangle {
+                border-radius: 4px;
+                background: root.line.selected ? Theme.selection : touch.has-hover ? Theme.selection.with-alpha(0.5) : transparent;
             }
-            touch := TouchArea {
-                mouse-cursor: pointer;
-                clicked => { BatchState.select-host(root.line.id); }
-                double-clicked => { BatchState.open-host(root.line.id); }
-                Rectangle {
-                    border-radius: 4px;
-                    background: root.line.selected ? Theme.selection : touch.has-hover ? Theme.selection.with-alpha(0.5) : transparent;
-                }
-                Text {
-                    x: 6px;
-                    width: parent.width - 12px;
-                    text: root.cell.text;
-                    color: Theme.ink;
-                    vertical-alignment: center;
-                    overflow: elide;
-                }
+            Text {
+                x: 6px;
+                width: parent.width - 12px;
+                text: root.cell.text;
+                color: Theme.ink;
+                vertical-alignment: center;
+                overflow: elide;
             }
         }
     }

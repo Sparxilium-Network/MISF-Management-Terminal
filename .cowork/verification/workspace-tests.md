@@ -1,5 +1,15 @@
 # 全工作區檢查結果
 
+## 2026-11-10（自繪右鍵選單，分支 `slint-rego`，基於 `a33ffad`）
+
+- 使用者要求右鍵選單與介面風格統一。Slint 內建 `ContextMenuArea` 的彈出選單依 widget 樣式（fluent `FluentPalette`）繪製，顏色為 `out` 屬性，只能切換 `color-scheme`，無法套用 Theme；官方文件（docs.slint.dev ContextMenuArea、TouchArea 頁）也沒有外觀設定。改為自繪：`MenuLine`／`PopMenu`／`MenuArea`／`MenuOverlay`（widgets.slint），外觀沿用進階選單（Theme.surface、border、6px 圓角、TextButton 項目），主視窗 `run-menu` 依 `action` 分派。
+- 右鍵偵測：TouchArea 會抓住任何按鍵的按下，官方文件只提供 `enabled: false` 讓事件穿過。`MenuArea` 疊在內容上方，只在 `PopMenu.right-down` 為真時啟用；主視窗 winit 監看（`track_right_button`）在 Slint 處理前於右鍵按下時設為真，其他按鍵按下、游標離開、失焦一律清除，避免旗標卡住吞掉左鍵。
+- 一併修正：批次表格主機欄與側欄分類標題的右鍵選單也是包在 TouchArea 外，原本同樣收不到右鍵（未曾在執行中的 app 驗證過），現改用 `HintArea.menu`。
+- 新增測試（以實際指標事件，測試後端沒有 winit 監看，由測試設定 `right-down`）：主機頁與進階選單內右鍵複製內容等於提示命令；點選單外只關閉右鍵選單、不複製、進階選單仍開啟；批次表格右鍵開明細視窗與前往主機頁；側欄分類右鍵重新命名開啟對話框。
+- 截圖新增 `MISF_OPEN_MENU=1`（搭配 `MISF_FIXTURE=1`）。深色中文與英文截圖目視確認右鍵選單樣式與進階選單一致；進階選單位置在截圖中以固定座標模擬。
+- fmt、Clippy（`--all-features -D warnings`）通過；`cargo test --workspace` 全部通過（22、20、57、24 項）。
+- 未在執行中的 app 實際操作：winit 監看設定旗標的時機（理論上監看先於 Slint 處理）、系統剪貼簿收到文字、選單靠近視窗邊緣時的翻轉位置。
+
 ## 2026-11-10（文件對齊 Slint 版現況，分支 `slint-rego`，基於 `f6bbbd4`）
 
 - 只改文件，未改程式碼。逐份對照程式碼修正：進階選單不支援 Esc 關閉（使用指南原寫可以）、字型「系統字型」說明、閒置自動鎖定已存在（PROJECT-DEV、LUKSbox 設計原寫尚未提供）、請求協定與批次補上 `dist_upgrade`、`ui-settings.json` 含字型、Clippy 指令加上 `--all-features`、UI 測試說明、`app/build.rs` 與 `widgets.slint` 職責。`passkey-testing.md`、`dependency-updates.md` 核對後內容仍正確，未改動也未改標頭。

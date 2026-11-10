@@ -1,6 +1,6 @@
 # MISF Management Terminal 開發說明
 
-> 最後修改：2026-11-10 ｜ 基於 commit：`f6bbbd4`
+> 最後修改：2026-11-10 ｜ 基於 commit：`a33ffad`
 
 一般使用方式見 [README](../README.md) 與 [使用指南](user-guide.md)。本文件是開發文件的入口，給開發者與維護者，記錄建置、儲存格式、安全設計細節與測試方式。
 
@@ -167,7 +167,7 @@ LUKSbox 測試使用暫存資料，涵蓋未建立容器時拒絕主機操作且
 
 ## 畫面擷取
 
-開發用畫面擷取可使用 `cargo build -p misf --features capture`，以 `MISF_SCREENSHOT_TO` 指定 PNG 路徑，並以 `--debug.dir` 指定測試資料。`MISF_OPEN_EDITOR=1`／`MISF_OPEN_SETTINGS=1`／`MISF_OPEN_PASSKEY=1`／`MISF_OPEN_BATCH=1`／`MISF_OPEN_KEYS=1` 可預先開啟對應畫面；旗標只有明確設為 `1` 才啟用；`MISF_OPEN_SETTINGS=about`／`preferences`／`security`／`batch` 直接開啟「關於」或「偏好設定」下的「外觀與主機清單」／「安全性」／「批次作業」頁（設定是獨立視窗，此時截取設定視窗）。`MISF_FIXTURE=1` 以幾台假主機取代主機庫內容，方便截取主機頁與批次頁。debug 模式的 Passkey 按鈕停用，擷取不操作硬體。正式 release 預設不啟用擷取功能。
+開發用畫面擷取可使用 `cargo build -p misf --features capture`，以 `MISF_SCREENSHOT_TO` 指定 PNG 路徑，並以 `--debug.dir` 指定測試資料。`MISF_OPEN_EDITOR=1`／`MISF_OPEN_SETTINGS=1`／`MISF_OPEN_PASSKEY=1`／`MISF_OPEN_BATCH=1`／`MISF_OPEN_KEYS=1` 可預先開啟對應畫面，`MISF_OPEN_MENU=1`（需同時 `MISF_FIXTURE=1`）開啟進階選單與其上的右鍵複製選單；旗標只有明確設為 `1` 才啟用；`MISF_OPEN_SETTINGS=about`／`preferences`／`security`／`batch` 直接開啟「關於」或「偏好設定」下的「外觀與主機清單」／「安全性」／「批次作業」頁（設定是獨立視窗，此時截取設定視窗）。`MISF_FIXTURE=1` 以幾台假主機取代主機庫內容，方便截取主機頁與批次頁。debug 模式的 Passkey 按鈕停用，擷取不操作硬體。正式 release 預設不啟用擷取功能。
 
 畫面以 Slint 的 Skia 繪圖引擎繪製（文字比 femtovg 清楚）。建置時 `skia-bindings` 會從 rust-skia 的 GitHub 發行頁下載預先編譯的 Skia，第一次建置需要網路；Skia 授權全文在 `licenses/Skia/LICENSE`。
 
