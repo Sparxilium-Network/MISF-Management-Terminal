@@ -1,6 +1,6 @@
 # MISF Management Terminal 開發說明
 
-> 最後修改：2026-11-10 ｜ 基於 commit：`e492be8`
+> 最後修改：2026-11-10 ｜ 基於 commit：`f2853f8`
 
 一般使用方式見 [README](../README.md) 與 [使用指南](user-guide.md)。本文件是開發文件的入口，給開發者與維護者，記錄建置、儲存格式、安全設計細節與測試方式。
 
@@ -55,14 +55,14 @@
 
 圖示素材放在 [`assets/icons/`](../assets/icons/)，已納入版本控制。Windows 執行檔與程式視窗均內嵌圖示；Linux 套件另附選單項目與各尺寸圖示，安裝方式見 [`assets/README.md`](../assets/README.md)。
 
-Linux／macOS 可使用 `cargo run --locked -p misf`，須在對應平台建置；Linux 建置需要 OpenGL、X11／Wayland、fontconfig 與檔案對話框相關開發套件，Passkey 另需 `clang libclang-dev libfido2-dev`。
+Linux／macOS 可使用 `cargo run --locked -p misf`，須在對應平台建置；Linux 建置需要 OpenGL／EGL、X11／Wayland、xkbcommon、fontconfig／FreeType 與 D-Bus 的開發套件，Passkey 另需 `clang libclang-dev libfido2-dev`；完整清單以 CI 的「Install Linux build dependencies」步驟為準。
 
 ## 自動建置與 Pre-release
 
 [GitHub Actions](https://github.com/Sparxilium-Network/MISF-Management-Terminal/actions/workflows/build-prerelease.yml) 在 `main` 更新、推送 `v*` 標籤或手動執行時，自動測試並建置 **Linux x86_64** 與 **Windows x86_64**。兩個平台的格式、Clippy、測試與 release 建置全部通過後，才上傳套件並公開 **Pre-release**，固定不標記為 Latest。PR 只驗證與產生 Actions artifacts，不發布。
 
 - Windows：`MISF-Management-Terminal-windows-x86_64.zip`。
-- Linux：`MISF-Management-Terminal-linux-x86_64.tar.gz`。這是原生動態連結套件，需要圖形桌面及相容的 glibc、OpenGL、X11／Wayland、fontconfig 等系統函式庫；不是 AppImage，也不保證支援較舊發行版。
+- Linux：`MISF-Management-Terminal-linux-x86_64.tar.gz`。這是原生動態連結套件，需要圖形桌面及相容的 glibc、OpenGL、X11／Wayland、xkbcommon、fontconfig／FreeType 等系統函式庫，檔案對話框經由 XDG Desktop Portal；不是 AppImage，也不保證支援較舊發行版。
 - 每個套件內附 README、`docs/`、本專案 AGPL-3.0 授權全文 `LICENSE`，以及第三方授權（`THIRD_PARTY_NOTICES.md`、`licenses/`：所有編入執行檔的 Rust 相依套件授權全文、LUKSbox 授權、Skia 授權與內嵌字型 Noto Sans TC 的 OFL 授權；Slint 依 GPL-3.0-only 使用）；另附 SHA-256 校驗檔。
 - 相依套件授權清單 `licenses/THIRD_PARTY_LICENSES.html` 由 `./licenses.ps1` 以 cargo-about 依 `Cargo.lock` 產生，並先以 `cargo deny check licenses` 依 `deny.toml` 確認沒有與 AGPL 不相容的授權；更新相依後須重新執行並提交。清單與 `Cargo.lock` 不一致時，`package.ps1` 會拒絕打包。
 

@@ -1,5 +1,12 @@
 # 全工作區檢查結果
 
+## 2026-11-10（核對 CI 與授權文件，分支 `main`，基於 `f2853f8`）
+
+- CI：`build-prerelease.yml` 在 Slint 版 `3f7942d` 上兩個平台都成功（run 42822716899），並發布 `dev-22.1-3f7942d`。Linux 安裝套件涵蓋 Slint（winit、Skia、AccessKit D-Bus）與 libfido2 的需求。CI 只跑 `cargo deny check licenses`，沒有跑 advisories。
+- 授權：`licenses.ps1 -Check` 通過；HTML 含 slint／i-slint-*、skia-*、russh 0.65.1 與 GPL-3.0 全文。skia-bindings 未啟用 textlayout，所以沒有 ICU／HarfBuzz（`misf.exe` 內找不到 ICU 資料）；未啟用 embed-freetype，Linux 使用系統 FreeType，與 `THIRD_PARTY_NOTICES.md` 一致。Noto Sans TC OFL 與 Skia 授權都會打包。
+- 修正：`docs/PROJECT-DEV.md` 的 Linux 建置與執行需求改為與 CI 一致（xkbcommon、FreeType、D-Bus；rfd 在 Linux 使用 XDG Desktop Portal，不需要另外的對話框開發套件）；`platform-builds.md` 記錄 Linux CI 已通過。
+- 只改文件，未重跑測試。
+
 ## 2026-11-10（cargo-deny 停止維護公告記為例外，分支 `main`，基於 `f884c7a`）
 
 - 使用者同意把 5 筆 unmaintained 公告記為已知例外：`deny.toml` 新增 `[advisories] ignore`（RUSTSEC-2026-0441 pin-utils、0192 ttf-parser、0371 zbus_names、0370 zvariant、0372 zvariant_derive），每筆附原因。`cargo tree -i` 確認這些套件都只經由 Slint 1.18.1 引入（spin_on；winit sctk-adwaita；AccessKit AT-SPI）。`docs/dependency-updates.md` 新增「已知的停止維護公告」表格與移除條件。
