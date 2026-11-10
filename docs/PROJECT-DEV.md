@@ -1,6 +1,6 @@
 # MISF Management Terminal 開發說明
 
-> 最後修改：2026-11-10 ｜ 基於 commit：`f2853f8`
+> 最後修改：2026-11-10 ｜ 基於 commit：`aec5b64`
 
 一般使用方式見 [README](../README.md) 與 [使用指南](user-guide.md)。本文件是開發文件的入口，給開發者與維護者，記錄建置、儲存格式、安全設計細節與測試方式。
 
@@ -59,7 +59,7 @@ Linux／macOS 可使用 `cargo run --locked -p misf`，須在對應平台建置�
 
 ## 自動建置與 Pre-release
 
-[GitHub Actions](https://github.com/Sparxilium-Network/MISF-Management-Terminal/actions/workflows/build-prerelease.yml) 在 `main` 更新、推送 `v*` 標籤或手動執行時，自動測試並建置 **Linux x86_64** 與 **Windows x86_64**。兩個平台的格式、Clippy、測試與 release 建置全部通過後，才上傳套件並公開 **Pre-release**，固定不標記為 Latest。PR 只驗證與產生 Actions artifacts，不發布。
+[GitHub Actions](https://github.com/Sparxilium-Network/MISF-Management-Terminal/actions/workflows/build-prerelease.yml) 在 `main` 更新、推送 `v*` 標籤或手動執行時，自動測試並建置 **Linux x86_64** 與 **Windows x86_64**。兩個平台的格式、Clippy、測試與 release 建置全部通過，且 Linux 工作的 cargo-deny 授權與安全公告檢查也通過後，才上傳套件並公開 **Pre-release**，固定不標記為 Latest。PR 只驗證與產生 Actions artifacts，不發布。
 
 - Windows：`MISF-Management-Terminal-windows-x86_64.zip`。
 - Linux：`MISF-Management-Terminal-linux-x86_64.tar.gz`。這是原生動態連結套件，需要圖形桌面及相容的 glibc、OpenGL、X11／Wayland、xkbcommon、fontconfig／FreeType 等系統函式庫，檔案對話框經由 XDG Desktop Portal；不是 AppImage，也不保證支援較舊發行版。

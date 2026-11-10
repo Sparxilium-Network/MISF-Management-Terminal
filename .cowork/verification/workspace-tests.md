@@ -1,5 +1,11 @@
 # 全工作區檢查結果
 
+## 2026-11-10（CI 加入安全公告檢查，分支 `main`，基於 `aec5b64`）
+
+- 使用者同意後，在 `build-prerelease.yml` 的 Linux 工作中，`cargo deny --locked check licenses` 之後加入 `cargo deny --locked check advisories`。步驟改名為「Check dependency licenses and security advisories」；任一失敗，都不會建置發布版本。
+- 已知的 5 筆 unmaintained 例外沿用 `deny.toml`。`deny.toml` 註解、`docs/dependency-updates.md`（新公告的處理原則：先評估，有修補就升級，不直接加例外）、`docs/PROJECT-DEV.md`（發布條件）已同步。
+- 本機以 cargo-deny 0.20.2（與 CI 相同版本）執行兩條指令：licenses ok、advisories ok。工作流程只以 diff 目視確認縮排（本機沒有 YAML 解析器）。CI 要推送後才會實際執行。
+
 ## 2026-11-10（核對 CI 與授權文件，分支 `main`，基於 `f2853f8`）
 
 - CI：`build-prerelease.yml` 在 Slint 版 `3f7942d` 上兩個平台都成功（run 42822716899），並發布 `dev-22.1-3f7942d`。Linux 安裝套件涵蓋 Slint（winit、Skia、AccessKit D-Bus）與 libfido2 的需求。CI 只跑 `cargo deny check licenses`，沒有跑 advisories。

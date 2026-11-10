@@ -1,6 +1,6 @@
 # 依賴更新與安全公告
 
-> 最後修改：2026-11-10 ｜ 基於 commit：`f884c7a`
+> 最後修改：2026-11-10 ｜ 基於 commit：`aec5b64`
 
 依賴的實際版本以已提交的 `Cargo.lock` 為準；建置與發布一律使用 `--locked`，不在建置時改變依賴。Dependabot 每日檢查 Actions 與 Cargo 依賴並提出更新 PR，通過驗證及合併後才進入發布。
 
@@ -42,7 +42,8 @@ AES／Argon2 等 API 世代，上游容器原始碼維持原樣，沒有改寫�
 
 - 可執行 `cargo update --verbose`、`cargo tree --locked -i crypto-bigint`
   及 `cargo audit`；`cargo tree --locked -i rsa` 應找不到套件。
-- `cargo deny --locked check` 應全部通過。CI 只執行 `check licenses`，安全公告要在本機檢查；出現新公告時先評估，不要直接加入例外。
+- `cargo deny --locked check` 應全部通過。CI 會執行 `check licenses` 與 `check advisories`，兩者任一失敗就不會發布。
+- 安全公告檢查使用當下的 RustSec 資料庫，所以即使程式沒改，新公告也可能讓 CI 失敗。先評估：有修補版本就升級；沒有修補版本時，確認影響範圍後才在 `deny.toml` 加入附原因的例外，不要為了讓 CI 通過直接加入例外。
 - 以 `cargo update -p <套件> --precise <版本>` 更新單一套件時，cargo 可能連帶重新解析其他無關套件；提交前先檢查 `Cargo.lock` 的差異只包含預期的改動。
 - 更新相容性副本時，應保留協定測試向量與舊容器解鎖測試，避免只以安全掃描結果判斷相容性；並重新以實體驗證器測試（見 [Passkey 實體測試](passkey-testing.md)）。
 

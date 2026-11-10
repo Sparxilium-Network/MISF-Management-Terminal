@@ -71,13 +71,17 @@ jobs:
       - name: Test workspace
         run: cargo test --locked --workspace
 
-      - name: Check dependency licenses
+      - name: Check dependency licenses and security advisories
         if: runner.os == 'Linux'
         run: |
           cargo install --locked cargo-deny@0.20.2
           if ($LASTEXITCODE -ne 0) { throw 'cargo-deny installation failed' }
           cargo deny --locked check licenses
           if ($LASTEXITCODE -ne 0) { throw 'A dependency license is not allowed by deny.toml' }
+          # Uses the current RustSec database, so a new advisory can fail an unchanged commit.
+          # Evaluate it; only add a reasoned ignore to deny.toml when no fix is available.
+          cargo deny --locked check advisories
+          if ($LASTEXITCODE -ne 0) { throw 'A dependency has a security advisory; see the log and deny.toml' }
 
       - name: Build release binaries
         run: cargo build --locked --release --workspace
