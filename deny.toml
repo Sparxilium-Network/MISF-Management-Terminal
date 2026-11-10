@@ -1,7 +1,19 @@
-# cargo-deny license policy: every dependency must have a licence compatible
-# with distributing MISF under the GNU AGPL v3. Run: cargo deny check licenses
+# cargo-deny policy. Licences: every dependency must have a licence compatible
+# with distributing MISF under the GNU AGPL v3 (CI runs: cargo deny check licenses).
+# Advisories: the whole check (cargo deny check) should pass locally.
 [graph]
 targets = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"]
+
+[advisories]
+# Known "unmaintained" notices (not vulnerabilities) for crates that only reach
+# MISF through Slint 1.18.1. Remove each entry once a Slint/winit upgrade drops it.
+ignore = [
+    { id = "RUSTSEC-2026-0441", reason = "pin-utils via Slint's spin_on; build-time and renderer helper, no fix needed" },
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser via winit sctk-adwaita; Linux Wayland title bar only" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names merged into zbus 6; via AccessKit AT-SPI, Linux accessibility only" },
+    { id = "RUSTSEC-2026-0370", reason = "zvariant merged into zbus 6; via AccessKit AT-SPI, Linux accessibility only" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive merged into zbus 6; via AccessKit AT-SPI, Linux accessibility only" },
+]
 
 [licenses]
 allow = [

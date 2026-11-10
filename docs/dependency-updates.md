@@ -1,6 +1,6 @@
 # 依賴更新與安全公告
 
-> 最後修改：2026-11-10 ｜ 基於 commit：`cc7ba2e`
+> 最後修改：2026-11-10 ｜ 基於 commit：`f884c7a`
 
 依賴的實際版本以已提交的 `Cargo.lock` 為準；建置與發布一律使用 `--locked`，不在建置時改變依賴。Dependabot 每日檢查 Actions 與 Cargo 依賴並提出更新 PR，通過驗證及合併後才進入發布。
 
@@ -28,10 +28,22 @@ russh 又精確鎖定其 pre-release 版本。除非上游發布修補且 russh 
 `generic-array =0.14.7`，不能僅靠 lockfile 更新取代。LUKSbox 容器仍需要它原本的
 AES／Argon2 等 API 世代，上游容器原始碼維持原樣，沒有改寫成另一個密碼實作。
 
+## 已知的停止維護公告
+
+以下公告只表示套件不再維護，不是安全漏洞。這些套件都經由 Slint 1.18.1 間接引入，無法由本專案替換，所以在 `deny.toml` 的 `[advisories] ignore` 記為例外，並附原因。Slint 或 winit 升級後，若 `cargo tree --locked -i <套件>` 已找不到該套件，就移除對應的例外。
+
+| 公告 | 套件 | 引入路徑 | 影響範圍 |
+|---|---|---|---|
+| RUSTSEC-2026-0441 | `pin-utils` | Slint 的 `spin_on` | 所有平台；建置期與 Skia 繪圖的小工具 |
+| RUSTSEC-2026-0192 | `ttf-parser` | winit → `sctk-adwaita` | 只有 Linux Wayland 的視窗標題列 |
+| RUSTSEC-2026-0371／0370／0372 | `zbus_names`、`zvariant`、`zvariant_derive` | winit → AccessKit → AT-SPI | 只有 Linux 輔助功能；已併入 zbus 6 |
+
 ## 維護檢查
 
 - 可執行 `cargo update --verbose`、`cargo tree --locked -i crypto-bigint`
   及 `cargo audit`；`cargo tree --locked -i rsa` 應找不到套件。
+- `cargo deny --locked check` 應全部通過。CI 只執行 `check licenses`，安全公告要在本機檢查；出現新公告時先評估，不要直接加入例外。
+- 以 `cargo update -p <套件> --precise <版本>` 更新單一套件時，cargo 可能連帶重新解析其他無關套件；提交前先檢查 `Cargo.lock` 的差異只包含預期的改動。
 - 更新相容性副本時，應保留協定測試向量與舊容器解鎖測試，避免只以安全掃描結果判斷相容性；並重新以實體驗證器測試（見 [Passkey 實體測試](passkey-testing.md)）。
 
 ## 授權清單

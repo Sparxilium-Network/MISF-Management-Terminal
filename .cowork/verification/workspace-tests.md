@@ -1,5 +1,12 @@
 # 全工作區檢查結果
 
+## 2026-11-10（cargo-deny 停止維護公告記為例外，分支 `main`，基於 `f884c7a`）
+
+- 使用者同意把 5 筆 unmaintained 公告記為已知例外：`deny.toml` 新增 `[advisories] ignore`（RUSTSEC-2026-0441 pin-utils、0192 ttf-parser、0371 zbus_names、0370 zvariant、0372 zvariant_derive），每筆附原因。`cargo tree -i` 確認這些套件都只經由 Slint 1.18.1 引入（spin_on；winit sctk-adwaita；AccessKit AT-SPI）。`docs/dependency-updates.md` 新增「已知的停止維護公告」表格與移除條件。
+- `cargo deny --locked check`：advisories、bans、licenses、sources 全部 ok（仍有 duplicate 與 LUKSbox git 來源的警告，未改）。
+- 只改設定與文件，未改程式碼，所以沒有重跑 fmt／Clippy／測試，也沒有重新打包。
+- 同日已關閉 Dependabot PR #2（目標分支 `legacy-egui`）。確認 `dependabot.yml` 沒有設定 `target-branch`，只會針對預設分支 `main`；CI 只在 push／PR 到 `main` 與 `v*` 標籤時觸發，`legacy-egui` 不會收到機器人 PR，也不會跑 CI。
+
 ## 2026-11-10（russh 0.65.0 → 0.65.1，分支 `main`，基於 `3f7942d`）
 
 - 使用者轉來 Dependabot PR #2（目標分支是 `legacy-egui`，不是 `main`）。在 `main` 上套用相同的鎖檔改動：russh 升到 0.65.1，`generic-array 1.4.5` 不再依賴 `generic-array 0.14.7`。`core/Cargo.toml` 的版本需求 `0.65.0` 未改。
