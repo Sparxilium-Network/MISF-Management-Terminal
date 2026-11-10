@@ -125,7 +125,7 @@ pub fn export_log(ctx: &Ctx) {
         match app.session_log.export(&path) {
             Ok(()) => {
                 app.log(Action::LogExport, Outcome::Succeeded);
-                app.status = t.format("log.exported", &[("path", path.display().to_string())]);
+                app.set_status(t.format("log.exported", &[("path", path.display().to_string())]));
             }
             Err(error) => {
                 app.log(Action::LogExport, Outcome::Failed);

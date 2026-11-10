@@ -85,7 +85,7 @@ impl App {
         self.log(Action::TrustCancel, Outcome::Succeeded);
         self.trust = None;
         self.after_trust = None;
-        self.status = self.t().get("trust.cancelled").into();
+        self.set_status(self.t().get("trust.cancelled"));
     }
 }
 

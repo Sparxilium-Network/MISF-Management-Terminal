@@ -15,11 +15,21 @@ use misf_core::{
 };
 use serde_json::{Value, json};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeSet, VecDeque},
     path::PathBuf,
     time::{Duration, Instant},
 };
 use zeroize::Zeroize;
+
+/// How many past results the status line keeps.
+pub const HISTORY_LIMIT: usize = 200;
+
+/// A past result or error on the status line, at the local time it happened.
+pub struct HistoryEntry {
+    pub time: String,
+    pub text: String,
+    pub error: bool,
+}
 
 /// The group name dialog: `id` is `None` to add a group, or the group being renamed.
 #[derive(Default)]
@@ -228,7 +238,14 @@ pub struct App {
     pub package_search: String,
     pub path: String,
     pub busy: bool,
+    /// The status line. Progress goes straight here; results go through [`Self::set_status`]
+    /// so they are also kept in [`Self::history`].
     pub status: String,
+    /// Past results and errors, newest last; memory only and cleared when the vault locks,
+    /// since they name hosts.
+    pub history: VecDeque<HistoryEntry>,
+    /// Whether the status line is expanded to show [`Self::history`].
+    pub history_open: bool,
     pub error: Option<String>,
     pub editor: Option<Editor>,
     pub delete_id: Option<String>,
@@ -304,6 +321,8 @@ impl App {
             path: String::new(),
             busy: false,
             status: String::new(),
+            history: VecDeque::new(),
+            history_open: false,
             error: loaded.err().map(|error| {
                 Translator(preferences.language).format("settings.load_error", &[("error", error)])
             }),
@@ -413,14 +432,45 @@ impl App {
         })
     }
 
-    /// Copies a new error into the session log once.
+    /// Copies a new error into the session log and the history once.
     pub fn note_error(&mut self) {
         if self.error != self.logged_error {
-            if let Some(error) = &self.error {
-                self.session_log.add("ERROR", error, "");
+            if let Some(error) = self.error.clone() {
+                self.session_log.add("ERROR", &error, "");
+                self.remember(error, true);
             }
             self.logged_error = self.error.clone();
         }
+    }
+
+    /// Shows a result on the status line and keeps it in the history.
+    pub fn set_status(&mut self, text: impl Into<String>) {
+        self.status = text.into();
+        self.remember(self.status.clone(), false);
+    }
+
+    /// Like [`Self::set_status`], naming the chosen host in the history.
+    pub fn set_host_status(&mut self, text: impl Into<String>) {
+        self.status = text.into();
+        let line = match self.current() {
+            Some(host) => self.t().format(
+                "status.host_line",
+                &[("name", host.name.clone()), ("text", self.status.clone())],
+            ),
+            None => self.status.clone(),
+        };
+        self.remember(line, false);
+    }
+
+    fn remember(&mut self, text: String, error: bool) {
+        if self.history.len() == HISTORY_LIMIT {
+            self.history.pop_front();
+        }
+        self.history.push_back(HistoryEntry {
+            time: chrono::Local::now().format("%H:%M:%S").to_string(),
+            text,
+            error,
+        });
     }
 
     pub fn process_events(&mut self) {
@@ -493,11 +543,11 @@ impl App {
                     if self.vault_dialog.is_none() {
                         self.open_vault_dialog(VaultMode::Create);
                     }
-                    self.status = t.get("vault.setup_required").into();
+                    self.set_status(t.get("vault.setup_required"));
                 } else if self.locked {
                     self.clear_host_cache();
                     self.open_vault_dialog(VaultMode::Unlock);
-                    self.status = t.get("vault.locked").into();
+                    self.set_status(t.get("vault.locked"));
                     self.start_default_unlock();
                 } else {
                     self.check_plaintext_copy();
@@ -512,10 +562,10 @@ impl App {
                     return;
                 }
                 if action == "vault_upgrade" {
-                    self.status = t.format(
+                    self.set_status(t.format(
                         "settings.converted",
                         &[("version", misf_core::sqlite::SCHEMA_VERSION.to_string())],
-                    );
+                    ));
                 }
                 self.check_plaintext_copy();
                 self.send(json!({"action":"list"}));
@@ -523,7 +573,7 @@ impl App {
             "vault_delete_plaintext" => {
                 self.apply_storage(&data);
                 self.plaintext_delete_prompt = false;
-                self.status = t.get("plaintext.deleted").into();
+                self.set_status(t.get("plaintext.deleted"));
                 // A legacy hosts.json may remain after the plaintext database is gone.
                 self.check_plaintext_copy();
             }
@@ -531,44 +581,48 @@ impl App {
                 self.apply_storage(&data);
                 self.schema_upgrade_prompt = None;
                 self.open_vault_dialog(VaultMode::Unlock);
-                self.status = t.get("vault.locked").into();
+                self.set_status(t.get("vault.locked"));
             }
             "vault_lock" => {
                 self.apply_storage(&data);
                 self.schema_upgrade_prompt = None;
                 self.clear_host_cache();
                 self.vault_dialog = None;
-                self.status = t.get("status.locked").into();
+                self.set_status(t.get("status.locked"));
             }
             "vault_add_key" | "vault_add_passkey" => {
                 self.apply_storage(&data["storage"]);
                 self.open_vault_dialog(VaultMode::Manage);
-                self.status = t.format("status.slot_added", &[("slot", data["slot"].to_string())]);
+                self.set_status(
+                    t.format("status.slot_added", &[("slot", data["slot"].to_string())]),
+                );
             }
             "vault_revoke_key" => {
                 self.apply_storage(&data["storage"]);
                 self.open_vault_dialog(VaultMode::Manage);
-                self.status =
-                    t.format("status.slot_revoked", &[("slot", data["slot"].to_string())]);
+                self.set_status(
+                    t.format("status.slot_revoked", &[("slot", data["slot"].to_string())]),
+                );
             }
             "vault_rename_key" => {
                 self.apply_storage(&data["storage"]);
                 self.open_vault_dialog(VaultMode::Manage);
-                self.status =
-                    t.format("status.slot_renamed", &[("slot", data["slot"].to_string())]);
+                self.set_status(
+                    t.format("status.slot_renamed", &[("slot", data["slot"].to_string())]),
+                );
             }
             "convert_storage" => {
-                self.status = t.format(
+                self.set_status(t.format(
                     "settings.converted",
                     &[("version", data["schema_version"].to_string())],
-                );
+                ));
                 self.send(json!({"action":"list"}));
             }
             "vault_backup" => {
-                self.status = t.format(
+                self.set_status(t.format(
                     "status.backup_exported",
                     &[("path", data["path"].as_str().unwrap_or_default().into())],
-                )
+                ));
             }
             "list" => {
                 match serde_json::from_value::<Vec<Host>>(data["hosts"].clone()) {
@@ -602,10 +656,10 @@ impl App {
                 if !self.hosts.iter().any(|h| h.id == self.selected) {
                     self.selected = self.hosts.first().map(|h| h.id.clone()).unwrap_or_default();
                 }
-                self.status = t.format(
+                self.set_status(t.format(
                     "status.hosts_loaded",
                     &[("count", self.hosts.len().to_string())],
-                );
+                ));
             }
             "save" => {
                 self.selected = data["id"].as_str().unwrap_or_default().into();
@@ -621,7 +675,7 @@ impl App {
                 self.group_dialog = None;
                 self.send(json!({"action":"list"}));
             }
-            "arrange" | "group_collapse" => self.status = t.get("group.saved").into(),
+            "arrange" | "group_collapse" => self.set_status(t.get("group.saved")),
             "key_add" => {
                 if let Some(dialog) = &mut self.key_dialog {
                     dialog.name.clear();
@@ -632,20 +686,20 @@ impl App {
                 }
                 let name = data["key"]["name"].as_str().unwrap_or_default().to_owned();
                 self.send(json!({"action":"list"}));
-                self.status = t.format("status.key_added", &[("name", name)]);
+                self.set_status(t.format("status.key_added", &[("name", name)]));
             }
             "key_delete" => {
                 if let Some(dialog) = &mut self.key_dialog {
                     dialog.delete = None;
                 }
                 self.send(json!({"action":"list"}));
-                self.status = t.get("status.key_deleted").into();
+                self.set_status(t.get("status.key_deleted"));
             }
             "probe" => {
                 if let Some(host) = self.current() {
                     let actual = data["fingerprint"].as_str().unwrap_or_default().to_owned();
                     if host.fingerprint == actual {
-                        self.status = t.get("status.fingerprint_matches").into();
+                        self.set_host_status(t.get("status.fingerprint_matches"));
                         if let Some(action) = self.after_trust.take() {
                             self.send(json!({"action":action,"id":self.selected}));
                         }
@@ -657,7 +711,7 @@ impl App {
                             actual,
                             next: self.after_trust.take(),
                         });
-                        self.status = t.get("status.check_fingerprint").into();
+                        self.set_host_status(t.get("status.check_fingerprint"));
                     }
                 }
             }
@@ -666,7 +720,7 @@ impl App {
                     if let Some(host) = self.hosts.iter_mut().find(|h| h.id == trust.host_id) {
                         host.fingerprint = trust.actual;
                     }
-                    self.status = t.get("status.fingerprint_saved").into();
+                    self.set_host_status(t.get("status.fingerprint_saved"));
                     if let Some(action) = trust.next {
                         self.send(json!({"action":action,"id":self.selected}));
                     }
@@ -687,28 +741,27 @@ impl App {
                 } else {
                     distro
                 };
-                self.status = t.format(
+                self.set_host_status(t.format(
                     "status.connected",
                     &[
                         ("os", os.into()),
                         ("manager", manager_label(t, manager).into()),
                     ],
-                )
+                ));
             }
             "reboot" => {
                 let name = self.current().map(|h| h.name.clone()).unwrap_or_default();
-                self.status = t.format("reboot.scheduled", &[("name", name)]);
+                self.set_status(t.format("reboot.scheduled", &[("name", name)]));
             }
             "check" | "upgrade" | "dist_upgrade" => {
                 match serde_json::from_value::<CheckResult>(data) {
                     Ok(result) => {
-                        self.status = match (action, result.status == "success") {
+                        self.set_host_status(match (action, result.status == "success") {
                             ("check", true) => t.get("status.apt_done"),
                             ("check", false) => t.get("status.apt_failed"),
                             (_, true) => t.get("status.upgrade_done"),
                             (_, false) => t.get("status.upgrade_failed"),
-                        }
-                        .into();
+                        });
                         if let Some(host) = self.hosts.iter_mut().find(|h| h.id == self.selected) {
                             record_result(host, result);
                         }
@@ -744,12 +797,12 @@ impl App {
                     ("succeeded", succeeded.to_string()),
                     ("failed", failed.to_string()),
                 ];
-                self.status = if skipped == 0 {
+                self.set_status(if skipped == 0 {
                     t.format("status.batch_done", &counts)
                 } else {
                     counts.push(("skipped", skipped.to_string()));
                     t.format("status.batch_aborted", &counts)
-                };
+                });
                 self.report_kept_back(finished);
             }
             _ => {}
@@ -818,6 +871,7 @@ impl App {
         self.advanced_open = false;
         self.drag = None;
         self.ssh_keys.clear();
+        self.history.clear();
         self.key_dialog = None;
     }
 

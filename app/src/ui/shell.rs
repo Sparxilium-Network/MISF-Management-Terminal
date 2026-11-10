@@ -1,17 +1,33 @@
 //! The top bar, the status line and the host/batch tabs.
 
 use super::{
-    App, AppWindow, Ctx, Shell,
+    App, AppWindow, Ctx, HistoryLine, Shell,
     app::{VaultMode, View},
 };
 use serde_json::json;
-use slint::ComponentHandle;
+use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 pub fn push(app: &mut App, w: &AppWindow) {
     let t = app.t();
     let shell = w.global::<Shell>();
     shell.set_busy(app.busy);
     shell.set_status(app.status.clone().into());
+    shell.set_history_open(app.history_open);
+    // Only rebuilt when it changed, so an open, scrolled list stays where it is.
+    let lines: Vec<HistoryLine> = app
+        .history
+        .iter()
+        .rev()
+        .map(|entry| HistoryLine {
+            time: entry.time.clone().into(),
+            text: entry.text.clone().into(),
+            error: entry.error,
+        })
+        .collect();
+    let shown = shell.get_history();
+    if shown.row_count() != lines.len() || shown.iter().zip(&lines).any(|(a, b)| a != *b) {
+        shell.set_history(ModelRc::new(VecModel::from(lines)));
+    }
     shell.set_locked(app.locked);
     shell.set_encrypted(app.encrypted);
     shell.set_path(app.path.clone().into());
@@ -52,6 +68,8 @@ pub fn wire(ctx: &Ctx, w: &AppWindow) {
     shell.on_manage_keys(move || c.update(App::open_key_dialog));
     let c = ctx.clone();
     shell.on_review_plaintext(move || c.update(App::check_plaintext_copy));
+    let c = ctx.clone();
+    shell.on_history_toggled(move || c.update(|app| app.history_open = !app.history_open));
     let c = ctx.clone();
     shell.on_view_chosen(move |view| {
         c.update(|app| {

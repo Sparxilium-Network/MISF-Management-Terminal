@@ -285,6 +285,9 @@ fn capture(ctx: &Ctx) {
                 c.update(|app| {
                     fixture_hosts(app);
                     open_requested(app);
+                    if std::env::var("MISF_OPEN_HISTORY").as_deref() == Ok("1") {
+                        sample_history(app);
+                    }
                     let reboot = std::env::var("MISF_OPEN_REBOOT");
                     if matches!(reboot.as_deref(), Ok("1" | "final")) {
                         app.choose_advanced(host_page::Advanced::Reboot);
@@ -325,6 +328,19 @@ fn capture(ctx: &Ctx) {
         },
     );
     std::mem::forget(timer);
+}
+
+/// A few past results and an error, with the status line expanded to show them.
+#[cfg(feature = "capture")]
+fn sample_history(app: &mut App) {
+    let t = app.t();
+    app.set_host_status(t.get("status.apt_done"));
+    app.set_status(t.format("reboot.scheduled", &[("name", "db-01".into())]));
+    app.error = Some("SSH connection to 10.0.0.15:22 timed out".into());
+    app.note_error();
+    app.error = None;
+    app.set_host_status(t.get("status.upgrade_done"));
+    app.history_open = true;
 }
 
 /// Opens the advanced menu and, over its first item, the copy menu a right-click shows.

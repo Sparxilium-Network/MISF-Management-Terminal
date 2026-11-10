@@ -165,7 +165,7 @@ impl App {
             self.log(Action::AppearanceChange, outcome);
         }
         match saved {
-            Ok(()) => self.status = t.get("settings.saved").into(),
+            Ok(()) => self.set_status(t.get("settings.saved")),
             Err(error) => self.error = Some(t.format("settings.save_error", &[("error", error)])),
         }
     }

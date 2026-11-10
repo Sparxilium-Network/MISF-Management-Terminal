@@ -1,7 +1,18 @@
 // State of the window frame: the top bar, the status line and the main tabs.
+
+// A past result or error the status line can expand to show.
+export struct HistoryLine {
+    time: string,
+    text: string,
+    error: bool,
+}
+
 export global Shell {
     in property <bool> busy;
     in property <string> status;
+    // Newest first.
+    in property <[HistoryLine]> history;
+    in property <bool> history-open;
     in property <bool> locked;
     in property <bool> encrypted;
     in property <string> path;
@@ -18,4 +29,5 @@ export global Shell {
     callback manage-keys();
     callback review-plaintext();
     callback view-chosen(view: int);
+    callback history-toggled();
 }

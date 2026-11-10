@@ -219,6 +219,79 @@ fn vault_passwords_are_checked_before_anything_is_sent() {
 }
 
 #[test]
+fn status_history_keeps_results_and_errors_but_not_progress() {
+    i_slint_backend_testing::init_no_event_loop();
+    let (mut app, _commands, events, _directory) = test_app(false);
+    unlocked(&mut app);
+    app.hosts = vec![host("web", "apt", "SHA256:x")];
+    app.selected = "web".into();
+    let t = app.t();
+    app.send(json!({"action":"check","id":"web"}));
+    events.send(Event::Progress("正在連線…".into())).unwrap();
+    let mut check = CheckResult {
+        status: "success".into(),
+        ..Default::default()
+    };
+    check.operation = "check".into();
+    events
+        .send(Event::Done {
+            action: "check".into(),
+            result: Ok(serde_json::to_value(&check).unwrap()),
+        })
+        .unwrap();
+    events
+        .send(Event::Done {
+            action: "upgrade".into(),
+            result: Err("SSH timed out".into()),
+        })
+        .unwrap();
+    app.process_events();
+
+    // Only the result, named with its host, and the error itself; no progress or "working".
+    let lines: Vec<(&str, bool)> = app
+        .history
+        .iter()
+        .map(|e| (e.text.as_str(), e.error))
+        .collect();
+    let done = t.format(
+        "status.host_line",
+        &[
+            ("name", "host-web".into()),
+            ("text", t.get("status.apt_done").into()),
+        ],
+    );
+    assert_eq!(lines, [(done.as_str(), false), ("SSH timed out", true)]);
+
+    // The status line opens and closes it, newest first.
+    let (ctx, main, _settings) = build(app, true).unwrap();
+    main.show().unwrap();
+    let toggle = || {
+        ElementHandle::find_by_accessible_label(&main, t.get("status.history"))
+            .next()
+            .expect("no history toggle")
+    };
+    toggle().invoke_accessible_default_action();
+    assert!(ctx.app.borrow().history_open);
+    let shown = main.global::<super::Shell>().get_history();
+    assert_eq!(shown.row_count(), 2);
+    let newest = shown.row_data(0).unwrap();
+    assert!(newest.error && newest.text == "SSH timed out");
+    toggle().invoke_accessible_default_action();
+    assert!(!ctx.app.borrow().history_open);
+
+    // It names hosts, so locking the vault clears it.
+    ctx.update(|app| app.received("vault_lock", json!({"encrypted":true,"locked":true})));
+    let left: Vec<String> = ctx
+        .app
+        .borrow()
+        .history
+        .iter()
+        .map(|e| e.text.clone())
+        .collect();
+    assert_eq!(left, [t.get("status.locked").to_owned()]);
+}
+
+#[test]
 fn session_log_records_the_run_without_any_secret() {
     let (mut app, _commands, events, _directory) = test_app(false);
     app.send(json!({"action":"vault_unlock","passphrase":"unlock-secret"}));
