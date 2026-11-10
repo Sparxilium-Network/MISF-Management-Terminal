@@ -1,5 +1,14 @@
 # 全工作區檢查結果
 
+## 2026-11-10（russh 0.65.0 → 0.65.1，分支 `main`，基於 `3f7942d`）
+
+- 使用者轉來 Dependabot PR #2（目標分支是 `legacy-egui`，不是 `main`）。在 `main` 上套用相同的鎖檔改動：russh 升到 0.65.1，`generic-array 1.4.5` 不再依賴 `generic-array 0.14.7`。`core/Cargo.toml` 的版本需求 `0.65.0` 未改。
+- `cargo update -p russh --precise 0.65.1` 會順帶把 `windows-sys`／`getrandom` 等套件解析成較舊的版本，超出範圍，所以還原後改為手動修改鎖檔，結果與 PR 相同。`cargo metadata --locked` 確認鎖檔一致；`rsa` 仍是 `0.10.0-rc.18`（見 `decisions/rsa-advisory.md`）。
+- `./licenses.ps1` 重新產生授權清單與鎖檔雜湊（cargo deny licenses 通過）。
+- fmt、Clippy（`--all-features --locked -D warnings`）通過；`cargo test --workspace --locked` 全部通過（22、20、58、24 項）。
+- `cargo deny check` 的 advisories 失敗：pin-utils、ttf-parser、zbus_names、zvariant、zvariant_derive 已停止維護（RUSTSEC-2026-0441／0192／0371／0370／0372）。這些套件的鎖定版本這次都沒改，CI 也只跑 `check licenses`，與本次更新無關，未處理。
+- 未實際連線 SSH 主機測試新版 russh。
+
 ## 2026-11-10（檢查時找出分階段延後套件，分支 `slint-rego`，基於 `e492be8`）
 
 - 使用者要求在 APT 檢查階段就偵測 phasing 延後的套件。檢查有待更新套件時，於讀完清單後執行唯讀的 `LC_ALL=C apt-get -s -q=1 upgrade`（`apt::PREVIEW`，`Commands.preview` 只有 APT；root 與一般帳號都不經 sudo，與既有 `SIMULATE` 相同），以既有 `parse_phased` 解析；失敗或非零退出碼只讓 `phased` 為空。命令列入 `manager_commands(Check)`，提示與右鍵複製會顯示它。
