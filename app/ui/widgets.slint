@@ -94,17 +94,24 @@ export component HintArea {
         running: root.hovering && root.has-hint && root.mine < 0;
         triggered => { root.show(); }
     }
-    menu := ContextMenuArea {
-        enabled: root.active && root.hint.copy != "";
-        Menu {
-            MenuItem {
-                title: T.get("hint.copy_commands");
-                activated => { Clip.copy(root.hint.copy); }
-            }
+    touch := TouchArea {
+        inner := HorizontalLayout {
+            @children
         }
-        touch := TouchArea {
-            inner := HorizontalLayout {
-                @children
+        // Laid over the control rather than around it: the control's own TouchArea
+        // grabs every press, so a menu area around it never sees the right-click. On
+        // top, it takes only right-clicks and lets every other event through.
+        menu := ContextMenuArea {
+            x: 0;
+            y: 0;
+            width: parent.width;
+            height: parent.height;
+            enabled: root.active && root.hint.copy != "";
+            Menu {
+                MenuItem {
+                    title: T.get("hint.copy_commands");
+                    activated => { Clip.copy(root.hint.copy); }
+                }
             }
         }
     }

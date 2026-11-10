@@ -862,6 +862,47 @@ fn pages_respond_to_clicks() {
     assert_eq!(request["hosts"][0]["id"], "lab");
     ctx.update(|app| app.busy = false);
 
+    // A right-click on a control with commands opens the copy menu, also inside the
+    // advanced menu, and choosing its item copies exactly the hint's commands.
+    let right_click_copies = |label: &str, commands: slint::SharedString| {
+        let control = first(&main, label);
+        let (at, size) = (control.absolute_position(), control.size());
+        let position =
+            slint::LogicalPosition::new(at.x + size.width / 2.0, at.y + size.height / 2.0);
+        let button = slint::platform::PointerEventButton::Right;
+        let window = main.window();
+        window.dispatch_event(slint::platform::WindowEvent::PointerMoved { position });
+        window.dispatch_event(slint::platform::WindowEvent::PointerPressed { position, button });
+        window.dispatch_event(slint::platform::WindowEvent::PointerReleased { position, button });
+        assert!(
+            ElementHandle::find_by_accessible_label(&main, t.get("hint.copy_commands"))
+                .next()
+                .is_some(),
+            "no copy menu on {label}"
+        );
+        let clip = main.global::<super::Clip>();
+        let before = clip.get_serial();
+        for key in [
+            slint::platform::Key::DownArrow,
+            slint::platform::Key::Return,
+        ] {
+            let text: slint::SharedString = key.into();
+            window.dispatch_event(slint::platform::WindowEvent::KeyPressed { text: text.clone() });
+            window.dispatch_event(slint::platform::WindowEvent::KeyReleased { text });
+        }
+        assert_eq!(clip.get_serial(), before + 1, "{label} copied nothing");
+        assert!(!commands.is_empty());
+        assert_eq!(clip.get_text(), commands);
+    };
+    let host_state = main.global::<HostState>();
+    right_click_copies(t.get("host.test"), host_state.get_test_hint().copy);
+    first(&main, t.get("advanced.button")).invoke_accessible_default_action();
+    let upgrade = host_state.get_upgrade_label().to_string();
+    right_click_copies(&upgrade, host_state.get_upgrade_hint().copy);
+    // Copying from an item leaves the advanced menu open.
+    assert!(ctx.app.borrow().advanced_open);
+    ctx.update(|app| app.advanced_open = false);
+
     // The settings tree opens pages and collapses the Preferences branch.
     ctx.update(|app| {
         app.settings_page = SettingsPage::Vault;

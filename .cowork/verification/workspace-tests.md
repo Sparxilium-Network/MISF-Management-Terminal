@@ -1,5 +1,12 @@
 # 全工作區檢查結果
 
+## 2026-11-10（右鍵複製命令修正，分支 `slint-rego`，基於 `3d90ce4`）
+
+- 使用者回報進階選單內的右鍵複製失效。實際上 Slint 版所有 `HintArea` 的右鍵複製都失效：`ContextMenuArea` 包在控制項外層，但 Slint 的 `TouchArea` 對任何按鍵的按下都回傳 `GrabMouse`，事件分派在子項抓取後就停止（`i-slint-core` `input.rs` `send_mouse_event_to_item`），外層 `ContextMenu::input_event` 收不到右鍵。改為把 `ContextMenuArea` 疊在控制項上方：它只接受右鍵按下，其他事件回傳 `EventIgnored` 交給下方按鈕，左鍵與懸停提示不受影響。
+- 新增測試：以實際右鍵事件點主機頁「測試連線」與進階選單「APT 升級…」，確認出現複製選單，以方向鍵＋Enter 選擇後剪貼簿內容等於提示的命令，且進階選單保持開啟。暫時還原修正時測試在「沒有複製選單」處失敗，確認能抓到此錯誤。測試後端的選單項目座標是彈出視窗內座標，因此以鍵盤選擇，不以點擊。
+- fmt、Clippy（`--all-features -D warnings`）通過；`cargo test --workspace` 全部通過（22、20、57、24 項）。
+- 未在執行中的 app 實際確認系統剪貼簿收到文字（`ClipboardSink` 以隱藏 `TextInput.copy()` 寫入，測試後端只能驗證 `Clip` 內容）。
+
 ## 2026-11-10（補齊 Skia 內含元件授權，分支 `slint-rego`，基於 `cc7ba2e`）
 
 - 依 rust-skia 的建置參數與 Windows `skia.lib` 符號確認，預編譯 Skia 內含 libpng、libjpeg-turbo、zlib、Expat、Wuffs、D3D12 Memory Allocator；FreeType、HarfBuzz、ICU、libwebp 未編入。依 Skia `m153-0.101.2` 的 `DEPS` 釘選版本，自上游 googlesource 取得各授權全文放入 `licenses/Skia/third_party/`（Wuffs 無 NOTICE）；Linux 版另依 DEPS 附 Vulkan Memory Allocator 授權，但未實際建置 Linux 版驗證。
