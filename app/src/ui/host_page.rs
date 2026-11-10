@@ -241,6 +241,21 @@ pub fn push(app: &mut App, w: &AppWindow) {
             .unwrap_or_default()
             .into(),
     );
+    state.set_phased(
+        result
+            .filter(|r| r.status == "success" && !r.phased.is_empty())
+            .map(|r| {
+                t.format(
+                    "phased.banner",
+                    &[
+                        ("count", r.phased.len().to_string()),
+                        ("packages", r.phased.join(", ")),
+                    ],
+                )
+            })
+            .unwrap_or_default()
+            .into(),
+    );
     state.set_restart(
         result
             .and_then(|r| r.restart.as_ref())

@@ -250,7 +250,8 @@ fn rows(app: &App, t: Translator, order: &[usize], headings: &[Heading]) -> Vec<
         let success = result.filter(|r| r.status == "success");
         let upgrade = success.filter(|r| r.is_upgrade());
         let dash = || "—".to_owned();
-        let phased = upgrade
+        // A check simulates the upgrade, so the phased count is known before upgrading.
+        let phased = success
             .map(|r| r.phased.join(", "))
             .filter(|names| !names.is_empty());
         let cells: Vec<BatchCell> = columns
@@ -270,7 +271,7 @@ fn rows(app: &App, t: Translator, order: &[usize], headings: &[Heading]) -> Vec<
                         success.map_or_else(dash, |r| r.packages.len().to_string())
                     }
                     BatchColumn::Phased => {
-                        upgrade.map_or_else(dash, |r| r.phased.len().to_string())
+                        success.map_or_else(dash, |r| r.phased.len().to_string())
                     }
                     BatchColumn::Upgraded => {
                         upgrade.map_or_else(dash, |r| r.upgraded.len().to_string())

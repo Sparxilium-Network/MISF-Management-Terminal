@@ -76,6 +76,20 @@ impl State {
                 "Setting up openssl (3.0.17) ...\r\nThe following packages have been kept back:\r\n  libc6\r\n1 upgraded, 0 newly installed, 0 to remove and 1 not upgraded.\r\n".into(),
                 0,
             )
+        } else if command == apt::PREVIEW {
+            // openssl's update is held back for a phased rollout on this host.
+            (
+                "NOTE: This is only a simulation!
+The following packages have been kept back:
+  libc6
+Not upgrading yet due to phasing:
+  openssl
+
+0 upgraded, 0 newly installed, 0 to remove and 2 not upgraded.
+"
+                .into(),
+                0,
+            )
         } else if command == apt::SIMULATE {
             (
                 "NOTE: This is only a simulation!\nInst libc6 [2.36-8] (2.36-9 Debian:13/stable [amd64])\nInst libc6-extra (2.36-9 Debian:13/stable [amd64])\nRemv old-libc [1.0]\n".into(),
@@ -334,6 +348,11 @@ async fn password_pty_sudo_and_packages_work_end_to_end() {
     assert_eq!(check.packages[0].candidate_version, "3.0.17");
     assert_eq!(check.distro, "Debian 13");
     assert_eq!(check.package_manager, "apt");
+    // The simulated upgrade finds what phasing defers, but a check reports no
+    // dist-upgrade: kept-back packages are only reported after a real upgrade.
+    assert_eq!(check.phased, ["openssl"]);
+    assert!(check.kept_back.is_empty() && check.plan.is_none());
+    assert!(check.output.contains("APT upgrade 模擬"));
     // The index update and the restart status both go through sudo with a PTY.
     assert_eq!(fixture.state.pty_count.load(Ordering::SeqCst), 2);
     assert!(!check.output.contains("sudo-secret"));
@@ -355,11 +374,16 @@ async fn password_pty_sudo_and_packages_work_end_to_end() {
             .iter()
             .all(|c| !c.contains("ssh-secret") && !c.contains("sudo-secret"))
     );
+    // Nothing but the read-only simulation names an upgrade, and it runs without sudo.
     assert!(
         !commands
             .iter()
+            .filter(|c| *c != apt::PREVIEW)
             .any(|c| c.contains(" upgrade") || c.contains(" install"))
     );
+    // The check ran exactly what its confirmation lists, after the connection test.
+    let expected = package_manager::package_commands(&fixture.host, Mode::Check);
+    assert_eq!(commands[commands.len() - expected.len()..], expected[..]);
 }
 
 #[tokio::test]
@@ -711,7 +735,8 @@ async fn batch_runs_each_host_and_saves_per_host_results() {
             .lock()
             .unwrap()
             .iter()
-            .any(|c| c.contains(" upgrade"))
+            // Only the read-only simulation, which finds phased updates, names one.
+            .any(|c| c.contains(" upgrade") && c != apt::PREVIEW)
     );
     for request in [
         json!({"action":"batch","operation":"install","ids":[ids[0]]}),

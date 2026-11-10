@@ -415,6 +415,7 @@ fn fixture_hosts(app: &mut App) {
             package("openssl", "3.0.16", "3.0.17"),
             package("curl", "8.5.0-2", "8.5.0-3"),
         ],
+        phased: vec!["curl".into()],
         output: "Reading package lists...".into(),
         ..Default::default()
     });

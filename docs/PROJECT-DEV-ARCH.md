@@ -1,6 +1,6 @@
 # 原始碼檔案說明
 
-> 最後修改：2026-11-10 ｜ 基於 commit：`a33ffad`
+> 最後修改：2026-11-10 ｜ 基於 commit：`e492be8`
 
 每個 `.rs` 檔案負責什麼。整體設計與資料流見 [架構](architecture.md)，建置與慣例見 [開發說明](PROJECT-DEV.md)。新增、改名或刪除 `.rs` 檔案時，請一併更新本文件。
 
@@ -49,10 +49,10 @@ Workspace 有三個 crate：`core`（`misf-core`，核心函式庫與 JSON CLI�
 | --- | --- |
 | `core/src/ssh.rs` | SSH 傳輸：`probe`（只取主機指紋，不送帳密）、`connect`（核對指紋）、`authenticate`（密碼或私鑰）、`execute`（執行一條命令、偵測 sudo 提示並最多回答一次、2 MiB 輸出上限）、`test_connection`（產生 `ConnectionTest`）。不含任何套件命令。 |
 | `core/src/transcript.rs` | 把遠端輸出轉成可讀紀錄：統一換行、移除 ANSI 與終端控制字串；`heading` 產生依顯示寬度對齊的星號框標題，供執行輸出與 LOG 分段。 |
-| `core/src/package_manager/mod.rs` | `Mode`（check／upgrade／dist_upgrade）、`Manager` 列舉與 `Commands { update, list, upgrade, dist_upgrade, simulate, status }`，依管理器分派到各檔案；`manager_commands`／`package_commands` 列出確認視窗要顯示的命令；`SUDO_PROMPT` 標記。 |
+| `core/src/package_manager/mod.rs` | `Mode`（check／upgrade／dist_upgrade）、`Manager` 列舉與 `Commands { update, list, upgrade, dist_upgrade, simulate, preview, status }`，依管理器分派到各檔案；`manager_commands`／`package_commands` 列出確認視窗要顯示的命令；`SUDO_PROMPT` 標記。 |
 | `core/src/package_manager/detect.rs` | `DETECT` 偵測命令與 `parse_platform`：核心、發行版顯示名稱、可用的套件管理器與優先順序。 |
-| `core/src/package_manager/operation.rs` | 一台主機的檢查／升級／dist-upgrade 流程：偵測 → 選定管理器（不得與紀錄或確認內容不同）→ 更新索引 → 讀清單 →（升級或 dist-upgrade → 再讀清單）→（有 kept back：唯讀模擬 dist-upgrade）→（APT：讀重啟狀態），選用步驟失敗不影響結果；各段輸出以星號框標題分隔，最後組成 `CheckResult`。 |
-| `core/src/package_manager/apt.rs` | APT 的固定命令（含 `DIST_UPGRADE`、唯讀的 `SIMULATE`，以及 root 直接執行／一般帳號整段放進 sudo 的 `STATUS`／`SUDO_STATUS`）、索引更新失敗判斷、`apt list --upgradable` 解析、phasing 延後與 kept back 套件解析、`parse_plan`（`apt-get -s` 的 `Inst`／`Remv`），以及 `parse_restart`。 |
+| `core/src/package_manager/operation.rs` | 一台主機的檢查／升級／dist-upgrade 流程：偵測 → 選定管理器（不得與紀錄或確認內容不同）→ 更新索引 → 讀清單 →（檢查且有待更新：唯讀模擬 upgrade，找出 phasing 延後的套件）→（升級或 dist-upgrade → 再讀清單）→（有 kept back：唯讀模擬 dist-upgrade）→（APT：讀重啟狀態），選用步驟失敗不影響結果；各段輸出以星號框標題分隔，最後組成 `CheckResult`。 |
+| `core/src/package_manager/apt.rs` | APT 的固定命令（含 `DIST_UPGRADE`、唯讀的 `SIMULATE` 與檢查時用的 `PREVIEW`，以及 root 直接執行／一般帳號整段放進 sudo 的 `STATUS`／`SUDO_STATUS`）、索引更新失敗判斷、`apt list --upgradable` 解析、phasing 延後與 kept back 套件解析、`parse_plan`（`apt-get -s` 的 `Inst`／`Remv`），以及 `parse_restart`。 |
 | `core/src/package_manager/dnf.rs` | DNF 的固定命令。 |
 | `core/src/package_manager/yum.rs` | YUM 的固定命令。 |
 | `core/src/package_manager/rpm.rs` | DNF／YUM 共用：索引更新失敗判斷、`check-update` 退出碼（0／100）與清單解析（含 yum 換行、rpm 已安裝版本）。 |

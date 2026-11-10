@@ -1,6 +1,6 @@
 # MISF Management Terminal 架構
 
-> 最後修改：2026-11-10 ｜ 基於 commit：`f6bbbd4`
+> 最後修改：2026-11-10 ｜ 基於 commit：`e492be8`
 
 > [!WARNING]
 > **本專案仍處於開發階段，請勿用於正式環境。** 相關安全保護機制尚未完善。
@@ -77,12 +77,12 @@ UI 與 CLI 都送出 `{"action": …}` JSON 給 `Session::handle`。CLI 從 stdi
 
 | 管理器 | 檢查 | 升級 | 實機測試 |
 | --- | --- | --- | --- |
-| APT | `apt-get -q=1 update`，再以英文 locale 列出待更新套件 | `apt-get -y upgrade`（`DEBIAN_FRONTEND=noninteractive`、`NEEDRESTART_MODE=l`、`--force-confdef --force-confold`）；另有使用者明確選擇的 `dist-upgrade`（相同參數） | upgrade 已測試；dist-upgrade 未實機測試 |
+| APT | `apt-get -q=1 update`，再以英文 locale 列出待更新套件；有待更新套件時以唯讀的 `apt-get -s -q=1 upgrade` 找出 phasing 延後的套件 | `apt-get -y upgrade`（`DEBIAN_FRONTEND=noninteractive`、`NEEDRESTART_MODE=l`、`--force-confdef --force-confold`）；另有使用者明確選擇的 `dist-upgrade`（相同參數） | upgrade 已測試；dist-upgrade 未實機測試 |
 | DNF／YUM | `makecache`，再 `check-update -C` 並輸出 `rpm -qa` 版本；退出碼 0／100 為成功 | `-y upgrade` | 未測試 |
 | pkg | `pkg update`，`pkg version -URv -l '<'` | `pkg upgrade -y` | 未測試 |
 
 - 索引更新失敗不讀套件清單，也不開始升級。APT 輸出含 `E:`、DNF／YUM 含 `Error:`／`Failed to download metadata`／`Ignoring repositories`，或非零退出碼，即為失敗；升級失敗時提示遠端可能已部分升級。索引更新上限 5 分鐘，升級上限 30 分鐘。
-- 升級前後各讀一次待更新清單：`CheckResult.upgraded` 為升級後消失的套件，`packages` 為剩餘套件，`operation` 為 `check`／`upgrade`／`dist_upgrade`。APT 的 phasing 延後套件與 kept back 套件在載入時從保存的升級輸出解析，不另存欄位。
+- 升級前後各讀一次待更新清單：`CheckResult.upgraded` 為升級後消失的套件，`packages` 為剩餘套件，`operation` 為 `check`／`upgrade`／`dist_upgrade`。APT 的 phasing 延後套件在載入時從保存的輸出解析（升級或檢查的模擬皆可），kept back 套件與 dist-upgrade 計畫只從升級類結果解析，皆不另存欄位。
 - 輸出統一換行、移除 ANSI 與終端控制字串後保存，UI 以可選取的等寬文字顯示。每個步驟以 `transcript::heading` 產生的星號框標題分段（更新套件索引、待更新套件、APT upgrade、dist-upgrade 模擬、重新啟動狀態），框寬依標題的顯示寬度（中文算兩格）。每台主機只保存最近一次檢查或升級。
 
 ### Kept back 與 dist-upgrade（只限 APT）

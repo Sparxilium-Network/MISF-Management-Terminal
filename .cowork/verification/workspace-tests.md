@@ -1,5 +1,14 @@
 # 全工作區檢查結果
 
+## 2026-11-10（檢查時找出分階段延後套件，分支 `slint-rego`，基於 `e492be8`）
+
+- 使用者要求在 APT 檢查階段就偵測 phasing 延後的套件。檢查有待更新套件時，於讀完清單後執行唯讀的 `LC_ALL=C apt-get -s -q=1 upgrade`（`apt::PREVIEW`，`Commands.preview` 只有 APT；root 與一般帳號都不經 sudo，與既有 `SIMULATE` 相同），以既有 `parse_phased` 解析；失敗或非零退出碼只讓 `phased` 為空。命令列入 `manager_commands(Check)`，提示與右鍵複製會顯示它。
+- 推論：`apt-get -s` 的模擬輸出也含 kept back 與 `Inst` 行；原本載入時 `parse_plan` 不分操作掃整份輸出，檢查結果會被誤判成有 dist-upgrade 計畫。改為 kept back 與 plan 只從 upgrade／dist_upgrade 結果解析，`phased` 則所有結果都解析。
+- UI：批次表格「分階段延後」欄改為任何成功結果都顯示數字與套件提示；主機頁新增一行提示（`phased.banner`）。
+- 新增／更新測試：sqlite 往返確認檢查結果只讀回 phased、不產生 kept back 與 plan；整合測試的 APT 檢查回報 `phased == ["openssl"]`、無 kept back／plan，且實際執行的命令與確認清單一致；批次檢查測試排除 PREVIEW 後仍沒有任何升級命令；UI 測試確認主機頁提示與批次欄位。截圖目視確認主機頁提示與批次欄位。
+- fmt、Clippy（`--all-features -D warnings`）通過；`cargo test --workspace` 全部通過（22、20、58、24 項）。
+- 未在真實 Ubuntu 主機驗證：一般帳號執行 `apt-get -s upgrade` 時的 phasing 判斷是否與 root 相同（phasing 依 `/etc/machine-id`，一般帳號可讀，推論應相同）。舊的檢查紀錄沒有模擬段落，下一次檢查前「分階段延後」欄會顯示 0。
+
 ## 2026-11-10（自繪右鍵選單，分支 `slint-rego`，基於 `a33ffad`）
 
 - 使用者要求右鍵選單與介面風格統一。Slint 內建 `ContextMenuArea` 的彈出選單依 widget 樣式（fluent `FluentPalette`）繪製，顏色為 `out` 屬性，只能切換 `color-scheme`，無法套用 Theme；官方文件（docs.slint.dev ContextMenuArea、TouchArea 頁）也沒有外觀設定。改為自繪：`MenuLine`／`PopMenu`／`MenuArea`／`MenuOverlay`（widgets.slint），外觀沿用進階選單（Theme.surface、border、6px 圓角、TextButton 項目），主視窗 `run-menu` 依 `action` 分派。

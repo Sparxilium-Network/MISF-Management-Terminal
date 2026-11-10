@@ -389,6 +389,7 @@
   "kept_back.no_plan": "The dist-upgrade simulation is not available; see the output.",
   "kept_back.risk": "dist-upgrade may remove packages or install a new kernel; review the changes above first.",
   "kept_back.dist_upgrade": "Run dist-upgrade on these hosts…",
+  "phased.banner": "ⓘ {count} updates are in an APT phased rollout; this host will not install them yet and gets them later: {packages}",
   "kept_back.banner": "⚠ {count} packages were kept back and need a dist-upgrade: {packages}",
   "log.kept_back": "Kept back (needs dist-upgrade)",
   "log.plan": "dist-upgrade simulation (host unchanged)",

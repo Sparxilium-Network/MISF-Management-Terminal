@@ -389,6 +389,7 @@
   "kept_back.no_plan": "無法取得 dist-upgrade 模擬結果；請查看執行輸出。",
   "kept_back.risk": "dist-upgrade 可能移除套件或安裝新核心；執行前請確認上面的變動。",
   "kept_back.dist_upgrade": "對這些主機執行 dist-upgrade…",
+  "phased.banner": "ⓘ {count} 個套件屬於 APT 分階段推送（phasing），這台主機暫時不會安裝，之後會自動輪到：{packages}",
   "kept_back.banner": "⚠ {count} 個套件被保留，需要 dist-upgrade：{packages}",
   "log.kept_back": "被保留的套件（需要 dist-upgrade）",
   "log.plan": "dist-upgrade 模擬結果（未變更主機）",

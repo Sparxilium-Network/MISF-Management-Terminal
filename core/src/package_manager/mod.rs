@@ -73,6 +73,9 @@ pub struct Commands {
     pub dist_upgrade: Option<&'static str>,
     /// Read-only simulation of `dist_upgrade`, run when an upgrade kept packages back.
     pub simulate: Option<&'static str>,
+    /// Read-only simulation of `upgrade` run by a check, for what a phased rollout defers;
+    /// only APT has one.
+    pub preview: Option<&'static str>,
     /// Reads what needs a restart afterwards; only APT has one.
     pub status: Option<&'static str>,
 }
@@ -184,6 +187,8 @@ pub fn manager_commands(manager: Manager, root: bool, mode: Mode) -> Vec<&'stati
     if let Some(install) = install {
         list.extend([install, commands.list]);
         list.extend(commands.simulate);
+    } else {
+        list.extend(commands.preview);
     }
     list.extend(commands.status);
     list
@@ -228,7 +233,13 @@ mod tests {
             assert_eq!(root.status.is_some(), apt);
             assert_eq!(root.dist_upgrade.is_some(), apt);
             assert_eq!(root.simulate.is_some(), apt);
-            for command in root.dist_upgrade.into_iter().chain(root.simulate) {
+            assert_eq!(root.preview.is_some(), apt);
+            for command in root
+                .dist_upgrade
+                .into_iter()
+                .chain(root.simulate)
+                .chain(root.preview)
+            {
                 assert!(!command.contains("sudo"), "{command}");
             }
             let user = manager.commands(false);
@@ -238,6 +249,7 @@ mod tests {
             }
             // The simulation changes nothing, so it never needs sudo.
             assert_eq!(user.simulate, root.simulate);
+            assert_eq!(user.preview, root.preview);
             for command in [user.update, user.upgrade] {
                 assert!(command.contains(&sudo), "{command}");
             }

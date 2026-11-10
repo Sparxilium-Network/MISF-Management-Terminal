@@ -111,10 +111,22 @@ impl Run<'_> {
                     ..Default::default()
                 }
             }
-            _ => Outcome {
-                pending,
-                ..Default::default()
-            },
+            _ => {
+                let mut outcome = Outcome {
+                    pending,
+                    ..Default::default()
+                };
+                // A check simulates the upgrade to show what a phased rollout defers, so
+                // the count is known before anyone upgrades.
+                if mode == Mode::Check
+                    && let Some(command) = commands.preview
+                    && !outcome.pending.is_empty()
+                {
+                    progress("正在模擬升級，找出分階段延後的套件…");
+                    outcome.phased = self.preview(manager, command).await;
+                }
+                outcome
+            }
         };
         // Kept-back packages need a dist-upgrade; show what it would change, without doing it.
         if let Some(command) = commands.simulate
@@ -154,6 +166,17 @@ impl Run<'_> {
     async fn restart(&mut self, command: &str) -> Option<RestartStatus> {
         let (code, output) = self.optional("重新啟動狀態", command).await?;
         super::apt::parse_restart(code, &output)
+    }
+
+    /// What a phased rollout defers, read from a simulated upgrade; a failure finds none.
+    async fn preview(&mut self, manager: Manager, command: &str) -> Vec<String> {
+        match self
+            .optional("APT upgrade 模擬（不會變更系統）", command)
+            .await
+        {
+            Some((0, output)) => manager.held_back(&output),
+            _ => vec![],
+        }
     }
 
     /// What `dist-upgrade` would install, upgrade and remove; nothing is changed.

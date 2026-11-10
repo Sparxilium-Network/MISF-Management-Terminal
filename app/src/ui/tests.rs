@@ -703,6 +703,38 @@ fn pages_respond_to_clicks() {
             .unwrap_or_else(|| panic!("{label} not shown"))
     };
 
+    // A check already reports what a phased rollout defers: on the host page and in the
+    // batch table's phased column, before anything is upgraded.
+    ctx.update(|app| {
+        app.hosts[0].last_check = Some(misf_core::model::CheckResult {
+            checked_at: "2026-11-10T00:00:00Z".into(),
+            operation: "check".into(),
+            status: "success".into(),
+            package_manager: "apt".into(),
+            phased: vec!["openssl".into()],
+            ..Default::default()
+        })
+    });
+    let banner = main.global::<HostState>().get_phased();
+    assert!(banner.contains("openssl"), "{banner}");
+    ctx.update(|app| app.set_view(View::Batch));
+    let rows = main.global::<BatchState>().get_rows();
+    let web = rows
+        .iter()
+        .find(|r| r.id == "web")
+        .expect("web not in the table");
+    let phased = web
+        .cells
+        .iter()
+        .find(|c| c.kind == 3)
+        .expect("no phased column");
+    assert_eq!(phased.text.as_str(), "1");
+    assert!(phased.hint.contains("openssl"));
+    ctx.update(|app| {
+        app.hosts[0].last_check = None;
+        app.set_view(View::Host);
+    });
+
     // The advanced menu opens from its button; its items carry hints with the commands.
     first(&main, t.get("advanced.button")).invoke_accessible_default_action();
     assert!(ctx.app.borrow().advanced_open);

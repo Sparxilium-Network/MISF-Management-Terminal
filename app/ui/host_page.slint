@@ -25,6 +25,7 @@ export global HostState {
     in property <string> status;
     in property <string> last-check;
     in property <string> kept-back;
+    in property <string> phased;
     in property <string> restart;
     // The advanced menu, drawn by the window above everything at (menu-x, menu-y).
     in-out property <bool> advanced-open;
@@ -263,6 +264,11 @@ export component HostPage inherits VerticalLayout {
         if HostState.kept-back != "": Text {
             text: HostState.kept-back;
             color: Theme.warning;
+            wrap: word-wrap;
+        }
+        if HostState.phased != "": Text {
+            text: HostState.phased;
+            color: Theme.muted;
             wrap: word-wrap;
         }
         if HostState.restart != "": Text {

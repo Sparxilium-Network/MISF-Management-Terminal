@@ -175,21 +175,23 @@ pub(crate) fn load(conn: &Connection) -> Result<Database> {
     while let Some(row) = rows.next()? {
         let id: String = row.get(0)?;
         let (operation, output): (String, String) = (row.get(2)?, row.get(6)?);
+        let upgrade = matches!(operation.as_str(), "upgrade" | "dist_upgrade");
         let result = CheckResult {
             checked_at: row.get(1)?,
-            // Read back from the saved transcript, so no column is needed for it.
-            // Read back from the saved transcript, so no column is needed for these.
-            phased: if matches!(operation.as_str(), "upgrade" | "dist_upgrade") {
-                crate::package_manager::apt::parse_phased(&output)
-            } else {
-                vec![]
-            },
-            kept_back: if matches!(operation.as_str(), "upgrade" | "dist_upgrade") {
+            // Read back from the saved transcript, so no column is needed for these. A
+            // check's transcript holds a simulated upgrade, read only for what phasing
+            // defers: its kept-back and `Inst` lines are not this host's dist-upgrade plan.
+            phased: crate::package_manager::apt::parse_phased(&output),
+            kept_back: if upgrade {
                 crate::package_manager::apt::parse_kept_back(&output)
             } else {
                 vec![]
             },
-            plan: crate::package_manager::apt::parse_plan(&output),
+            plan: if upgrade {
+                crate::package_manager::apt::parse_plan(&output)
+            } else {
+                None
+            },
             operation,
             status: row.get(3)?,
             distro: row.get(4)?,
@@ -636,6 +638,35 @@ pub(crate) mod tests {
             (version, application),
             (SCHEMA_VERSION as i64, APPLICATION_ID)
         );
+    }
+
+    #[test]
+    fn a_check_reads_back_phased_packages_but_no_dist_upgrade_plan() {
+        // A check's transcript holds a simulated upgrade: its phasing list counts, while
+        // its kept-back and `Inst` lines must not turn into a dist-upgrade report.
+        let preview = "NOTE: This is only a simulation!
+The following packages have been kept back:
+  libc6
+Not upgrading yet due to phasing:
+  openssl
+
+Inst curl [8.5.0-2] (8.5.0-3 Ubuntu:26.04/noble [amd64])
+";
+        let mut db = sample();
+        db.hosts[0].last_check = Some(CheckResult {
+            checked_at: "2026-11-10T00:00:00Z".into(),
+            operation: "check".into(),
+            status: "success".into(),
+            output: preview.into(),
+            ..Default::default()
+        });
+        let check = from_image(&to_image(&db).unwrap()).unwrap().hosts[0]
+            .last_check
+            .clone()
+            .unwrap();
+        assert_eq!(check.phased, ["openssl"]);
+        assert!(check.kept_back.is_empty());
+        assert!(check.plan.is_none());
     }
 
     fn image_with(sql: &str) -> Zeroizing<Vec<u8>> {
