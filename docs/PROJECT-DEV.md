@@ -1,6 +1,6 @@
 # MISF Management Terminal 開發說明
 
-> 最後修改：2026-11-11 ｜ 基於 commit：`2c2bc68`
+> 最後修改：2026-11-12 ｜ 基於 commit：`b64f596`
 
 一般使用方式見 [README](../README.md) 與 [使用指南](user-guide.md)。本文件是開發文件的入口，給開發者與維護者，記錄建置、儲存格式、安全設計細節與測試方式。
 
@@ -16,6 +16,7 @@
 | [架構](architecture.md) | 目前實作架構、資料表與 JSON 協定 |
 | [原始碼檔案說明](PROJECT-DEV-ARCH.md) | 每個 `.rs` 檔案負責什麼 |
 | [依賴更新與安全公告](dependency-updates.md) | 依賴版本、上游限制與授權清單維護 |
+| [更新依賴的步驟](update-dependency.md) | 套用 Dependabot PR、手動升級與處理安全公告的操作清單 |
 | [LUKSbox 加密儲存設計](luksbox-design.md) | 加密主機庫的實作決定、限制與測試範圍 |
 | [Passkey 實體測試](passkey-testing.md) | 以實體驗證器測試 Passkey 的程序 |
 

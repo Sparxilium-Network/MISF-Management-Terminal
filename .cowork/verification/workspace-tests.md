@@ -1,5 +1,11 @@
 # 全工作區檢查結果
 
+## 2026-11-12（新增更新依賴的操作文件，分支 `main`，基於 `b64f596`）
+
+- 使用者要求寫 `update-dependency.md`，說明更新依賴該做什麼。新增 `docs/update-dependency.md`：需要的工具、Dependabot 的行為（PR 只對 `main`、不會重新產生授權清單所以 CI 必定失敗）、套用 PR 的十個步驟（含鎖檔比對與手動改回連帶改動）、手動升級、特定套件的額外工作、CI 因安全公告失敗時的處理。
+- `docs/dependency-updates.md` 開頭連到新文件，並修正「並並」錯字；`docs/PROJECT-DEV.md` 索引加入新文件。
+- 只改文件，未改程式碼，未重新執行 cargo 檢查。
+
 ## 2026-11-12（套用 Dependabot PR #4 rfd 0.18.0、#5 uuid 1.29.1，分支 `main`，基於 `6263787`）
 
 - 兩個 PR 的 CI 都只因 `licenses/THIRD_PARTY_LICENSES.html` 未重新產生而失敗（Dependabot 不會執行 `./licenses.ps1`），程式本身沒有問題。
