@@ -1,5 +1,14 @@
 # 全工作區檢查結果
 
+## 2026-11-12（套用 Dependabot PR #4 rfd 0.18.0、#5 uuid 1.29.1，分支 `main`，基於 `6263787`）
+
+- 兩個 PR 的 CI 都只因 `licenses/THIRD_PARTY_LICENSES.html` 未重新產生而失敗（Dependabot 不會執行 `./licenses.ps1`），程式本身沒有問題。
+- 在本機 `main` 套用相同改動：`app/Cargo.toml` 的 rfd 改為 0.18.0；鎖檔連帶加入 objc2-uniform-type-identifiers 0.3.2（macOS）、pollster 0.4.0 → 1.0.1。rfd 0.18 只新增功能與修正（MSRV 1.92，本機 1.99.1），本專案用到的 `FileDialog`／`MessageDialog` API 未變。
+- `cargo update -p` 又連帶把 bindgen 的 syn 3.0.9 改成 2.0.119、tempfile 的 getrandom 0.4.3 改成 0.3.4，造成 bindgen 編譯失敗；手動改回後，鎖檔改動與兩個 PR 完全相同，`cargo metadata --locked` 通過。
+- `./licenses.ps1` 重新產生；`cargo deny --locked check` 全部通過。
+- fmt、Clippy（`--all-features -D warnings`）通過；`cargo test --workspace` 全部通過（22、21、58、24 項）。
+- 未驗證：在執行中的 app 開啟檔案對話框（匯入／匯出、LOG 匯出）；macOS 與 Linux 只靠 CI。
+
 ## 2026-11-11（狀態列可展開過往操作，分支 `main`，基於 `2c2bc68`）
 
 - 使用者要求在底部狀態列加一個「>」，可展開顯示過往操作。
