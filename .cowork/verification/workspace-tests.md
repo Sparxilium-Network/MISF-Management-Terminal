@@ -1,5 +1,13 @@
 # 全工作區檢查結果
 
+## 2026-11-13（程式內顯示與 Release 相同的版本名稱，分支 `main`，基於 `825ec3b`）
+
+- 使用者要求程式內也顯示 `dev-27.1-825ec3b` 這類名稱。`app/build.rs` 新增 `build_name()`：在 GitHub Actions 中，推送 `v*` 標籤時用標籤名稱，否則用 `dev-<run_number>.<run_attempt>-<短 commit>`，與發布步驟的規則相同；本機建置為 `v<Cargo 版本>`。以 `MISF_BUILD_NAME` 提供給設定頁「關於」與 LOG 匯出標頭。workflow 發布步驟加註解，提醒兩處要一起改。
+- 使用者決定：不處理「只重跑失敗工作」時 run_attempt 與執行檔差一號的情況（不採用這種重跑）；本機建置不另外處理。
+- 驗證：在本機設定假的 GitHub Actions 環境變數建置 debug 版，執行檔內含 `dev-99.1-abcdef1`；改為標籤 `v0.1.0` 時含標籤名稱；移除變數後會重新編譯，不再含 `dev-99`（`rerun-if-env-changed` 有效）。
+- fmt、Clippy（`--all-features -D warnings`）通過；`cargo test --workspace` 全部通過（22、21、58、24 項）。
+- 未驗證：真正的 CI 建置顯示的名稱是否與 Release 相同（要等下次推送後的 pre-release）。Windows 執行檔內容的產品版本未改。
+
 ## 2026-11-12（新增更新依賴的操作文件，分支 `main`，基於 `b64f596`）
 
 - 使用者要求寫 `update-dependency.md`，說明更新依賴該做什麼。新增 `docs/update-dependency.md`：需要的工具、Dependabot 的行為（PR 只對 `main`、不會重新產生授權清單所以 CI 必定失敗）、套用 PR 的十個步驟（含鎖檔比對與手動改回連帶改動）、手動升級、特定套件的額外工作、CI 因安全公告失敗時的處理。

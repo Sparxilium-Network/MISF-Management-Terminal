@@ -1,6 +1,6 @@
 # 原始碼檔案說明
 
-> 最後修改：2026-11-11 ｜ 基於 commit：`2c2bc68`
+> 最後修改：2026-11-13 ｜ 基於 commit：`825ec3b`
 
 每個 `.rs` 檔案負責什麼。整體設計與資料流見 [架構](architecture.md)，建置與慣例見 [開發說明](PROJECT-DEV.md)。新增、改名或刪除 `.rs` 檔案時，請一併更新本文件。
 
@@ -68,7 +68,7 @@ Workspace 有三個 crate：`core`（`misf-core`，核心函式庫與 JSON CLI�
 
 | 檔案 | 作用 |
 | --- | --- |
-| `app/build.rs` | 以 fluent 樣式編譯 `app/ui/main.slint`（debug 建置保留元件名稱供測試尋找）；Windows 建置時嵌入程式圖示與版本資訊資源。 |
+| `app/build.rs` | 以 fluent 樣式編譯 `app/ui/main.slint`（debug 建置保留元件名稱供測試尋找）；Windows 建置時嵌入程式圖示與版本資訊資源；產生 `MISF_BUILD_NAME`（GitHub Actions 建置與 Release 同名，本機為 `v<Cargo 版本>`），供設定頁與 LOG 顯示版本。 |
 | `app/src/main.rs` | GUI 執行檔入口：處理 `--help`、解析 `RuntimePaths`、開啟稽核日誌、再交給 `ui::run` 開啟 Slint 視窗；release 版不開主控台視窗。 |
 | `app/src/ui/mod.rs` | 建立主視窗與設定視窗（`build`）、執行事件迴圈（`run`）、`Ctx::update` 修改狀態後以 `refresh` 把狀態推到兩個視窗；監看 winit 輸入事件供閒置自動鎖定、記錄視窗大小，並在右鍵按住時設定 `PopMenu.right-down`（`track_right_button`）；`sync_rows`／`keep_inner` 就地更新清單，避免拖曳或雙擊中的元件被重建；`capture` 功能下的截圖、`MISF_FIXTURE` 假資料與 `MISF_OPEN_MENU` 範例選單。 |
 | `app/src/ui/app.rs` | 視窗狀態 `App`（原 `ManagementApp`）與對話框資料結構：送出請求、處理背景事件與回應（`received`）、稽核與工作階段記錄、清除主機快取、閒置自動鎖定（`auto_lock`，作業中不鎖）、關閉時儲存視窗大小（`shutdown`）。只送出請求並保存結果，不直接連線或讀寫主機資料。 |

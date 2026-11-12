@@ -138,6 +138,7 @@ jobs:
           sha256sum --check MISF-Management-Terminal-linux-x86_64.tar.gz.sha256
           sha256sum --check MISF-Management-Terminal-windows-x86_64.zip.sha256
 
+          # app/build.rs builds the same name into the app (Settings, session log); change both together.
           if [[ "$REF_TYPE" == "tag" ]]; then
             tag="$REF_NAME"
           else

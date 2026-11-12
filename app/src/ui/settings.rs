@@ -182,7 +182,7 @@ pub fn push(app: &mut App, w: &SettingsWindow) {
     state.set_encrypted(app.encrypted);
     state.set_locked(app.locked);
     state.set_path(app.path.clone().into());
-    state.set_version(format!("v{}", env!("CARGO_PKG_VERSION")).into());
+    state.set_version(env!("MISF_BUILD_NAME").into());
     let mut format = match app.storage_format.as_str() {
         "sqlite" => t.get("settings.format_sqlite").to_owned(),
         "json" => t.get("settings.format_json").to_owned(),

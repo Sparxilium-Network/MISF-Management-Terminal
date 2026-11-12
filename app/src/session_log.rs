@@ -246,7 +246,7 @@ impl SessionLog {
         let _ = writeln!(
             text,
             "MISF Management Terminal {} session log",
-            env!("CARGO_PKG_VERSION")
+            env!("MISF_BUILD_NAME")
         );
         let _ = writeln!(text, "started: {}", self.started);
         let _ = writeln!(text, "exported: {}", Local::now().to_rfc3339());
