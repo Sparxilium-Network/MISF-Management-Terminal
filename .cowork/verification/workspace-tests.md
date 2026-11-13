@@ -1,5 +1,12 @@
 # 全工作區檢查結果
 
+## 2026-11-13（套用 Dependabot PR #6 uuid 1.29.2，分支 `main`，基於 `39fd69d`）
+
+- 依 `docs/update-dependency.md` 處理。PR 的 CI 只因授權清單過期而失敗。uuid 1.29.2 只新增 wasm64 支援，不影響本專案。
+- `cargo update -p uuid --precise 1.29.2` 又連帶把 bindgen 的 syn 3.0.9 改成 2.0.119、tempfile 的 getrandom 0.4.3 改成 0.3.4（與 PR #4／#5 時相同）；手動改回後，鎖檔差異與 PR 完全相同，`cargo metadata --locked` 通過。
+- `./licenses.ps1` 重新產生；`cargo deny --locked check` 全部通過。
+- fmt、Clippy（`--all-features -D warnings`）通過；`cargo test --workspace` 全部通過（22、21、58、24 項）。
+
 ## 2026-11-13（程式內顯示與 Release 相同的版本名稱，分支 `main`，基於 `825ec3b`）
 
 - 使用者要求程式內也顯示 `dev-27.1-825ec3b` 這類名稱。`app/build.rs` 新增 `build_name()`：在 GitHub Actions 中，推送 `v*` 標籤時用標籤名稱，否則用 `dev-<run_number>.<run_attempt>-<短 commit>`，與發布步驟的規則相同；本機建置為 `v<Cargo 版本>`。以 `MISF_BUILD_NAME` 提供給設定頁「關於」與 LOG 匯出標頭。workflow 發布步驟加註解，提醒兩處要一起改。
