@@ -1,5 +1,5 @@
 // Short questions: trusting a host key, deleting a host, naming a group, the leftover
-// plaintext copy, the vault schema upgrade, and errors.
+// plaintext copy, the vault schema upgrade, closing while busy, and errors.
 import { Button, LineEdit } from "std-widgets.slint";
 import { Theme, T } from "../theme.slint";
 import { Modal, Heading, ColorButton, TextButton, Notice, Body, Mono } from "../widgets.slint";
@@ -43,6 +43,13 @@ export global SchemaState {
     in property <string> confirm-label;
     callback upgrade();
     callback cancel();
+}
+
+// Closing the main window while an operation is still running.
+export global CloseState {
+    in property <bool> shown;
+    callback keep-open();
+    callback quit();
 }
 
 export global ErrorState {
@@ -212,6 +219,33 @@ export component SchemaDialog inherits Modal {
             text: T.get("schema_upgrade.cancel");
             enabled: !Shell.busy;
             clicked => { SchemaState.cancel(); }
+        }
+    }
+}
+
+// The buttons stay enabled while busy: the question is asked exactly then.
+export component CloseDialog inherits Modal {
+    panel-width: 540px;
+    Heading {
+        text: T.get("close.title");
+    }
+    Body {
+        text: T.get("close.description");
+    }
+    Notice {
+        error: true;
+        text: T.get("close.warning");
+    }
+    HorizontalLayout {
+        spacing: 10px;
+        alignment: start;
+        ColorButton {
+            text: T.get("close.keep_open");
+            clicked => { CloseState.keep-open(); }
+        }
+        Button {
+            text: T.get("close.quit");
+            clicked => { CloseState.quit(); }
         }
     }
 }

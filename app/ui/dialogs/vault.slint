@@ -27,6 +27,8 @@ export global VaultState {
     // The slot being renamed or revoked, and the revoke question.
     in property <string> slot-label;
     in property <string> revoke-prompt;
+    // The revoked slot is the last password; only Passkeys would be left.
+    in property <bool> last-password;
     in-out property <string> name;
     in-out property <string> password;
     in-out property <string> confirmation;
@@ -150,6 +152,10 @@ export component VaultDialog inherits Modal {
         spacing: 8px;
         Body {
             text: VaultState.revoke-prompt;
+        }
+        if VaultState.last-password: Notice {
+            error: true;
+            text: T.get("vault.revoke_last_password");
         }
         Notice {
             text: T.get("vault.revoke_backup_warning");

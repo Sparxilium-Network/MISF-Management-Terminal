@@ -14,10 +14,10 @@ import { EditorDialog, EditorState } from "dialogs/editor.slint";
 import { KeysDialog, KeysState, KeyView } from "dialogs/keys.slint";
 import { VaultDialog, VaultState, SlotView } from "dialogs/vault.slint";
 import { UpgradeDialog, UpgradeState, KeptBackDialog, KeptBackState, RebootDialog, RebootState, BatchFailureDialog, BatchFailureState } from "dialogs/confirm.slint";
-import { TrustDialog, TrustState, DeleteDialog, DeleteState, GroupDialog, GroupState, PlaintextDialog, PlaintextState, SchemaDialog, SchemaState, ErrorDialog, ErrorState } from "dialogs/simple.slint";
+import { TrustDialog, TrustState, DeleteDialog, DeleteState, GroupDialog, GroupState, PlaintextDialog, PlaintextState, SchemaDialog, SchemaState, CloseDialog, CloseState, ErrorDialog, ErrorState } from "dialogs/simple.slint";
 import { SettingsWindow, SettingsState, TreeRow, ColumnToggle } from "settings.slint";
 
-export { HintData, Theme, T, Tip, Clip, MenuLine, PopMenu, Shell, HistoryLine, SidebarState, SidebarRow, HostState, ResultState, InfoLine, BatchState, ManagerChoice, BatchColumnView, BatchCell, BatchRowView, EditorState, KeysState, KeyView, VaultState, SlotView, UpgradeState, KeptBackState, RebootState, BatchFailureState, TrustState, DeleteState, GroupState, PlaintextState, SchemaState, ErrorState, SettingsWindow, SettingsState, TreeRow, ColumnToggle }
+export { HintData, Theme, T, Tip, Clip, MenuLine, PopMenu, Shell, HistoryLine, SidebarState, SidebarRow, HostState, ResultState, InfoLine, BatchState, ManagerChoice, BatchColumnView, BatchCell, BatchRowView, EditorState, KeysState, KeyView, VaultState, SlotView, UpgradeState, KeptBackState, RebootState, BatchFailureState, TrustState, DeleteState, GroupState, PlaintextState, SchemaState, CloseState, ErrorState, SettingsWindow, SettingsState, TreeRow, ColumnToggle }
 
 // This run's past results and errors, newest first, shown over the bottom of the page
 // above the status line, so the pages keep their size.
@@ -380,6 +380,11 @@ export component AppWindow inherits Window {
         height: root.height;
     }
     if GroupState.shown: GroupDialog {
+        width: root.width;
+        height: root.height;
+    }
+    // Above the other dialogs: it answers the window's close button.
+    if CloseState.shown: CloseDialog {
         width: root.width;
         height: root.height;
     }

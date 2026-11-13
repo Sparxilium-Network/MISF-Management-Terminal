@@ -1,7 +1,7 @@
 //! Tests of the window state, and of the Slint pages through the testing backend.
 
 use super::{
-    App, AppWindow, BatchState, HostState, SettingsState, SettingsWindow,
+    App, AppWindow, BatchState, CloseState, HostState, SettingsState, SettingsWindow, VaultState,
     app::{SettingsPage, VaultMode, View},
     build,
     format::{connection_rows, copied_commands},
@@ -216,6 +216,132 @@ fn vault_passwords_are_checked_before_anything_is_sent() {
     // The secret leaves the dialog once it is sent.
     assert!(app.vault_dialog.as_ref().unwrap().password.is_empty());
     assert!(app.vault_dialog.as_ref().unwrap().confirmation.is_empty());
+}
+
+#[test]
+fn closing_while_busy_asks_first_and_closes_at_once_otherwise() {
+    i_slint_backend_testing::init_no_event_loop();
+    let (mut app, _commands, _events, _directory) = test_app(false);
+    unlocked(&mut app);
+    app.busy = true;
+    let (ctx, main, _settings) = build(app, true).unwrap();
+    main.show().unwrap();
+    let close = || {
+        main.window()
+            .dispatch_event(slint::platform::WindowEvent::CloseRequested)
+    };
+
+    // Busy: the window stays and asks; "keep waiting" only closes the question.
+    close();
+    assert!(main.global::<CloseState>().get_shown());
+    assert!(main.window().is_visible());
+    main.global::<CloseState>().invoke_keep_open();
+    assert!(!main.global::<CloseState>().get_shown());
+    assert!(main.window().is_visible());
+
+    // The question goes away by itself once the operation is done.
+    close();
+    assert!(main.global::<CloseState>().get_shown());
+    ctx.update(|app| app.busy = false);
+    assert!(!main.global::<CloseState>().get_shown());
+
+    // Idle: the window closes without asking.
+    close();
+    assert!(!main.global::<CloseState>().get_shown());
+    assert!(!main.window().is_visible());
+}
+
+#[test]
+fn a_crashed_worker_frees_the_window_and_marks_interrupted_upgrades_unknown() {
+    let (mut app, _commands, events, _directory) = test_app(false);
+    unlocked(&mut app);
+    app.hosts = vec![
+        host("a", "apt", "SHA256:a"),
+        host("b", "apt", "SHA256:b"),
+        host("c", "apt", "SHA256:c"),
+    ];
+    let t = app.t();
+    let unknown = |app: &App, id: &str| {
+        app.hosts
+            .iter()
+            .find(|h| h.id == id)
+            .and_then(|h| h.last_check.clone())
+    };
+
+    // The startup `storage_status` is never answered here; in the app every request
+    // gets its `Done`, so the oldest pending request is the one that crashed.
+    app.pending.clear();
+    // A single upgrade panics: no longer busy, the panic shown, its host marked unknown.
+    app.selected = "a".into();
+    app.send(json!({"action":"upgrade","id":"a"}));
+    events
+        .send(Event::Crashed("index out of bounds".into()))
+        .unwrap();
+    app.process_events();
+    assert!(!app.busy);
+    assert!(
+        app.error
+            .as_deref()
+            .unwrap()
+            .contains("index out of bounds")
+    );
+    let a = unknown(&app, "a").unwrap();
+    assert_eq!(
+        (a.operation.as_str(), a.status.as_str()),
+        ("upgrade", "failed")
+    );
+    assert_eq!(a.error, t.get("worker.upgrade_unknown"));
+
+    // A batch dist-upgrade whose thread ends without a word: the finished host keeps its
+    // result, the one still running is unknown.
+    app.error = None;
+    app.send(json!({"action":"batch","operation":"dist_upgrade","ids":["b","c"]}));
+    let done = CheckResult {
+        operation: "dist_upgrade".into(),
+        status: "success".into(),
+        ..Default::default()
+    };
+    events
+        .send(Event::BatchHost {
+            id: "b".into(),
+            result: done,
+        })
+        .unwrap();
+    drop(events);
+    app.process_events();
+    assert!(!app.busy && app.error.is_some());
+    assert_eq!(unknown(&app, "b").unwrap().status, "success");
+    let c = unknown(&app, "c").unwrap();
+    assert_eq!(
+        (c.operation.as_str(), c.error.as_str()),
+        ("dist_upgrade", t.get("worker.upgrade_unknown"))
+    );
+}
+
+#[test]
+fn revoking_the_last_password_warns_that_only_passkeys_would_remain() {
+    i_slint_backend_testing::init_no_event_loop();
+    let (mut app, _commands, _events, _directory) = test_app(false);
+    unlocked(&mut app);
+    app.busy = false;
+    let slot = |index: usize, kind: &str| super::app::SlotRow {
+        index,
+        kind: kind.into(),
+        name: String::new(),
+    };
+    app.slots = vec![slot(0, "Passphrase"), slot(1, "Fido2HmacSecret")];
+    let (ctx, main, _settings) = build(app, true).unwrap();
+    let warned = |slot: usize| {
+        ctx.update(|app| {
+            app.open_vault_dialog(VaultMode::Manage);
+            app.vault_revoke(slot);
+        });
+        main.global::<VaultState>().get_last_password()
+    };
+    assert!(warned(0), "the only password");
+    assert!(!warned(1), "a passkey");
+    ctx.update(|app| app.slots.push(slot(2, "Passphrase")));
+    assert!(!warned(0), "another password remains");
 }
 
 #[test]

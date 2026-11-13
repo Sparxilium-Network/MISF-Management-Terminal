@@ -1,6 +1,6 @@
 # MISF Management Terminal 開發說明
 
-> 最後修改：2026-11-13 ｜ 基於 commit：`825ec3b`
+> 最後修改：2026-11-14 ｜ 基於 commit：`65542ce`
 
 一般使用方式見 [README](../README.md) 與 [使用指南](user-guide.md)。本文件是開發文件的入口，給開發者與維護者，記錄建置、儲存格式、安全設計細節與測試方式。
 
@@ -81,7 +81,8 @@ Linux／macOS 可使用 `cargo run --locked -p misf`，須在對應平台建置�
 - 更早的 JSON 版本 `hosts.json` 同樣只在建立容器時匯入，原 JSON 保持不變。
 - 非敏感偏好存於未加密的 `ui-settings.json`（`version: 1`）：語言、外觀、主視窗大小與是否最大化、設定視窗大小，以及主機清單顯示 `host_list`（等級 `detail`、自訂 `fields`、密集度 `density`：`comfortable`／`compact`，以及「未分類」在分類間的位置 `ungrouped_at`，省略時排在最後；`ungrouped_collapsed` 為其收合狀態）、批次作業排序 `batch_order`（`sidebar`／`pending`／`recent`／`name`）、套件明細位置 `batch_detail`（`inline` 表格下方／`popup` 雙擊開啟視窗）、批次表格欄位 `batch_columns`（`shown` 為顯示的欄位代碼，主機欄一律顯示；`weights` 為各欄寬度比例，限制在 0.2–10；新增的 `restart` 欄在舊設定檔中預設顯示），以及預設解鎖方式 `unlock_method`（`password`／`windows_hello`／`security_key`；只在啟動時第一次遇到鎖定才自動開始）。不保存憑證，主機庫鎖定時也能讀寫。
 - 主機清單的分類、順序與收合狀態存於主機庫（`host_groups` 資料表與 `hosts.group_id`）。
-- 主機資料序列化內容上限 64 MiB。
+- 主機資料序列化內容（SQLite 映像）上限 1024 MiB（`MAX_DATABASE_BYTES`）；單一遠端命令輸出上限 32 MiB（`ssh.rs` 的 `LIMIT`），超過時中止該命令。兩者都寫在使用指南。容器建立時 metadata 區固定為 1 MiB，2026-11-14 實測可容納約 1.36 GiB 的單一檔案，反覆改寫十次仍可寫入；接近 1 GiB 時一次讀取約 2 秒、一次寫入約 5.5 秒（release，未含 SQLite 檢查）。每個請求仍會解密並檢查整個映像；批次開始時，稽核用的主機資料以同一次讀取取得，每台結果仍在完成時各自寫入。
+- 解鎖後，未加密的 `hosts.db`、`hosts.json` 與結構升級時留下的 `hosts.v<N>.bak.db` 依序逐一列出，每個檔案都要確認其完整路徑後才刪除。
 
 ## 介面文字
 

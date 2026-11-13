@@ -1,5 +1,18 @@
 # 全工作區檢查結果
 
+## 2026-11-14（修正 MYTHOS 檢查報告的六項，分支 `main`，基於 `65542ce`）
+
+- 來源：`.daybrake/dangerzone/MYTHOS.md`（未納入 Git）。使用者指定修 1–6 項，其餘不做；第 3、5、1 項的細節經使用者選擇（維持 1024 MiB、worker panic 後停止並要求重啟、任何操作進行中關閉都詢問）。
+- 1. 操作進行中關閉主視窗：`on_close_requested` 在 `busy` 時保留視窗並顯示 `CloseDialog`（「繼續等待」／「仍要關閉」），操作結束後詢問自動消失。遠端脫離 SSH 執行等根本解法依使用者指示留待日後。
+- 2. `plaintext_file` 在 `hosts.db`、`hosts.json` 之後依版本由小到大列出 `hosts.v<N>.bak.db`，沿用逐一確認路徑後刪除的流程；檔名須完全符合 `<stem>.v<數字>.bak.db`。
+- 3. 主機庫上限 64 → 1024 MiB，單一命令輸出 2 → 32 MiB；使用指南新增「容量上限」。改上限前先實測：容器 metadata 區固定 1 MiB，暫時加入的 release 測試顯示單一檔案可到約 1.49 GiB（改寫三次後約 1.36 GiB），1 GiB 檔案連續改寫 10 次皆成功，每次寫入約 4.3–8.9 秒、讀取約 1.6–2.1 秒；量測用的測試已移除。
+- 4. 批次開始時 `Session::handle` 改用 `hosts_for_audit` 一次讀取取得所有稽核主機（原本每台各解密一次）；每台結果仍在完成時各自寫入。
+- 5. worker 以 `catch_unwind` 包住每個請求，panic 時送出 `Event::Crashed` 後結束執行緒；UI 的 `worker_crashed` 解除忙碌、顯示錯誤（要求重啟），並把中斷的單台升級／dist-upgrade 或批次中尚未回報的主機標示為「升級結果未知」。執行緒無聲結束（通道斷線）而仍忙碌時也同樣處理。`App::pending` 只記錄請求的 action／operation／id／ids，不保留含密碼的原始請求。
+- 6. 撤銷金鑰槽時，若該槽是最後一組密碼（`Passphrase`），對話框多一段紅色警告，說明之後只剩 Passkey 的風險。
+- 新增測試：`schema_upgrade_backups_are_offered_one_by_one_after_the_database`（core）、`closing_while_busy_asks_first_and_closes_at_once_otherwise`、`a_crashed_worker_frees_the_window_and_marks_interrupted_upgrades_unknown`、`revoking_the_last_password_warns_that_only_passkeys_would_remain`（UI）。
+- fmt、Clippy（`--all-features -D warnings`）通過；`cargo test --workspace` 全部通過（22、24、59、24 項）。
+- 未驗證：關閉詢問與撤銷警告的實際畫面（截圖只在閒置時拍攝，無法拍到忙碌中的關閉詢問）；接近 1 GiB 主機庫時完整 app 的實際速度與記憶體用量；真正的 worker panic（目前沒有已知路徑會觸發）。
+
 ## 2026-11-13（套用 Dependabot PR #6 uuid 1.29.2，分支 `main`，基於 `39fd69d`）
 
 - 依 `docs/update-dependency.md` 處理。PR 的 CI 只因授權清單過期而失敗。uuid 1.29.2 只新增 wasm64 支援，不影響本專案。

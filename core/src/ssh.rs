@@ -15,7 +15,8 @@ use std::{
 };
 use tokio::time::timeout;
 
-const LIMIT: usize = 2 * 1024 * 1024;
+/// Output kept from one remote command; more aborts the command.
+const LIMIT: usize = 32 * 1024 * 1024;
 
 pub(crate) type Details = Arc<Mutex<ConnectionTest>>;
 /// A signed-in SSH session.
@@ -247,7 +248,7 @@ pub(crate) async fn execute(
                 ChannelMsg::Data { data } | ChannelMsg::ExtendedData { data, .. } => {
                     ensure!(
                         output.len() + data.len() <= LIMIT,
-                        "遠端輸出超過 2 MiB 限制"
+                        "遠端輸出超過 32 MiB 限制"
                     );
                     output.extend_from_slice(&data);
                     let prompts = String::from_utf8_lossy(&output).matches(PROMPT).count();

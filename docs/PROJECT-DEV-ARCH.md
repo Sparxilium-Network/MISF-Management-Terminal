@@ -1,6 +1,6 @@
 # 原始碼檔案說明
 
-> 最後修改：2026-11-13 ｜ 基於 commit：`825ec3b`
+> 最後修改：2026-11-14 ｜ 基於 commit：`65542ce`
 
 每個 `.rs` 檔案負責什麼。整體設計與資料流見 [架構](architecture.md)，建置與慣例見 [開發說明](PROJECT-DEV.md)。新增、改名或刪除 `.rs` 檔案時，請一併更新本文件。
 
@@ -27,7 +27,7 @@ Workspace 有三個 crate：`core`（`misf-core`，核心函式庫與 JSON CLI�
 | `core/src/model.rs` | 資料結構 `Host`、`SshKey`、`HostGroup`、`Package`、`CheckResult`（`is_upgrade`）、`UpgradePlan`、`RestartStatus`、`ConnectionTest`；主機欄位驗證、`redact`（遮蔽錯誤與輸出中的密碼／位址）、`manager()`（選用或偵測到的套件管理器）、`decode_private_key`（拒絕 RSA）。 |
 | `core/src/store.rs` | `Database`（記憶體中的完整主機資料）與明文 `Store`：只在建立加密主機庫時讀取舊版 `hosts.db`／`hosts.json`，含跨程序檔案鎖與舊 JSON 解析。 |
 | `core/src/sqlite.rs` | SQLite 讀寫：開檔前拒絕 WAL、強化連線設定、`quick_check`、`application_id`／`user_version` 與結構逐列比對；`load`／`save` 在 `Database` 與資料表之間轉換；記憶體映像的序列化與 `sqlite3_deserialize`。 |
-| `core/src/vault.rs` | `StorageSession`：LUKSbox 容器的建立（含重新解鎖驗證）、密碼／Passkey 解鎖、鎖定、結構升級詢問、金鑰槽新增／命名／撤銷、加密備份、舊版明文轉入與刪除。處理 `storage_status` 與所有 `vault_*` 請求，解鎖後把主機請求轉給 `dispatch`。 |
+| `core/src/vault.rs` | `StorageSession`：LUKSbox 容器的建立（含重新解鎖驗證）、密碼／Passkey 解鎖、鎖定、結構升級詢問、金鑰槽新增／命名／撤銷、加密備份、舊版明文轉入與刪除（`hosts.db`、`hosts.json`、`hosts.v<N>.bak.db` 依序逐一確認）；`hosts_for_audit` 以一次讀取取得批次稽核用的主機。處理 `storage_status` 與所有 `vault_*` 請求，解鎖後把主機請求轉給 `dispatch`。 |
 | `core/src/db_upgrade/mod.rs` | 遷移清單 `MIGRATIONS`：`MIGRATIONS[n]` 把 vN 升到 vN+1，只能追加。 |
 | `core/src/db_upgrade/v0_v1.rs` | v1：`hosts`、`check_results`、`packages`。 |
 | `core/src/db_upgrade/v1_v2.rs` | v2：`hosts.manager_choice` 與 `key_slots`（金鑰槽名稱）。 |
@@ -47,7 +47,7 @@ Workspace 有三個 crate：`core`（`misf-core`，核心函式庫與 JSON CLI�
 
 | 檔案 | 作用 |
 | --- | --- |
-| `core/src/ssh.rs` | SSH 傳輸：`probe`（只取主機指紋，不送帳密）、`connect`（核對指紋）、`authenticate`（密碼或私鑰）、`execute`（執行一條命令、偵測 sudo 提示並最多回答一次、2 MiB 輸出上限）、`test_connection`（產生 `ConnectionTest`）。不含任何套件命令。 |
+| `core/src/ssh.rs` | SSH 傳輸：`probe`（只取主機指紋，不送帳密）、`connect`（核對指紋）、`authenticate`（密碼或私鑰）、`execute`（執行一條命令、偵測 sudo 提示並最多回答一次、32 MiB 輸出上限）、`test_connection`（產生 `ConnectionTest`）。不含任何套件命令。 |
 | `core/src/transcript.rs` | 把遠端輸出轉成可讀紀錄：統一換行、移除 ANSI 與終端控制字串；`heading` 產生依顯示寬度對齊的星號框標題，供執行輸出與 LOG 分段。 |
 | `core/src/package_manager/mod.rs` | `Mode`（check／upgrade／dist_upgrade）、`Manager` 列舉與 `Commands { update, list, upgrade, dist_upgrade, simulate, preview, status }`，依管理器分派到各檔案；`manager_commands`／`package_commands` 列出確認視窗要顯示的命令；`SUDO_PROMPT` 標記。 |
 | `core/src/package_manager/detect.rs` | `DETECT` 偵測命令與 `parse_platform`：核心、發行版顯示名稱、可用的套件管理器與優先順序。 |
@@ -73,7 +73,7 @@ Workspace 有三個 crate：`core`（`misf-core`，核心函式庫與 JSON CLI�
 | `app/src/ui/mod.rs` | 建立主視窗與設定視窗（`build`）、執行事件迴圈（`run`）、`Ctx::update` 修改狀態後以 `refresh` 把狀態推到兩個視窗；監看 winit 輸入事件供閒置自動鎖定、記錄視窗大小，並在右鍵按住時設定 `PopMenu.right-down`（`track_right_button`）；`sync_rows`／`keep_inner` 就地更新清單，避免拖曳或雙擊中的元件被重建；`capture` 功能下的截圖、`MISF_FIXTURE` 假資料與 `MISF_OPEN_MENU` 範例選單。 |
 | `app/src/ui/app.rs` | 視窗狀態 `App`（原 `ManagementApp`）與對話框資料結構：送出請求、處理背景事件與回應（`received`）、稽核與工作階段記錄、清除主機快取、閒置自動鎖定（`auto_lock`，作業中不鎖）、關閉時儲存視窗大小（`shutdown`）。只送出請求並保存結果，不直接連線或讀寫主機資料。 |
 | `app/src/ui/format.rs` | 由主機與結果產生的文字：套件管理器與系統標籤、狀態、重啟摘要、連線資訊列、可複製的命令（`copied_commands`），以及連線與重啟分頁的行資料 `Line`。 |
-| `app/src/ui/shell.rs` | 上方工具列、狀態列與其「過往操作」清單（`App::history`，經 `set_status`／`set_host_status`／`note_error` 記錄，進度訊息不記），主機／批次分頁切換；關閉主視窗時一併結束程式。 |
+| `app/src/ui/shell.rs` | 上方工具列、狀態列與其「過往操作」清單（`App::history`，經 `set_status`／`set_host_status`／`note_error` 記錄，進度訊息不記），主機／批次分頁切換；關閉主視窗時一併結束程式，操作進行中先以 `CloseDialog` 詢問。 |
 | `app/src/ui/sidebar.rs` | 側欄主機清單：分類與收合、搜尋、卡片內容與高度、拖曳排序（`Layout` 計算放置位置，`arrange` 送出新順序）、分類名稱對話框。 |
 | `app/src/ui/host_page.rs` | 主機頁與結果分頁：測試連線、指紋、檢查、「進階操作」選單（升級、dist-upgrade、重新開機，依主機能力停用）、升級提示、「需要 dist-upgrade」報告。 |
 | `app/src/ui/batch.rs` | 批次作業：套件管理器選擇、可選主機、表格排序與分組標題、欄寬拖曳、上一台／下一台、雙擊或右鍵開主機頁、套件明細視窗。 |
@@ -89,7 +89,7 @@ Workspace 有三個 crate：`core`（`misf-core`，核心函式庫與 JSON CLI�
 | `app/ui/sidebar.slint`、`host_page.slint`、`result_panel.slint`、`batch_page.slint`、`settings.slint`、`shell.slint` | 各頁畫面與其 global。 |
 | `app/ui/dialogs/*.slint` | 主機編輯、SSH 金鑰、主機庫、確認類與簡短對話框。 |
 | `app/src/session_log.rs` | 只存在記憶體的完整工作階段 LOG：操作標題（`banner`）、完整請求與回應（`mask` 只遮蔽密碼、私鑰、密語、PIN 欄位）、進度、錯誤，以及每台主機的區塊（`host`：ID、帳號@位址、指紋、套件、重啟狀態、遠端原始輸出，以 `END OF` 結束）；超過 16 MiB 捨棄最舊的；`export` 寫成文字檔。以 `Zeroizing` 保存，關閉程式即消失。 |
-| `app/src/worker.rs` | 背景執行緒與 Tokio runtime：從佇列取出請求交給 `Session`，以 `Event` 回傳進度與結果，再以 `Wake` 喚醒 UI 執行緒；`Relay` 是批次觀察者，轉送每台結果與失敗詢問，並等待 UI 經 `decisions` 送回的決定。 |
+| `app/src/worker.rs` | 背景執行緒與 Tokio runtime：從佇列取出請求交給 `Session`，以 `Event` 回傳進度與結果，再以 `Wake` 喚醒 UI 執行緒；`Relay` 是批次觀察者，轉送每台結果與失敗詢問，並等待 UI 經 `decisions` 送回的決定。請求 panic 時送出 `Event::Crashed` 後結束執行緒；UI（`App::worker_crashed`）解除忙碌、顯示錯誤，並把中斷的升級標示為結果未知，執行緒無聲結束時也同樣處理。 |
 | `app/src/preferences.rs` | 未加密的 `ui-settings.json`：語言、外觀、介面字型、視窗大小、主機清單顯示、批次排序／欄位／明細位置、預設解鎖方式、自動鎖定分鐘數（`AUTO_LOCK_MAX`、`AUTO_LOCK_DEFAULT`）；以暫存檔原子替換寫入。 |
 | `app/src/i18n.rs` | 語系：內嵌 `app/locales/*.json`，以 key 與 `{name}` 參數取字，缺字時回退繁體中文；測試檢查 UI 用到的 key 在兩種語言都存在且參數一致。 |
 | `app/src/theme.rs` | 外觀選項（跟隨系統／淺色／深色）與其儲存代碼。 |

@@ -31,6 +31,9 @@ pub enum Event {
         action: String,
         result: Result<Value, String>,
     },
+    /// The request panicked. The session's state may be inconsistent, so the worker
+    /// stops after this; no [`Event::Done`] follows.
+    Crashed(String),
 }
 
 /// Asks the UI thread to read [`Worker::events`]; called after every event is sent.
@@ -98,17 +101,28 @@ impl Worker {
             }));
             while let Ok(request) = jobs.recv() {
                 let action = request["action"].as_str().unwrap_or_default().to_string();
-                let result = match &runtime {
-                    Ok(runtime) => runtime
-                        .block_on(session.handle(request, &|message| {
-                            let _ = events.send(Event::Progress(message.into()));
-                            wake();
-                        }))
-                        .map_err(|error| format!("{error:#}")),
-                    Err(error) => Err(format!("無法啟動網路核心：{error}")),
-                };
-                let _ = events.send(Event::Done { action, result });
-                wake();
+                let handled =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match &runtime {
+                        Ok(runtime) => runtime
+                            .block_on(session.handle(request, &|message| {
+                                let _ = events.send(Event::Progress(message.into()));
+                                wake();
+                            }))
+                            .map_err(|error| format!("{error:#}")),
+                        Err(error) => Err(format!("無法啟動網路核心：{error}")),
+                    }));
+                match handled {
+                    Ok(result) => {
+                        let _ = events.send(Event::Done { action, result });
+                        wake();
+                    }
+                    Err(panic) => {
+                        let _ = events.send(Event::Crashed(panic_message(panic.as_ref())));
+                        wake();
+                        // Ending the thread closes `requests`, so later sends fail.
+                        break;
+                    }
+                }
             }
         });
         Self {
@@ -117,4 +131,12 @@ impl Worker {
             decisions,
         }
     }
+}
+
+fn panic_message(panic: &(dyn std::any::Any + Send)) -> String {
+    panic
+        .downcast_ref::<&str>()
+        .map(|s| (*s).to_owned())
+        .or_else(|| panic.downcast_ref::<String>().cloned())
+        .unwrap_or_default()
 }

@@ -54,10 +54,8 @@ impl Session {
                 .into_iter()
                 .collect()
         } else if batch {
-            batch_ids
-                .iter()
-                .filter_map(|id| self.storage.host_for_audit(id).ok())
-                .collect()
+            // One decryption for the whole batch, not one per host.
+            self.storage.hosts_for_audit(&batch_ids).unwrap_or_default()
         } else {
             request["id"]
                 .as_str()

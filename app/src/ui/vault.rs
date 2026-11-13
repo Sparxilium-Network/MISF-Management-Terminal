@@ -318,6 +318,13 @@ pub fn push(app: &mut App, w: &AppWindow) {
                     .unwrap_or_default()
                     .into(),
             );
+            let password = |kind: &str| kind == "Passphrase";
+            state.set_last_password(slot.is_some_and(|slot| {
+                app.slots
+                    .iter()
+                    .any(|s| s.index == slot && password(&s.kind))
+                    && app.slots.iter().filter(|s| password(&s.kind)).count() == 1
+            }));
             state.set_revoke_prompt(
                 slot.map(|slot| t.format("vault.revoke_prompt", &[("slot", app.slot_title(slot))]))
                     .unwrap_or_default()

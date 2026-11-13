@@ -18,7 +18,9 @@ use std::{
 };
 use zeroize::Zeroizing;
 
-const MAX_DATABASE_BYTES: u64 = 64 * 1024 * 1024;
+/// Measured 2026-11-14: a 1 MiB metadata region holds about 1.36 GiB even after repeated
+/// rewrites, so this fits existing vaults. Every request still decrypts the whole image.
+const MAX_DATABASE_BYTES: u64 = 1024 * 1024 * 1024;
 const METADATA_BYTES: u64 = 1024 * 1024;
 const DATABASE_FILE: &str = "hosts.db";
 /// Vaults created before SQLite hold this JSON until the next save replaces it.
@@ -96,7 +98,7 @@ impl VaultFile {
             Err(error) => return Err(error).context("無法讀取 LUKSbox 目錄"),
         };
         let size = self.vfs.stat(file)?.size;
-        ensure!(size <= MAX_DATABASE_BYTES, "主機資料超過 64 MiB 上限");
+        ensure!(size <= MAX_DATABASE_BYTES, "主機資料超過 1024 MiB 上限");
         let mut bytes = Zeroizing::new(vec![0; size as usize]);
         let mut read = 0;
         while read < bytes.len() {
@@ -119,7 +121,7 @@ impl VaultFile {
         ensure!(!self.poisoned, "先前儲存失敗；請鎖定後重新解鎖");
         ensure!(
             bytes.len() as u64 <= MAX_DATABASE_BYTES,
-            "主機資料超過 64 MiB 上限"
+            "主機資料超過 1024 MiB 上限"
         );
         // Write a new inode then replace its directory entry in one metadata commit.
         // Never overwrite committed chunks or extract plaintext to disk.
@@ -275,6 +277,13 @@ impl StorageSession {
     }
     pub(crate) fn host_for_audit(&self, id: &str) -> Result<crate::model::Host> {
         self.store.as_ref().context("Vault locked")?.host(id)
+    }
+
+    /// Like [`Self::host_for_audit`] for many IDs, decrypting the database once.
+    /// Unknown IDs are left out.
+    pub(crate) fn hosts_for_audit(&self, ids: &[String]) -> Result<Vec<crate::model::Host>> {
+        let db = self.store.as_ref().context("Vault locked")?.read()?;
+        Ok(ids.iter().filter_map(|id| db.host(id).ok()).collect())
     }
     pub fn new(plain_path: PathBuf) -> Self {
         let encrypted = encrypted_profile_exists(&plain_path);
@@ -502,14 +511,48 @@ impl StorageSession {
         operation(&mut vault)
     }
 
-    /// The plaintext database left beside the vault; once that is gone, a legacy JSON copy.
+    /// The plaintext database left beside the vault; once that is gone, a legacy JSON
+    /// copy, then the `hosts.v<N>.bak.db` backups an old schema upgrade made. Offered
+    /// one at a time, so each deletion is confirmed by its own path.
     fn plaintext_file(&self) -> PathBuf {
         let legacy = self.plain_path.with_extension("json");
-        if !self.plain_path.exists() && legacy.exists() {
+        if self.plain_path.exists() {
+            self.plain_path.clone()
+        } else if legacy.exists() {
             legacy
         } else {
-            self.plain_path.clone()
+            self.plaintext_backups()
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| self.plain_path.clone())
         }
+    }
+
+    /// Plaintext copies `store.rs` saved before upgrading an old schema, oldest first.
+    fn plaintext_backups(&self) -> Vec<PathBuf> {
+        let (Some(dir), Some(stem)) = (
+            self.plain_path.parent(),
+            self.plain_path.file_stem().and_then(|s| s.to_str()),
+        ) else {
+            return vec![];
+        };
+        let prefix = format!("{stem}.v");
+        let mut backups: Vec<(u64, PathBuf)> = fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|entry| {
+                let name = entry.file_name().into_string().ok()?;
+                let version = name.strip_prefix(&prefix)?.strip_suffix(".bak.db")?;
+                let version = version
+                    .bytes()
+                    .all(|b| b.is_ascii_digit())
+                    .then(|| version.parse().ok())??;
+                Some((version, entry.path()))
+            })
+            .collect();
+        backups.sort();
+        backups.into_iter().map(|(_, path)| path).collect()
     }
 
     fn plaintext_path(&self) -> Result<PathBuf> {
@@ -987,6 +1030,35 @@ mod tests {
         }
         assert!(!json.exists());
         assert!(!session.status().unwrap().plaintext_exists);
+    }
+
+    #[tokio::test]
+    async fn schema_upgrade_backups_are_offered_one_by_one_after_the_database() {
+        let (dir, mut session) = fixture();
+        for name in ["hosts.v10.bak.db", "hosts.v3.bak.db"] {
+            fs::write(dir.path().join(name), "plaintext hosts").unwrap();
+        }
+        // Not backups: another stem, no version number, another suffix.
+        for name in ["other.v3.bak.db", "hosts.vx.bak.db", "hosts.v3.bak.txt"] {
+            fs::write(dir.path().join(name), "keep").unwrap();
+        }
+        session.enable(FIRST, "", params()).unwrap();
+        for expected in ["hosts.db", "hosts.v3.bak.db", "hosts.v10.bak.db"] {
+            let status = session.status().unwrap();
+            assert!(status.plaintext_exists);
+            assert_eq!(status.plaintext_path.file_name().unwrap(), expected);
+            session
+                .handle(
+                    json!({"action":"vault_delete_plaintext", "path":status.plaintext_path, "confirmed":true}),
+                    &|_| {},
+                )
+                .await
+                .unwrap();
+        }
+        assert!(!session.status().unwrap().plaintext_exists);
+        for name in ["other.v3.bak.db", "hosts.vx.bak.db", "hosts.v3.bak.txt"] {
+            assert!(dir.path().join(name).exists(), "{name}");
+        }
     }
 
     #[tokio::test]

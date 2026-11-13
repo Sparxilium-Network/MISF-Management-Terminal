@@ -1,7 +1,7 @@
 //! The top bar, the status line and the host/batch tabs.
 
 use super::{
-    App, AppWindow, Ctx, HistoryLine, Shell,
+    App, AppWindow, CloseState, Ctx, HistoryLine, Shell,
     app::{VaultMode, View},
 };
 use serde_json::json;
@@ -13,6 +13,11 @@ pub fn push(app: &mut App, w: &AppWindow) {
     shell.set_busy(app.busy);
     shell.set_status(app.status.clone().into());
     shell.set_history_open(app.history_open);
+    // Nothing left to interrupt: the question no longer applies.
+    if !app.busy {
+        app.close_prompt = false;
+    }
+    w.global::<CloseState>().set_shown(app.close_prompt);
     // Only rebuilt when it changed, so an open, scrolled list stays where it is.
     let lines: Vec<HistoryLine> = app
         .history
@@ -76,13 +81,29 @@ pub fn wire(ctx: &Ctx, w: &AppWindow) {
             app.set_view(if view == 1 { View::Batch } else { View::Host });
         })
     });
-    // Closing the main window ends the app, even with the settings window open.
+    // Closing the main window ends the app, even with the settings window open. While
+    // an operation runs, ask first: quitting drops its SSH connection, which can leave a
+    // remote apt/dpkg half-way.
     let c = ctx.clone();
     w.window().on_close_requested(move || {
-        if let Some(settings) = c.settings.upgrade() {
-            let _ = settings.hide();
+        let busy = c.app.try_borrow().is_ok_and(|app| app.busy);
+        if busy {
+            c.update(|app| app.close_prompt = true);
+            return slint::CloseRequestResponse::KeepWindowShown;
         }
-        let _ = slint::quit_event_loop();
+        quit(&c);
         slint::CloseRequestResponse::HideWindow
     });
+    let close = w.global::<CloseState>();
+    let c = ctx.clone();
+    close.on_keep_open(move || c.update(|app| app.close_prompt = false));
+    let c = ctx.clone();
+    close.on_quit(move || quit(&c));
+}
+
+fn quit(ctx: &Ctx) {
+    if let Some(settings) = ctx.settings.upgrade() {
+        let _ = settings.hide();
+    }
+    let _ = slint::quit_event_loop();
 }
