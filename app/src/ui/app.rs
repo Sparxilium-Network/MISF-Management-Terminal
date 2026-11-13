@@ -5,7 +5,7 @@ use crate::{
     i18n::Translator,
     preferences::{Preferences, WindowSize},
     session_log::SessionLog,
-    worker::{Event, Worker},
+    worker::{Event, Interrupted, Worker},
 };
 use misf_core::{
     audit::{Action, AuditLog, Outcome},
@@ -158,39 +158,6 @@ pub struct BatchFailure {
     pub error: String,
 }
 
-/// A request sent to the worker and not answered yet. Only the fields needed to tell
-/// what a crash interrupted; never the request itself, which may hold secrets.
-pub struct Pending {
-    pub action: String,
-    pub operation: String,
-    pub id: String,
-    pub ids: Vec<String>,
-}
-
-impl Pending {
-    fn of(request: &Value) -> Self {
-        let text = |field: &str| request[field].as_str().unwrap_or_default().to_owned();
-        Self {
-            action: text("action"),
-            operation: text("operation"),
-            id: text("id"),
-            ids: (request["ids"].as_array().into_iter().flatten())
-                .filter_map(|id| id.as_str().map(str::to_owned))
-                .collect(),
-        }
-    }
-
-    /// The upgrade this request runs on remote hosts, if any.
-    fn upgrade(&self) -> Option<&str> {
-        let operation = if self.action == "batch" {
-            self.operation.as_str()
-        } else {
-            self.action.as_str()
-        };
-        matches!(operation, "upgrade" | "dist_upgrade").then_some(operation)
-    }
-}
-
 pub struct TrustDialog {
     pub host_id: String,
     pub address: String,
@@ -316,10 +283,6 @@ pub struct App {
     pub plaintext_delete_prompt: bool,
     /// The window's close button was pressed while an operation was running.
     pub close_prompt: bool,
-    /// Requests sent to the worker, oldest first, each removed by its `Done`.
-    pub pending: VecDeque<Pending>,
-    /// Hosts of the running batch already reported finished.
-    pub batch_reported: Vec<String>,
     /// The older schema version of a just-decrypted vault, waiting for upgrade consent.
     pub schema_upgrade_prompt: Option<u64>,
     pub slots: Vec<SlotRow>,
@@ -390,8 +353,6 @@ impl App {
             plaintext_path: String::new(),
             plaintext_delete_prompt: false,
             close_prompt: false,
-            pending: VecDeque::new(),
-            batch_reported: Vec::new(),
             schema_upgrade_prompt: None,
             slots: vec![],
             storage_warning: String::new(),
@@ -461,56 +422,60 @@ impl App {
         let t = self.t();
         self.busy = true;
         self.status = t.get("status.working").into();
-        let pending = Pending::of(&request);
         if self.worker.requests.send(request).is_err() {
             self.busy = false;
             self.error = Some(t.get("status.worker_ended").into());
-        } else {
-            if pending.action == "batch" {
-                self.batch_reported.clear();
-            }
-            self.pending.push_back(pending);
         }
     }
 
     /// The worker panicked or ended mid-request. Nothing more will answer, so stop
-    /// waiting: an interrupted upgrade may have partly run on the remote host, so its
-    /// hosts show the result as unknown instead of their last saved result.
-    pub fn worker_crashed(&mut self, detail: String) {
+    /// waiting. An interrupted upgrade may have partly run on the remote host: the worker
+    /// already saved its hosts as unknown, and the error names them.
+    pub fn worker_crashed(&mut self, detail: String, interrupted: Option<Interrupted>) {
         let t = self.t();
         self.busy = false;
         self.batch_failure = None;
-        if let Some(pending) = self.pending.pop_front()
-            && let Some(operation) = pending.upgrade()
-        {
-            let ids = if pending.action == "batch" {
-                (pending.ids.iter())
-                    .filter(|id| !self.batch_reported.contains(id))
-                    .cloned()
-                    .collect()
-            } else {
-                vec![pending.id.clone()]
-            };
-            let unknown = CheckResult {
-                checked_at: chrono::Utc::now().to_rfc3339(),
-                operation: operation.to_owned(),
-                status: "failed".into(),
-                error: t.get("worker.upgrade_unknown").into(),
-                ..Default::default()
-            };
-            for host in self.hosts.iter_mut().filter(|h| ids.contains(&h.id)) {
-                record_result(host, unknown.clone());
-            }
-        }
-        self.pending.clear();
-        self.batch_reported.clear();
         self.status = t.get("status.failed").into();
         let detail = if detail.is_empty() {
             "-".to_owned()
         } else {
             detail
         };
-        self.error = Some(t.format("worker.crashed", &[("detail", detail)]));
+        let mut error = t.format("worker.crashed", &[("detail", detail)]);
+        if let Some(interrupted) = interrupted.filter(|i| !i.ids.is_empty()) {
+            let names: Vec<String> = (interrupted.ids.iter())
+                .map(|id| format!("- {}", self.host_name(id)))
+                .collect();
+            let mut result = interrupted.result;
+            result.error = t.get("worker.upgrade_unknown").into();
+            for host in (self.hosts.iter_mut()).filter(|h| interrupted.ids.contains(&h.id)) {
+                record_result(host, result.clone());
+            }
+            error.push_str(
+                "
+
+",
+            );
+            error.push_str(&t.format(
+                "worker.unknown_hosts",
+                &[(
+                    "hosts",
+                    names.join(
+                        "
+",
+                    ),
+                )],
+            ));
+            if let Some(reason) = interrupted.unsaved {
+                error.push_str(
+                    "
+
+",
+                );
+                error.push_str(&t.format("worker.unknown_unsaved", &[("error", reason)]));
+            }
+        }
+        self.error = Some(error);
     }
 
     /// Saves the preferences, reporting a failure as an error.
@@ -570,19 +535,21 @@ impl App {
                 // The thread is gone without a word, mid-request: stop waiting for it.
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     if self.busy {
-                        self.worker_crashed(String::new());
+                        self.worker_crashed(String::new(), None);
                     }
                     break;
                 }
             };
             match event {
-                Event::Crashed(detail) => self.worker_crashed(detail),
+                Event::Crashed {
+                    detail,
+                    interrupted,
+                } => self.worker_crashed(detail, interrupted),
                 Event::Progress(message) => {
                     self.session_log.add("PROGRESS", &message, "");
                     self.status = t.progress(&message);
                 }
                 Event::BatchHost { id, result } => {
-                    self.batch_reported.push(id.clone());
                     let name = self.host_name(&id);
                     let host = self.hosts.iter().find(|h| h.id == id);
                     self.session_log.host(t, &name, host, &result);
@@ -609,7 +576,6 @@ impl App {
                 }
                 Event::Done { action, result } => {
                     self.busy = false;
-                    self.pending.pop_front();
                     self.batch_failure = None;
                     self.log_done(&action, &result);
                     match result {

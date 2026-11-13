@@ -3,6 +3,8 @@
   "status.worker_ended": "本機工作執行緒已結束，請重啟程式",
   "worker.crashed": "背景工作意外結束（{detail}）。為避免在可能不一致的狀態下繼續操作，請重新啟動 MISF。",
   "worker.upgrade_unknown": "背景工作意外結束，升級結果未知；遠端可能已部分執行。請登入主機確認，必要時執行 sudo dpkg --configure -a，再重新檢查。",
+  "worker.unknown_hosts": "以下主機的升級結果未知，已在主機清單標示為失敗，請逐台登入確認：\n{hosts}",
+  "worker.unknown_unsaved": "無法把「結果未知」存入主機庫（{error}）；重新啟動後這些主機會顯示先前的狀態，請先記下上面的名稱。",
   "status.failed": "操作失敗",
   "status.history": "過往操作",
   "status.history_empty": "這次執行尚無操作紀錄",

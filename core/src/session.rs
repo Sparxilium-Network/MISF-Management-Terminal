@@ -34,6 +34,11 @@ impl Session {
     pub fn set_batch_observer(&mut self, observer: Box<dyn crate::batch::Observer + Send>) {
         self.storage.set_batch_observer(observer);
     }
+    /// Saves results outside a request: used after a request panicked, to mark the
+    /// upgrades it left unknown.
+    pub fn save_results(&self, results: Vec<(String, crate::model::CheckResult)>) -> Result<()> {
+        self.storage.save_results(results)
+    }
     pub async fn handle(&mut self, request: Value, progress: &dyn Fn(&str)) -> Result<Value> {
         let name = request["action"].as_str().unwrap_or_default().to_owned();
         let Some(action) = Action::request(&name, request["operation"].as_str()) else {

@@ -1,5 +1,13 @@
 # 全工作區檢查結果
 
+## 2026-11-14（worker 崩潰時把結果未知寫入主機庫並列出主機，分支 `main`，基於 `0b3bb89`）
+
+- 使用者指出前一版的「結果未知」只存在記憶體，而錯誤要求重新啟動，重啟後標示就消失；對話框也沒列出主機。依使用者指示兩項都做。
+- 判斷移到 worker：`Running`（取代 UI 的 `App::pending`）記錄請求的 action／operation／id／ids，`Relay` 記錄批次中已回報的主機。panic 後若是升級，`mark_interrupted` 以 `Session::save_results` 把尚未回報的主機存為 `batch::interrupted`（存檔本身再包一層 `catch_unwind`），`Event::Crashed` 帶回主機 ID、結果與存檔錯誤。
+- UI 的 `worker_crashed` 用這份清單標示主機（錯誤文字改用目前語系），錯誤訊息逐行列出主機名稱，存檔失敗時加一段說明重啟後會遺失標示。執行緒無聲結束時只解除忙碌並顯示錯誤（實際只會發生在啟動時，沒有進行中的升級）。
+- 測試：新增 `worker::tests::a_crashed_upgrade_saves_its_unreported_hosts_as_unknown`（實際寫入 LUKSbox 後讀回；鎖定時回報存檔失敗）；UI 測試改為 `a_crashed_worker_frees_the_window_and_names_the_upgrades_left_unknown`。`cargo test --workspace`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo fmt` 通過。
+- 未驗證：真實 panic 的完整流程（沒有正常操作能觸發）。
+
 ## 2026-11-14（修正 MYTHOS 檢查報告的六項，分支 `main`，基於 `65542ce`）
 
 - 來源：`.daybrake/dangerzone/MYTHOS.md`（未納入 Git）。使用者指定修 1–6 項，其餘不做；第 3、5、1 項的細節經使用者選擇（維持 1024 MiB、worker panic 後停止並要求重啟、任何操作進行中關閉都詢問）。

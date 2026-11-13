@@ -285,6 +285,13 @@ impl StorageSession {
         let db = self.store.as_ref().context("Vault locked")?.read()?;
         Ok(ids.iter().filter_map(|id| db.host(id).ok()).collect())
     }
+    /// Saves results outside a request, e.g. upgrades a crashed request left unknown.
+    pub(crate) fn save_results(
+        &self,
+        results: Vec<(String, crate::model::CheckResult)>,
+    ) -> Result<()> {
+        crate::save_results(self.store.as_ref().context("Vault locked")?, results)
+    }
     pub fn new(plain_path: PathBuf) -> Self {
         let encrypted = encrypted_profile_exists(&plain_path);
         Self {

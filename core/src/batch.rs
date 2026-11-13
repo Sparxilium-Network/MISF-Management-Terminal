@@ -154,6 +154,18 @@ pub(crate) async fn run(
     }))
 }
 
+/// A host whose upgrade the worker lost track of: it stopped before reporting the outcome,
+/// so the remote host may be half upgraded.
+pub fn interrupted(operation: &str) -> CheckResult {
+    CheckResult {
+        checked_at: Utc::now().to_rfc3339(),
+        operation: operation.into(),
+        status: "failed".into(),
+        error: "背景工作意外結束，升級結果未知；遠端可能已部分執行。請登入主機確認，必要時執行 sudo dpkg --configure -a，再重新檢查。".into(),
+        ..Default::default()
+    }
+}
+
 /// A host whose task panicked; recorded as failed so the batch keeps the rest.
 fn crashed(mode: Mode) -> CheckResult {
     CheckResult {

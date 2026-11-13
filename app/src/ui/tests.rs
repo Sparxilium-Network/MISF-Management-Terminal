@@ -10,7 +10,7 @@ use super::{
 use crate::{
     i18n::{Language, Translator},
     preferences::{BatchDetail, BatchOrder, UnlockMethod},
-    worker::{Event, Worker},
+    worker::{Event, Interrupted, Worker},
 };
 use i_slint_backend_testing::ElementHandle;
 use misf_core::{
@@ -252,7 +252,7 @@ fn closing_while_busy_asks_first_and_closes_at_once_otherwise() {
 }
 
 #[test]
-fn a_crashed_worker_frees_the_window_and_marks_interrupted_upgrades_unknown() {
+fn a_crashed_worker_frees_the_window_and_names_the_upgrades_left_unknown() {
     let (mut app, _commands, events, _directory) = test_app(false);
     unlocked(&mut app);
     app.hosts = vec![
@@ -260,62 +260,81 @@ fn a_crashed_worker_frees_the_window_and_marks_interrupted_upgrades_unknown() {
         host("b", "apt", "SHA256:b"),
         host("c", "apt", "SHA256:c"),
     ];
+    for host in &mut app.hosts {
+        host.name = format!("server-{}", host.id);
+    }
     let t = app.t();
-    let unknown = |app: &App, id: &str| {
+    let last = |app: &App, id: &str| {
         app.hosts
             .iter()
             .find(|h| h.id == id)
             .and_then(|h| h.last_check.clone())
     };
 
-    // The startup `storage_status` is never answered here; in the app every request
-    // gets its `Done`, so the oldest pending request is the one that crashed.
-    app.pending.clear();
-    // A single upgrade panics: no longer busy, the panic shown, its host marked unknown.
-    app.selected = "a".into();
-    app.send(json!({"action":"upgrade","id":"a"}));
+    // A batch upgrade panics with two hosts unreported: no longer busy, the panic shown,
+    // both hosts marked unknown and named in the error.
+    app.send(json!({"action":"batch","operation":"upgrade","ids":["a","b","c"]}));
     events
-        .send(Event::Crashed("index out of bounds".into()))
+        .send(Event::Crashed {
+            detail: "index out of bounds".into(),
+            interrupted: Some(Interrupted {
+                ids: vec!["b".into(), "c".into()],
+                result: misf_core::batch::interrupted("upgrade"),
+                unsaved: None,
+            }),
+        })
         .unwrap();
     app.process_events();
     assert!(!app.busy);
-    assert!(
-        app.error
-            .as_deref()
-            .unwrap()
-            .contains("index out of bounds")
-    );
-    let a = unknown(&app, "a").unwrap();
+    let error = app.error.clone().unwrap();
+    assert!(error.contains("index out of bounds"));
+    assert!(error.contains(
+        "- server-b
+- server-c"
+    ));
+    assert!(!error.contains("server-a"));
+    // Saved: no third paragraph about losing the mark.
     assert_eq!(
-        (a.operation.as_str(), a.status.as_str()),
-        ("upgrade", "failed")
-    );
-    assert_eq!(a.error, t.get("worker.upgrade_unknown"));
+        error
+            .matches(
+                "
 
-    // A batch dist-upgrade whose thread ends without a word: the finished host keeps its
-    // result, the one still running is unknown.
+"
+            )
+            .count(),
+        1
+    );
+    assert!(last(&app, "a").is_none());
+    let c = last(&app, "c").unwrap();
+    assert_eq!(
+        (c.operation.as_str(), c.status.as_str(), c.error.as_str()),
+        ("upgrade", "failed", t.get("worker.upgrade_unknown"))
+    );
+
+    // When the mark could not be saved, the error says a restart loses it.
     app.error = None;
-    app.send(json!({"action":"batch","operation":"dist_upgrade","ids":["b","c"]}));
-    let done = CheckResult {
-        operation: "dist_upgrade".into(),
-        status: "success".into(),
-        ..Default::default()
-    };
+    app.send(json!({"action":"dist_upgrade","id":"a"}));
     events
-        .send(Event::BatchHost {
-            id: "b".into(),
-            result: done,
+        .send(Event::Crashed {
+            detail: String::new(),
+            interrupted: Some(Interrupted {
+                ids: vec!["a".into()],
+                result: misf_core::batch::interrupted("dist_upgrade"),
+                unsaved: Some("Vault locked".into()),
+            }),
         })
         .unwrap();
+    app.process_events();
+    let error = app.error.clone().unwrap();
+    assert!(error.contains("- server-a") && error.contains("Vault locked"));
+    assert_eq!(last(&app, "a").unwrap().operation, "dist_upgrade");
+
+    // A thread that ends without a word still frees the window.
+    app.error = None;
+    app.send(json!({"action":"check","id":"b"}));
     drop(events);
     app.process_events();
     assert!(!app.busy && app.error.is_some());
-    assert_eq!(unknown(&app, "b").unwrap().status, "success");
-    let c = unknown(&app, "c").unwrap();
-    assert_eq!(
-        (c.operation.as_str(), c.error.as_str()),
-        ("dist_upgrade", t.get("worker.upgrade_unknown"))
-    );
 }
 
 #[test]

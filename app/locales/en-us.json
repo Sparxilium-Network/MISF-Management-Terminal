@@ -3,6 +3,8 @@
   "status.worker_ended": "The local worker has stopped. Please restart the app.",
   "worker.crashed": "The background worker stopped unexpectedly ({detail}). Restart MISF so nothing runs on a possibly inconsistent state.",
   "worker.upgrade_unknown": "The background worker stopped unexpectedly; the upgrade result is unknown and it may have partly run on the host. Log in to check, run sudo dpkg --configure -a if needed, then check again.",
+  "worker.unknown_hosts": "The upgrade result is unknown on these hosts, now marked as failed in the host list. Log in to each one to check:\n{hosts}",
+  "worker.unknown_unsaved": "Could not save the unknown result to the host database ({error}). After a restart these hosts show their previous status, so note the names above first.",
   "status.failed": "Operation failed",
   "status.history": "Past operations",
   "status.history_empty": "Nothing has happened in this run yet",
