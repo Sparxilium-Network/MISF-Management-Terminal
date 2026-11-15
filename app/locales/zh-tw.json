@@ -176,6 +176,8 @@
   "settings.format_unknown": "主機庫已鎖定，解鎖後顯示",
   "settings.encrypted_suffix": "，LUKSbox 加密",
   "settings.schema_version": "資料庫版本",
+  "settings.storage": "主機庫",
+  "settings.storage_path": "主機庫位置",
   "settings.schema_json": "—（JSON 無資料庫版本）",
   "settings.convert_db": "轉換為 SQLite 資料庫",
   "settings.converted": "主機庫已寫入為 SQLite 資料庫 v{version}",

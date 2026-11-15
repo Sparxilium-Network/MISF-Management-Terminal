@@ -176,6 +176,8 @@
   "settings.format_unknown": "Host database locked; unlock to show",
   "settings.encrypted_suffix": ", LUKSbox encrypted",
   "settings.schema_version": "Database version",
+  "settings.storage": "Host database",
+  "settings.storage_path": "Host database location",
   "settings.schema_json": "— (JSON has no database version)",
   "settings.convert_db": "Convert to SQLite database",
   "settings.converted": "Host database saved as SQLite v{version}",

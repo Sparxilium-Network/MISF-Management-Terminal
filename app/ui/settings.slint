@@ -217,6 +217,8 @@ component AboutPage inherits VerticalLayout {
         { label: T.get("settings.app_version"), value: SettingsState.version },
         { label: T.get("settings.storage_format"), value: SettingsState.format },
         { label: T.get("settings.schema_version"), value: SettingsState.schema },
+        { label: T.get("settings.storage"), value: SettingsState.encrypted ? T.get("storage.encrypted") : T.get("storage.not_created") },
+        { label: T.get("settings.storage_path"), value: SettingsState.path },
     ]: HorizontalLayout {
         spacing: 24px;
         Text {
@@ -227,6 +229,9 @@ component AboutPage inherits VerticalLayout {
         Text {
             text: row.value;
             color: Theme.ink;
+            // A path has no spaces to break at.
+            wrap: row.label == T.get("settings.storage_path") ? char-wrap : word-wrap;
+            horizontal-stretch: 1;
         }
     }
     if SettingsState.can-convert: HorizontalLayout {

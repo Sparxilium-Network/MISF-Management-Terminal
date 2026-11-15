@@ -36,6 +36,34 @@ export component DragArea inherits TouchArea {
     double-clicked => { WindowChrome.toggle-maximize(); }
 }
 
+// A title bar command drawn as plain text, like an IDE's menu bar; highlighted on hover.
+export component MenuItem inherits Rectangle {
+    in property <string> text;
+    in property <bool> enabled: true;
+    callback clicked();
+    border-radius: 4px;
+    background: !root.enabled ? transparent
+        : touch.pressed ? Theme.selection : touch.has-hover ? Theme.selection.with-alpha(0.55) : transparent;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if (root.enabled) { root.clicked(); } }
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        Text {
+            text: root.text;
+            font-size: 13px;
+            color: root.enabled ? Theme.ink : Theme.muted;
+            vertical-alignment: center;
+        }
+    }
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+}
+
 component CaptionButton inherits Rectangle {
     in property <string> label;
     // A 10×10 drawing, stroked.

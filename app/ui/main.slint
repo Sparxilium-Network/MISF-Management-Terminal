@@ -18,7 +18,7 @@ import { TrustDialog, TrustState, DeleteDialog, DeleteState, GroupDialog, GroupS
 import { SettingsWindow, SettingsState, TreeRow, ColumnToggle } from "settings.slint";
 import { TerminalPanel, TerminalState, TerminalTab, TerminalLine } from "terminal.slint";
 import { ToolWindow, ToolStripe, DockHandle, DockTitle } from "tool_window.slint";
-import { WindowChrome, DragArea, CaptionButtons, WindowEdges } from "title_bar.slint";
+import { WindowChrome, DragArea, MenuItem, CaptionButtons, WindowEdges } from "title_bar.slint";
 
 export { HintData, Theme, T, Tip, Clip, MenuLine, PopMenu, Shell, HistoryLine, SidebarState, SidebarRow, HostState, ResultState, InfoLine, BatchState, ManagerChoice, BatchColumnView, BatchCell, BatchRowView, EditorState, KeysState, KeyView, VaultState, SlotView, UpgradeState, KeptBackState, RebootState, BatchFailureState, TrustState, DeleteState, GroupState, PlaintextState, SchemaState, CloseState, ErrorState, SettingsWindow, SettingsState, TreeRow, ColumnToggle, TerminalState, TerminalTab, TerminalLine, ToolWindow, WindowChrome }
 
@@ -120,8 +120,8 @@ component StatusBar inherits Rectangle {
     }
 }
 
-// The window's own title bar, with the app's top-level buttons in it, and any storage
-// notices under it.
+// The window's own title bar, with the app's top-level commands in it as menu-like
+// text, and any storage notices under it.
 component TopBar inherits Rectangle {
     property <bool> has-notice: Shell.storage-warning != "" || (Shell.encrypted && Shell.plaintext-remains) || Shell.debug-notice != "";
     background: Theme.surface;
@@ -135,63 +135,44 @@ component TopBar inherits Rectangle {
                     horizontal-stretch: 1;
                     padding-left: 12px;
                     padding-right: 12px;
-                    padding-top: 6px;
-                    padding-bottom: 6px;
-                    spacing: 10px;
+                    padding-top: 8px;
+                    padding-bottom: 8px;
+                    spacing: 2px;
                     VerticalLayout {
                         alignment: center;
+                        padding-right: 10px;
                         Image {
                             source: @image-url("../../assets/icons/misf-256.png");
                             width: 18px;
                             height: 18px;
                         }
                     }
-                    Button {
+                    MenuItem {
                         text: T.get("settings.title");
                         clicked => { Shell.settings(); }
                     }
-                    Rectangle {
-                        width: 1px;
-                        background: Theme.border;
-                    }
-                    if Shell.encrypted && Shell.locked: Button {
+                    if Shell.encrypted && Shell.locked: MenuItem {
                         text: T.get("vault.unlock_host");
                         enabled: !Shell.busy;
                         clicked => { Shell.unlock(); }
                     }
-                    if Shell.encrypted && !Shell.locked: Button {
+                    if Shell.encrypted && !Shell.locked: MenuItem {
                         text: T.get("vault.lock");
                         enabled: !Shell.busy;
                         clicked => { Shell.lock(); }
                     }
-                    if !Shell.encrypted: Button {
+                    if !Shell.encrypted: MenuItem {
                         text: T.get("vault.enable_button");
                         enabled: !Shell.busy;
                         clicked => { Shell.enable-vault(); }
                     }
-                    if !Shell.locked: Button {
+                    if !Shell.locked: MenuItem {
                         text: T.get("keys.manage");
                         enabled: !Shell.busy;
                         clicked => { Shell.manage-keys(); }
                     }
                     Rectangle {
                         horizontal-stretch: 1;
-                    }
-                    VerticalLayout {
-                        alignment: center;
-                        Text {
-                            text: Shell.encrypted ? T.get("storage.encrypted") : T.get("storage.not_created");
-                            font-size: 11px;
-                            color: Theme.warning;
-                            horizontal-alignment: right;
-                        }
-                        Text {
-                            text: Shell.path;
-                            font-size: 10px;
-                            color: Theme.muted;
-                            horizontal-alignment: right;
-                            overflow: elide;
-                        }
                     }
                 }
                 CaptionButtons { }

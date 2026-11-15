@@ -1,5 +1,13 @@
 # 全工作區檢查結果
 
+## 2026-11-15（標題列命令改為選單樣式、主機庫資訊移到關於，分支 `feat/WYSIWYG-Terminal`，基於 `da58053`）
+
+- 使用者要求：標題列右側的主機庫資訊（加密方式與路徑）移到「關於」；標題列的按鈕不要像按鈕，參考 JetBrains 的選單列。
+- 新增 `MenuItem`（純文字、懸停與按下時反白、停用時變灰），取代標題列的 `Button` 與分隔線。「關於」頁新增「主機庫」「主機庫位置」兩列（路徑以 `char-wrap` 換行）。新增翻譯 `settings.storage`、`settings.storage_path`。
+- 測試：`cargo test --workspace`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo fmt --check` 通過。
+- 截圖：主視窗標題列只剩圖示與文字命令、右側只有視窗按鈕；「關於」頁的長路徑正常換行。
+- 未驗證：懸停反白的實際觀感。
+
 ## 2026-11-15（自繪標題列，分支 `feat/WYSIWYG-Terminal`，基於 `ca94acc`）
 
 - 使用者要求：做成 JetBrains 那樣的標題列。使用者已知並接受代價（Windows 11 最大化按鈕上的貼齊版面選單、系統標題列右鍵選單會消失，縮放改為自繪把手），選擇把現有頂端按鈕併入標題列。
