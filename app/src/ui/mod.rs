@@ -211,6 +211,9 @@ fn watch_input(ctx: &Ctx, main: &AppWindow, settings: &SettingsWindow) {
         if let WindowEvent::Resized(_) = event {
             let size = window.size().to_logical(window.scale_factor());
             let (maximized, minimized) = (window.is_maximized(), window.is_minimized());
+            if let Some(main) = weak.upgrade() {
+                main.global::<WindowChrome>().set_maximized(maximized);
+            }
             if let Ok(mut app) = c.app.try_borrow_mut() {
                 app.track_window([size.width, size.height], maximized, minimized);
             }

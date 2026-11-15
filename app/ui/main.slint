@@ -18,8 +18,9 @@ import { TrustDialog, TrustState, DeleteDialog, DeleteState, GroupDialog, GroupS
 import { SettingsWindow, SettingsState, TreeRow, ColumnToggle } from "settings.slint";
 import { TerminalPanel, TerminalState, TerminalTab, TerminalLine } from "terminal.slint";
 import { ToolWindow, ToolStripe, DockHandle, DockTitle } from "tool_window.slint";
+import { WindowChrome, DragArea, CaptionButtons, WindowEdges } from "title_bar.slint";
 
-export { HintData, Theme, T, Tip, Clip, MenuLine, PopMenu, Shell, HistoryLine, SidebarState, SidebarRow, HostState, ResultState, InfoLine, BatchState, ManagerChoice, BatchColumnView, BatchCell, BatchRowView, EditorState, KeysState, KeyView, VaultState, SlotView, UpgradeState, KeptBackState, RebootState, BatchFailureState, TrustState, DeleteState, GroupState, PlaintextState, SchemaState, CloseState, ErrorState, SettingsWindow, SettingsState, TreeRow, ColumnToggle, TerminalState, TerminalTab, TerminalLine, ToolWindow }
+export { HintData, Theme, T, Tip, Clip, MenuLine, PopMenu, Shell, HistoryLine, SidebarState, SidebarRow, HostState, ResultState, InfoLine, BatchState, ManagerChoice, BatchColumnView, BatchCell, BatchRowView, EditorState, KeysState, KeyView, VaultState, SlotView, UpgradeState, KeptBackState, RebootState, BatchFailureState, TrustState, DeleteState, GroupState, PlaintextState, SchemaState, CloseState, ErrorState, SettingsWindow, SettingsState, TreeRow, ColumnToggle, TerminalState, TerminalTab, TerminalLine, ToolWindow, WindowChrome }
 
 // This run's past results and errors, newest first: the history tool window.
 component HistoryPanel inherits Rectangle {
@@ -119,79 +120,107 @@ component StatusBar inherits Rectangle {
     }
 }
 
+// The window's own title bar, with the app's top-level buttons in it, and any storage
+// notices under it.
 component TopBar inherits Rectangle {
+    property <bool> has-notice: Shell.storage-warning != "" || (Shell.encrypted && Shell.plaintext-remains) || Shell.debug-notice != "";
     background: Theme.surface;
     VerticalLayout {
-        padding: 12px;
-        spacing: 6px;
-        HorizontalLayout {
-            spacing: 10px;
-            Button {
-                text: T.get("settings.title");
-                clicked => { Shell.settings(); }
-            }
-            Rectangle {
-                width: 1px;
-                background: Theme.border;
-            }
-            if Shell.encrypted && Shell.locked: Button {
-                text: T.get("vault.unlock_host");
-                enabled: !Shell.busy;
-                clicked => { Shell.unlock(); }
-            }
-            if Shell.encrypted && !Shell.locked: Button {
-                text: T.get("vault.lock");
-                enabled: !Shell.busy;
-                clicked => { Shell.lock(); }
-            }
-            if !Shell.encrypted: Button {
-                text: T.get("vault.enable_button");
-                enabled: !Shell.busy;
-                clicked => { Shell.enable-vault(); }
-            }
-            if !Shell.locked: Button {
-                text: T.get("keys.manage");
-                enabled: !Shell.busy;
-                clicked => { Shell.manage-keys(); }
-            }
-            Rectangle {
-                horizontal-stretch: 1;
-            }
-            VerticalLayout {
-                alignment: center;
-                Text {
-                    text: Shell.encrypted ? T.get("storage.encrypted") : T.get("storage.not_created");
-                    font-size: 11px;
-                    color: Theme.warning;
-                    horizontal-alignment: right;
+        Rectangle {
+            height: 44px;
+            // Behind the buttons: the empty space moves the window.
+            DragArea { }
+            HorizontalLayout {
+                HorizontalLayout {
+                    horizontal-stretch: 1;
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    padding-top: 6px;
+                    padding-bottom: 6px;
+                    spacing: 10px;
+                    VerticalLayout {
+                        alignment: center;
+                        Image {
+                            source: @image-url("../../assets/icons/misf-256.png");
+                            width: 18px;
+                            height: 18px;
+                        }
+                    }
+                    Button {
+                        text: T.get("settings.title");
+                        clicked => { Shell.settings(); }
+                    }
+                    Rectangle {
+                        width: 1px;
+                        background: Theme.border;
+                    }
+                    if Shell.encrypted && Shell.locked: Button {
+                        text: T.get("vault.unlock_host");
+                        enabled: !Shell.busy;
+                        clicked => { Shell.unlock(); }
+                    }
+                    if Shell.encrypted && !Shell.locked: Button {
+                        text: T.get("vault.lock");
+                        enabled: !Shell.busy;
+                        clicked => { Shell.lock(); }
+                    }
+                    if !Shell.encrypted: Button {
+                        text: T.get("vault.enable_button");
+                        enabled: !Shell.busy;
+                        clicked => { Shell.enable-vault(); }
+                    }
+                    if !Shell.locked: Button {
+                        text: T.get("keys.manage");
+                        enabled: !Shell.busy;
+                        clicked => { Shell.manage-keys(); }
+                    }
+                    Rectangle {
+                        horizontal-stretch: 1;
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        Text {
+                            text: Shell.encrypted ? T.get("storage.encrypted") : T.get("storage.not_created");
+                            font-size: 11px;
+                            color: Theme.warning;
+                            horizontal-alignment: right;
+                        }
+                        Text {
+                            text: Shell.path;
+                            font-size: 10px;
+                            color: Theme.muted;
+                            horizontal-alignment: right;
+                            overflow: elide;
+                        }
+                    }
                 }
-                Text {
-                    text: Shell.path;
-                    font-size: 10px;
-                    color: Theme.muted;
-                    horizontal-alignment: right;
-                    overflow: elide;
+                CaptionButtons { }
+            }
+        }
+        if root.has-notice: VerticalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            padding-bottom: 10px;
+            spacing: 6px;
+            if Shell.storage-warning != "": Notice {
+                error: true;
+                text: Shell.storage-warning;
+            }
+            if Shell.encrypted && Shell.plaintext-remains: HorizontalLayout {
+                spacing: 10px;
+                Notice {
+                    text: T.get("storage.original_remains");
+                    vertical-alignment: center;
+                }
+                Button {
+                    text: T.get("plaintext.review");
+                    enabled: !Shell.locked && !Shell.busy;
+                    clicked => { Shell.review-plaintext(); }
                 }
             }
-        }
-        if Shell.storage-warning != "": Notice {
-            error: true;
-            text: Shell.storage-warning;
-        }
-        if Shell.encrypted && Shell.plaintext-remains: HorizontalLayout {
-            spacing: 10px;
-            Notice {
-                text: T.get("storage.original_remains");
-                vertical-alignment: center;
+            if Shell.debug-notice != "": Notice {
+                text: Shell.debug-notice;
             }
-            Button {
-                text: T.get("plaintext.review");
-                enabled: !Shell.locked && !Shell.busy;
-                clicked => { Shell.review-plaintext(); }
-            }
-        }
-        if Shell.debug-notice != "": Notice {
-            text: Shell.debug-notice;
         }
     }
 }
@@ -296,6 +325,8 @@ export component AppWindow inherits Window {
     in property <bool> debug;
     title: root.debug ? "MISF · DEBUG · Isolated profile" : "MISF · Management Terminal";
     icon: @image-url("../../assets/icons/misf-256.png");
+    // The title bar is drawn here (TopBar).
+    no-frame: true;
     min-width: 1024px;
     min-height: 700px;
     preferred-width: 1280px;
@@ -471,5 +502,12 @@ export component AppWindow inherits Window {
         height: root.height;
         window-width: root.width;
         window-height: root.height;
+    }
+    // Last, so the resize grips sit over everything.
+    WindowEdges {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
     }
 }

@@ -1,7 +1,7 @@
-//! The top bar, the status line and the host/batch tabs.
+//! The title bar, the status line and the host/batch tabs.
 
 use super::{
-    App, AppWindow, CloseState, Ctx, HistoryLine, Shell,
+    App, AppWindow, CloseState, Ctx, HistoryLine, Shell, WindowChrome,
     app::{Tool, VaultMode, View},
 };
 use serde_json::json;
@@ -99,6 +99,60 @@ pub fn wire(ctx: &Ctx, w: &AppWindow) {
     close.on_keep_open(move || c.update(|app| app.close_prompt = false));
     let c = ctx.clone();
     close.on_quit(move || quit(&c));
+    wire_chrome(w);
+}
+
+/// The window has no system frame; its own title bar moves, resizes and closes it.
+fn wire_chrome(w: &AppWindow) {
+    use slint::winit_030::{WinitWindowAccessor, winit::window::ResizeDirection};
+    let chrome = w.global::<WindowChrome>();
+    let main = w.as_weak();
+    chrome.on_drag(move || {
+        if let Some(main) = main.upgrade() {
+            main.window().with_winit_window(|window| {
+                let _ = window.drag_window();
+            });
+        }
+    });
+    let main = w.as_weak();
+    chrome.on_resize(move |edge| {
+        let direction = match edge {
+            0 => ResizeDirection::North,
+            1 => ResizeDirection::South,
+            2 => ResizeDirection::West,
+            3 => ResizeDirection::East,
+            4 => ResizeDirection::NorthWest,
+            5 => ResizeDirection::NorthEast,
+            6 => ResizeDirection::SouthWest,
+            _ => ResizeDirection::SouthEast,
+        };
+        if let Some(main) = main.upgrade() {
+            main.window().with_winit_window(|window| {
+                let _ = window.drag_resize_window(direction);
+            });
+        }
+    });
+    let main = w.as_weak();
+    chrome.on_minimize(move || {
+        if let Some(main) = main.upgrade() {
+            main.window().set_minimized(true);
+        }
+    });
+    let main = w.as_weak();
+    chrome.on_toggle_maximize(move || {
+        if let Some(main) = main.upgrade() {
+            let window = main.window();
+            window.set_maximized(!window.is_maximized());
+        }
+    });
+    // The same request as the system's close, so a running operation still asks first.
+    let main = w.as_weak();
+    chrome.on_close(move || {
+        if let Some(main) = main.upgrade() {
+            main.window()
+                .dispatch_event(slint::platform::WindowEvent::CloseRequested);
+        }
+    });
 }
 
 fn quit(ctx: &Ctx) {

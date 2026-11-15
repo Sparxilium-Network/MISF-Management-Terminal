@@ -1,6 +1,6 @@
 # 原始碼檔案說明
 
-> 最後修改：2026-11-15 ｜ 基於 commit：`caa6389`
+> 最後修改：2026-11-15 ｜ 基於 commit：`ca94acc`
 
 每個 `.rs` 檔案負責什麼。整體設計與資料流見 [架構](architecture.md)，建置與慣例見 [開發說明](PROJECT-DEV.md)。新增、改名或刪除 `.rs` 檔案時，請一併更新本文件。
 
@@ -75,7 +75,7 @@ Workspace 有三個 crate：`core`（`misf-core`，核心函式庫與 JSON CLI�
 | `app/src/ui/app.rs` | 視窗狀態 `App`（原 `ManagementApp`）與對話框資料結構：送出請求、處理背景事件與回應（`received`）、稽核與工作階段記錄、清除主機快取、閒置自動鎖定（`auto_lock`，作業中不鎖）、關閉時儲存視窗大小（`shutdown`）。只送出請求並保存結果，不直接連線或讀寫主機資料。 |
 | `app/src/ui/format.rs` | 由主機與結果產生的文字：套件管理器與系統標籤、狀態、重啟摘要、連線資訊列、可複製的命令（`copied_commands`），以及連線與重啟分頁的行資料 `Line`。 |
 | `app/src/ui/terminal.rs` | 底部終端機面板：`Terminal` 保存最近一次檢查、升級或重新開機的每台主機分頁（`TabState`：等待、執行中、完成、失敗、略過）與各自的行（每台最多 `MAX_LINES` 行，超過時一次捨棄最舊的 2000 行）。`App::send` 依請求開新的一輪並把 `App::tool` 切到終端機；`Event::Terminal` 加入行，`BatchHost`／`Done`／worker 崩潰收尾。`push` 對同一個 `VecModel` 只追加新行，換分頁或捨棄舊行時才重建；`wire` 也處理 `ToolWindow`（`App::toggle_tool`；共用高度存在偏好設定的 `tool_height`）。 |
-| `app/src/ui/shell.rs` | 上方工具列、狀態列與其「過往操作」清單（`App::history`，經 `set_status`／`set_host_status`／`note_error` 記錄，進度訊息不記），主機／批次分頁切換；關閉主視窗時一併結束程式，操作進行中先以 `CloseDialog` 詢問。 |
+| `app/src/ui/shell.rs` | 自繪標題列（`WindowChrome`：拖曳移動與邊緣縮放交給 winit 的 `drag_window`／`drag_resize_window`，關閉按鈕送出與系統關閉相同的 `CloseRequested`）、狀態列與其「過往操作」清單（`App::history`，經 `set_status`／`set_host_status`／`note_error` 記錄，進度訊息不記），主機／批次分頁切換；關閉主視窗時一併結束程式，操作進行中先以 `CloseDialog` 詢問。 |
 | `app/src/ui/sidebar.rs` | 側欄主機清單：分類與收合、搜尋、卡片內容與高度、拖曳排序（`Layout` 計算放置位置，`arrange` 送出新順序）、分類名稱對話框。 |
 | `app/src/ui/host_page.rs` | 主機頁與結果分頁：測試連線、指紋、檢查、「進階操作」選單（升級、dist-upgrade、重新開機，依主機能力停用）、升級提示、「需要 dist-upgrade」報告。 |
 | `app/src/ui/batch.rs` | 批次作業：套件管理器選擇、可選主機、表格排序與分組標題、欄寬拖曳、上一台／下一台、雙擊或右鍵開主機頁、套件明細視窗。 |
@@ -85,9 +85,10 @@ Workspace 有三個 crate：`core`（`misf-core`，核心函式庫與 JSON CLI�
 | `app/src/ui/settings.rs` | 獨立的設定視窗：分類樹（`SettingsPage::PREFERENCES` 為「偏好設定」底下的外觀與主機清單／安全性／批次作業）、各偏好的套用與儲存、LOG 頁、關於頁。 |
 | `app/src/ui/logging.rs` | 工作階段記錄：請求標題、結果寫入與匯出。 |
 | `app/src/ui/tests.rs` | 狀態邏輯測試，以及用 Slint 測試後端送出實際指標與鍵盤事件的畫面測試（進階選單、批次表格雙擊、欄寬拖曳、Esc 關閉明細、懸停提示時機與位置、側欄拖曳排序、右鍵複製命令、設定樹）。 |
-| `app/ui/main.slint` | 主視窗 `AppWindow`：工具列、側欄、工作區、狀態列（`StatusBar`，點它開關過往操作工具視窗），最左側的 `ToolStripe` 與側欄、工作區下方的工具視窗（`TerminalPanel` 或停靠的 `HistoryPanel`，依 `ToolWindow.open` 一次一個；側欄與工作區包在 `clip` 的 Rectangle 內，工具視窗開啟時它們被壓縮，而不是把狀態列推出視窗；主機頁與批次頁各包在 `ScrollView` 內，內容高度取可見高度與頁面最小高度的較大者，放不下時捲動而不是被裁切；高度只在拖曳與視窗縮放時夾住，不綁定視窗高度以免佈局迴圈），以及疊在上方的對話框、進階選單、右鍵選單 `MenuOverlay` 與提示框；`run-menu` 依選單行的 `action` 執行對應操作；匯出所有 global 給 Rust。 |
+| `app/ui/main.slint` | 主視窗 `AppWindow`（`no-frame`，標題列自繪）：標題列 `TopBar`（圖示、上層按鈕、主機庫資訊、視窗按鈕）、側欄、工作區、狀態列（`StatusBar`，點它開關過往操作工具視窗），最左側的 `ToolStripe` 與側欄、工作區下方的工具視窗（`TerminalPanel` 或停靠的 `HistoryPanel`，依 `ToolWindow.open` 一次一個；側欄與工作區包在 `clip` 的 Rectangle 內，工具視窗開啟時它們被壓縮，而不是把狀態列推出視窗；主機頁與批次頁各包在 `ScrollView` 內，內容高度取可見高度與頁面最小高度的較大者，放不下時捲動而不是被裁切；高度只在拖曳與視窗縮放時夾住，不綁定視窗高度以免佈局迴圈），以及疊在上方的對話框、進階選單、右鍵選單 `MenuOverlay` 與提示框；`run-menu` 依選單行的 `action` 執行對應操作；匯出所有 global 給 Rust。 |
 | `app/ui/theme.slint` | 配色 `Theme`、介面字型（Noto Sans TC／粗體／系統字型）、翻譯查詢 `T`（向 Rust 的語言目錄查字串）、外觀同步。 |
 | `app/ui/widgets.slint` | 共用元件：懸停提示 `HintArea`（1.5 秒後顯示命令、效果與風險；右鍵開啟 `menu` 或複製命令）、自繪右鍵選單（`MenuLine`、`PopMenu`、`MenuArea`、`MenuOverlay`：外觀與進階選單一致，不用 Slint 內建的 `ContextMenuArea`，因其外觀無法套用 Theme；`MenuArea` 疊在控制項上方，只在 `right-down` 為真時啟用，因為控制項的 `TouchArea` 會抓住所有按下事件，停用的 `TouchArea` 才會讓事件穿過）、提示框、剪貼簿、彩色按鈕、三態勾選框、對話框外框等。 |
+| `app/ui/title_bar.slint` | 自繪標題列的零件：`WindowChrome`（是否最大化與拖曳、縮放、最小化、最大化、關閉的回呼）、可拖曳且雙擊最大化的 `DragArea`、視窗按鈕 `CaptionButtons`、四邊四角的縮放把手與 1px 外框 `WindowEdges`（最大化時不顯示）。 |
 | `app/ui/tool_window.slint` | IDE 式工具視窗：`ToolWindow`（目前開啟的工具視窗與共用高度）、視窗最左側的圖示直條 `ToolStripe`（終端機、過往操作）、可拖曳的上緣 `DockHandle` 與標題列 `DockTitle`（含收合鈕）。 |
 | `app/ui/terminal.slint` | 終端機工具視窗 `TerminalPanel` 與 `TerminalState`：每台主機一個分頁（狀態圓點）、「複製」，以及固定行高的 `ListView`（不換行、過長省略）；捲到底時跟著新輸出捲動，往上捲就停止跟隨。 |
 | `app/ui/sidebar.slint`、`host_page.slint`、`result_panel.slint`、`batch_page.slint`、`settings.slint`、`shell.slint` | 各頁畫面與其 global。 |

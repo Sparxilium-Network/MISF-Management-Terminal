@@ -1,5 +1,13 @@
 # 全工作區檢查結果
 
+## 2026-11-15（自繪標題列，分支 `feat/WYSIWYG-Terminal`，基於 `ca94acc`）
+
+- 使用者要求：做成 JetBrains 那樣的標題列。使用者已知並接受代價（Windows 11 最大化按鈕上的貼齊版面選單、系統標題列右鍵選單會消失，縮放改為自繪把手），選擇把現有頂端按鈕併入標題列。
+- 主視窗改為 `no-frame`。新增 `title_bar.slint`：`WindowChrome`、`DragArea`（按住後第一次移動才交給 `drag_window`，因此雙擊仍可最大化／還原）、`CaptionButtons`、`WindowEdges`（5px 邊、10px 角，交給 `drag_resize_window`；最大化時隱藏，平時畫 1px 外框）。關閉按鈕送出 `CloseRequested`，與系統關閉走同一條路，操作進行中仍會詢問。最大化狀態由 winit 的 `Resized` 事件同步。沒有新增依賴（使用既有的 `unstable-winit-030`）。
+- 測試：`cargo test --workspace`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo clippy -p misf --all-targets --features capture -- -D warnings`、`cargo fmt` 通過。
+- 截圖（1280×820）：標題列一列，左側圖示與按鈕、右側主機庫資訊與三顆視窗按鈕，外框正常。
+- 未驗證（截圖無法驗證，需實機操作）：拖曳移動、拖到螢幕邊緣貼齊、四邊四角縮放、雙擊最大化、最大化後是否蓋住工作列、Win+方向鍵、按鈕懸停提示、多螢幕與不同縮放比例。
+
 ## 2026-11-15（工具視窗開啟時頁面可捲動，分支 `feat/WYSIWYG-Terminal`，基於 `caa6389`）
 
 - 使用者回報：工具視窗開啟時，主機詳情與批次作業頁的下半部被裁掉且無法捲動。原因是頁面有最小高度，外層 `clip` 只裁切不縮小。

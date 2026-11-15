@@ -1,0 +1,175 @@
+// The window draws its own title bar, like an IDE's: the window has no system frame, so
+// moving, resizing and the minimize / maximize / close buttons are done here.
+import { Theme, T } from "theme.slint";
+import { HintArea } from "widgets.slint";
+
+export global WindowChrome {
+    // Kept in step with the window by the app.
+    in property <bool> maximized;
+    // Hands a held mouse button to the system to move the window.
+    callback drag();
+    callback minimize();
+    callback toggle-maximize();
+    // Goes through the same close request as the system's close, so a running
+    // operation still asks first.
+    callback close();
+    // Hands a held mouse button to the system to resize from an edge: 0 top, 1 bottom,
+    // 2 left, 3 right, 4 top-left, 5 top-right, 6 bottom-left, 7 bottom-right.
+    callback resize(edge: int);
+}
+
+// Empty title bar space: drag to move the window, double-click to maximize or restore.
+export component DragArea inherits TouchArea {
+    // The drag starts on the first move, so a double-click is still seen as one.
+    property <bool> dragging;
+    pointer-event(event) => {
+        if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+            self.dragging = false;
+        }
+    }
+    moved => {
+        if (self.pressed && !self.dragging) {
+            self.dragging = true;
+            WindowChrome.drag();
+        }
+    }
+    double-clicked => { WindowChrome.toggle-maximize(); }
+}
+
+component CaptionButton inherits Rectangle {
+    in property <string> label;
+    // A 10×10 drawing, stroked.
+    in property <string> icon;
+    in property <bool> danger;
+    callback clicked();
+    width: 46px;
+    background: touch.pressed ? (root.danger ? #c42b1c.darker(0.2) : Theme.selection)
+        : touch.has-hover ? (root.danger ? #c42b1c : Theme.selection.with-alpha(0.55)) : transparent;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => { root.clicked(); }
+    HintArea {
+        width: parent.width;
+        height: parent.height;
+        plain: root.label;
+        delay: 0.8s;
+        touch := TouchArea {
+            clicked => { root.clicked(); }
+        }
+    }
+    Path {
+        width: 10px;
+        height: 10px;
+        viewbox-width: 10;
+        viewbox-height: 10;
+        commands: root.icon;
+        stroke: root.danger && touch.has-hover ? #ffffff : Theme.ink;
+        stroke-width: 1px;
+    }
+}
+
+// Minimize, maximize or restore, and close, at the title bar's right end.
+export component CaptionButtons inherits HorizontalLayout {
+    CaptionButton {
+        label: T.get("window.minimize");
+        icon: "M 0 5 L 10 5";
+        clicked => { WindowChrome.minimize(); }
+    }
+    CaptionButton {
+        label: WindowChrome.maximized ? T.get("window.restore") : T.get("window.maximize");
+        // Restore shows two overlapping windows.
+        icon: WindowChrome.maximized ? "M 0.5 2.5 L 7.5 2.5 L 7.5 9.5 L 0.5 9.5 Z M 2.5 2.5 L 2.5 0.5 L 9.5 0.5 L 9.5 7.5 L 7.5 7.5"
+            : "M 0.5 0.5 L 9.5 0.5 L 9.5 9.5 L 0.5 9.5 Z";
+        clicked => { WindowChrome.toggle-maximize(); }
+    }
+    CaptionButton {
+        label: T.get("window.close");
+        icon: "M 0 0 L 10 10 M 10 0 L 0 10";
+        danger: true;
+        clicked => { WindowChrome.close(); }
+    }
+}
+
+component Edge inherits TouchArea {
+    in property <int> edge;
+    pointer-event(event) => {
+        if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+            WindowChrome.resize(root.edge);
+        }
+    }
+}
+
+// Thin grips along the window's edges and corners for resizing, and a 1px outline,
+// since the window has no system frame. Placed over everything else; none when maximized.
+export component WindowEdges {
+    property <length> grip: 5px;
+    property <length> corner: 10px;
+    if !WindowChrome.maximized: Rectangle {
+        border-width: 1px;
+        border-color: Theme.border;
+    }
+    if !WindowChrome.maximized: Edge {
+        edge: 0;
+        x: root.corner;
+        y: 0;
+        width: root.width - 2 * root.corner;
+        height: root.grip;
+        mouse-cursor: ns-resize;
+    }
+    if !WindowChrome.maximized: Edge {
+        edge: 1;
+        x: root.corner;
+        y: root.height - root.grip;
+        width: root.width - 2 * root.corner;
+        height: root.grip;
+        mouse-cursor: ns-resize;
+    }
+    if !WindowChrome.maximized: Edge {
+        edge: 2;
+        x: 0;
+        y: root.corner;
+        width: root.grip;
+        height: root.height - 2 * root.corner;
+        mouse-cursor: ew-resize;
+    }
+    if !WindowChrome.maximized: Edge {
+        edge: 3;
+        x: root.width - root.grip;
+        y: root.corner;
+        width: root.grip;
+        height: root.height - 2 * root.corner;
+        mouse-cursor: ew-resize;
+    }
+    if !WindowChrome.maximized: Edge {
+        edge: 4;
+        x: 0;
+        y: 0;
+        width: root.corner;
+        height: root.corner;
+        mouse-cursor: nwse-resize;
+    }
+    if !WindowChrome.maximized: Edge {
+        edge: 5;
+        x: root.width - root.corner;
+        y: 0;
+        width: root.corner;
+        height: root.corner;
+        mouse-cursor: nesw-resize;
+    }
+    if !WindowChrome.maximized: Edge {
+        edge: 6;
+        x: 0;
+        y: root.height - root.corner;
+        width: root.corner;
+        height: root.corner;
+        mouse-cursor: nesw-resize;
+    }
+    if !WindowChrome.maximized: Edge {
+        edge: 7;
+        x: root.width - root.corner;
+        y: root.height - root.corner;
+        width: root.corner;
+        height: root.corner;
+        mouse-cursor: nwse-resize;
+    }
+}
