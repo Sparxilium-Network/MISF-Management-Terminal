@@ -408,7 +408,7 @@ fn status_history_keeps_results_and_errors_but_not_progress() {
     );
     assert_eq!(lines, [(done.as_str(), false), ("SSH timed out", true)]);
 
-    // The status line opens and closes it, newest first.
+    // The stripe's history button opens and closes it, newest first.
     let (ctx, main, _settings) = build(app, true).unwrap();
     main.show().unwrap();
     let toggle = || {

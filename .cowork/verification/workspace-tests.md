@@ -1,5 +1,11 @@
 # 全工作區檢查結果
 
+## 2026-11-15（狀態列不再開關過往操作，分支 `feat/WYSIWYG-Terminal`，基於 `a2cdd94`）
+
+- 使用者要求：狀態列的點擊開關與箭頭刪除，改由左側直條負責。
+- `StatusBar` 只剩轉圈與最近一次結果；移除 `Shell.history-open`、`Shell.history-toggled`，以及標題列移除主機庫資訊後已無人使用的 `Shell.path`。
+- 測試：過往操作的 UI 測試改經直條的時鐘按鈕（同一個無障礙名稱）開關。`cargo test --workspace`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo clippy -p misf --all-targets --features capture -- -D warnings`、`cargo fmt` 通過。
+
 ## 2026-11-15（標題列命令改為選單樣式、主機庫資訊移到關於，分支 `feat/WYSIWYG-Terminal`，基於 `da58053`）
 
 - 使用者要求：標題列右側的主機庫資訊（加密方式與路徑）移到「關於」；標題列的按鈕不要像按鈕，參考 JetBrains 的選單列。

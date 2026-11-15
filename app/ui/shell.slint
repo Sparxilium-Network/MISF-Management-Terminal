@@ -12,10 +12,8 @@ export global Shell {
     in property <string> status;
     // Newest first.
     in property <[HistoryLine]> history;
-    in property <bool> history-open;
     in property <bool> locked;
     in property <bool> encrypted;
-    in property <string> path;
     in property <string> storage-warning;
     in property <bool> plaintext-remains;
     in property <string> debug-notice;
@@ -29,5 +27,4 @@ export global Shell {
     callback manage-keys();
     callback review-plaintext();
     callback view-chosen(view: int);
-    callback history-toggled();
 }
