@@ -238,12 +238,16 @@ impl Terminal {
     pub fn shell_ended(&mut self, id: u64, failed: bool, note: String) -> Option<String> {
         let shell = self.shell_by_id(id)?;
         let was_open = std::mem::replace(&mut shell.connected, false);
-        shell.state = if failed {
-            ShellState::Failed
-        } else {
-            ShellState::Closed
-        };
-        shell.note = note;
+        // Ended after its emulator failed: that stays the reason shown.
+        let emulator_failed = shell.state == ShellState::Failed && shell.note.is_empty();
+        if !emulator_failed {
+            shell.state = if failed {
+                ShellState::Failed
+            } else {
+                ShellState::Closed
+            };
+            shell.note = note;
+        }
         let host = shell.host.clone();
         self.screen_dirty = true;
         was_open.then_some(host)
@@ -351,7 +355,7 @@ pub fn push(app: &mut App, w: &AppWindow) {
         .as_any()
         .downcast_ref::<VecModel<TerminalLine>>()
         .expect("terminal lines are a VecModel");
-    push_shell(terminal, &state, typing_allowed, t);
+    let broken = push_shell(terminal, &state, typing_allowed, t);
     let current = terminal.tabs.get(terminal.current);
     let key = (terminal.current, terminal.generation);
     if terminal.synced != Some(key) {
@@ -362,20 +366,26 @@ pub fn push(app: &mut App, w: &AppWindow) {
             lines.push(view(line));
         }
     }
+    // Its screen could not be drawn: end it on the remote side too. Its end is heard
+    // and audited as usual.
+    if let Some(id) = broken {
+        app.worker.shells.send(id, Input::Close);
+    }
 }
 
-/// The current shell's screen, cursor and whether keys reach it.
+/// The current shell's screen, cursor and whether keys reach it. Returns the shell
+/// whose screen failed to draw, which must be closed.
 fn push_shell(
     terminal: &mut Terminal,
     state: &TerminalState,
     typing_allowed: bool,
     t: crate::i18n::Translator,
-) {
+) -> Option<u64> {
     let current = terminal.current;
     let Some(shell) = terminal.shell() else {
         state.set_shell_view(false);
         terminal.screen_synced = None;
-        return;
+        return None;
     };
     state.set_shell_view(true);
     let open = shell.state == ShellState::Open;
@@ -390,6 +400,7 @@ fn push_shell(
         }
         .into(),
     );
+    let mut broken = None;
     if terminal.screen_dirty || terminal.screen_synced != Some(current) {
         let screen = shell.parser.screen();
         let (row, col) = screen.cursor_position();
@@ -407,6 +418,7 @@ fn push_shell(
                 let id = terminal.shell().map(|shell| shell.id);
                 if let Some(shell) = id.and_then(|id| terminal.shell_by_id(id)) {
                     shell.break_down();
+                    broken = Some(shell.id);
                 }
                 state.set_cursor_shown(false);
                 Vec::new()
@@ -416,6 +428,7 @@ fn push_shell(
         terminal.screen_dirty = false;
         terminal.screen_synced = Some(current);
     }
+    broken
 }
 
 impl App {
@@ -564,16 +577,16 @@ pub fn wire(ctx: &Ctx, w: &AppWindow) {
             let Some(shell) = app.terminal.shells.get(index) else {
                 return;
             };
+            // Still connected, even if its screen failed: end it first. Its end arrives
+            // as an event, is audited and marks the tab; the next click removes it.
+            if shell.connected {
+                app.worker.shells.send(shell.id, Input::Close);
+                return;
+            }
             match shell.state {
-                // Ended in its own time: its tab goes.
-                ShellState::Closed | ShellState::Failed => app.terminal.remove_shell(index),
-                // Its end arrives as an event and marks the tab.
-                ShellState::Open => {
-                    app.worker.shells.send(shell.id, Input::Close);
-                }
                 // Still waiting for the worker; once nothing runs, the tab is stale.
-                ShellState::Opening if !app.busy => app.terminal.remove_shell(index),
-                ShellState::Opening => {}
+                ShellState::Opening if app.busy => {}
+                _ => app.terminal.remove_shell(index),
             }
         })
     });

@@ -1581,3 +1581,55 @@ fn open_shells_ask_before_closing_end_with_the_vault_and_floods_are_read_in_slic
         .collect();
     assert!(log.contains("\"action\":\"shell_close\""), "{log}");
 }
+
+#[test]
+fn a_failed_shell_still_connected_is_closed_before_its_tab_goes() {
+    use super::remote_shell::ShellState;
+    use misf_core::shell::Input;
+    i_slint_backend_testing::init_no_event_loop();
+    let (mut app, _commands, events, directory) = test_app(false);
+    unlocked(&mut app);
+    app.hosts = vec![host("a", "apt", "SHA256:a")];
+    app.selected = "a".into();
+    app.busy = false;
+    let t = app.t();
+    let (ctx, main, _settings) = build(app, true).unwrap();
+    let state = main.global::<super::TerminalState>();
+    state.invoke_open_shell();
+    let shell = ctx.app.borrow().terminal.shells[0].id;
+    let mut input = ctx.app.borrow().worker.shells.register(shell);
+    events
+        .send(Event::Done {
+            action: "shell_open".into(),
+            result: Ok(json!({"shell":shell})),
+        })
+        .unwrap();
+    ctx.update(App::process_events);
+
+    // Its emulator failed (as a panic while drawing would leave it), but the remote
+    // shell is still up.
+    ctx.update(|app| app.terminal.shells[0].break_down());
+    assert_eq!(
+        ctx.app.borrow().terminal.shells[0].state,
+        ShellState::Failed
+    );
+    assert_eq!(state.get_shell_notice(), t.get("shell.emulator_failed"));
+
+    // Closing the tab ends the remote shell first; the tab stays until that is heard.
+    state.invoke_close_shell(0);
+    assert!(matches!(input.try_recv(), Ok(Input::Close)));
+    assert_eq!(state.get_tabs().row_count(), 1);
+    events
+        .send(Event::ShellEnded { shell, error: None })
+        .unwrap();
+    ctx.update(App::process_events);
+    assert_eq!(state.get_shell_notice(), t.get("shell.emulator_failed"));
+    let log: String = std::fs::read_dir(directory.path().join("logs"))
+        .unwrap()
+        .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
+        .collect();
+    assert!(log.contains("\"action\":\"shell_close\""), "{log}");
+    state.invoke_close_shell(0);
+    assert_eq!(state.get_tabs().row_count(), 0);
+    assert!(input.try_recv().is_err());
+}
