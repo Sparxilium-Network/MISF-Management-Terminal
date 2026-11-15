@@ -1,6 +1,6 @@
 # MISF Management Terminal 開發說明
 
-> 最後修改：2026-11-15 ｜ 基於 commit：`0ac559b`
+> 最後修改：2026-11-16 ｜ 基於 commit：`ea4c9a9`
 
 一般使用方式見 [README](../README.md) 與 [使用指南](user-guide.md)。本文件是開發文件的入口，給開發者與維護者，記錄建置、儲存格式、安全設計細節與測試方式。
 
@@ -13,7 +13,7 @@
 
 | 文件 | 內容 |
 | --- | --- |
-| [架構](architecture.md) | 目前實作架構、資料表與 JSON 協定 |
+| [架構](architecture.md) | 專案目標、目前實作架構、資料表與 JSON 協定 |
 | [原始碼檔案說明](PROJECT-DEV-ARCH.md) | 每個 `.rs` 檔案負責什麼 |
 | [依賴更新與安全公告](dependency-updates.md) | 依賴版本、上游限制與授權清單維護 |
 | [更新依賴的步驟](update-dependency.md) | 套用 Dependabot PR、手動升級與處理安全公告的操作清單 |
@@ -79,7 +79,7 @@ Linux／macOS 可使用 `cargo run --locked -p misf`，須在對應平台建置�
 
 - 主機與憑證只存於 LUKSbox 容器 `hosts.lbx` 內的 SQLite 映像（檔頭 `user_version` 記錄結構版本，目前為 v6），不提供未加密模式；尚未建立容器時，所有主機請求都會被拒絕。舊版留下的未加密 `hosts.db` 只在 `vault_create` 時讀取並轉入，讀取時較舊版本會先在同目錄備份 `hosts.v<N>.bak.db`，再於單一交易內自動升級；較新版本、非 MISF、損壞或結構遭改動的資料庫一律拒絕開啟並保留原檔。每個版本的升級各自在 `core/src/db_upgrade/` 一個檔案。
 - 更早的 JSON 版本 `hosts.json` 同樣只在建立容器時匯入，原 JSON 保持不變。
-- 非敏感偏好存於未加密的 `ui-settings.json`（`version: 1`）：語言、外觀、主視窗大小與是否最大化、設定視窗大小，以及主機清單顯示 `host_list`（等級 `detail`、自訂 `fields`、密集度 `density`：`comfortable`／`compact`，以及「未分類」在分類間的位置 `ungrouped_at`，省略時排在最後；`ungrouped_collapsed` 為其收合狀態）、批次作業排序 `batch_order`（`sidebar`／`pending`／`recent`／`name`）、套件明細位置 `batch_detail`（`inline` 表格下方／`popup` 雙擊開啟視窗）、批次表格欄位 `batch_columns`（`shown` 為顯示的欄位代碼，主機欄一律顯示；`weights` 為各欄寬度比例，限制在 0.2–10；新增的 `restart` 欄在舊設定檔中預設顯示），以及預設解鎖方式 `unlock_method`（`password`／`windows_hello`／`security_key`；只在啟動時第一次遇到鎖定才自動開始）。不保存憑證，主機庫鎖定時也能讀寫。
+- 非敏感偏好存於未加密的 `ui-settings.json`（`version: 1`）：語言、外觀、主視窗大小與是否最大化、設定視窗大小，以及主機清單顯示 `host_list`（等級 `detail`、自訂 `fields`、密集度 `density`：`comfortable`／`compact`，以及「未分類」在分類間的位置 `ungrouped_at`，省略時排在最後；`ungrouped_collapsed` 為其收合狀態）、批次作業排序 `batch_order`（`sidebar`／`pending`／`recent`／`name`）、套件明細位置 `batch_detail`（`inline` 表格下方／`popup` 雙擊開啟視窗）、批次表格欄位 `batch_columns`（`shown` 為顯示的欄位代碼，主機欄一律顯示；`weights` 為各欄寬度比例，限制在 0.2–10；新增的 `restart` 欄在舊設定檔中預設顯示），預設解鎖方式 `unlock_method`（`password`／`windows_hello`／`security_key`；只在啟動時第一次遇到鎖定才自動開始）、自動鎖定分鐘數 `auto_lock_minutes`（1–1440；沒有這個鍵時為 15，`null` 為永不），以及底部工具視窗高度 `tool_height`。不保存憑證，主機庫鎖定時也能讀寫。
 - 主機清單的分類、順序與收合狀態存於主機庫（`host_groups` 資料表與 `hosts.group_id`）。
 - 主機資料序列化內容（SQLite 映像）上限 1024 MiB（`MAX_DATABASE_BYTES`）；單一遠端命令輸出上限 32 MiB（`ssh.rs` 的 `LIMIT`），超過時中止該命令。兩者都寫在使用指南。容器建立時 metadata 區固定為 1 MiB，2026-11-14 實測可容納約 1.36 GiB 的單一檔案，反覆改寫十次仍可寫入；接近 1 GiB 時一次讀取約 2 秒、一次寫入約 5.5 秒（release，未含 SQLite 檢查）。每個請求仍會解密並檢查整個映像；批次開始時，稽核用的主機資料以同一次讀取取得，每台結果仍在完成時各自寫入。
 - 解鎖後，未加密的 `hosts.db`、`hosts.json` 與結構升級時留下的 `hosts.v<N>.bak.db` 依序逐一列出，每個檔案都要確認其完整路徑後才刪除。
@@ -163,7 +163,7 @@ cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 
 UI 測試在 `app/src/ui/tests.rs`：狀態邏輯測試，加上以 `i-slint-backend-testing` 送出實際指標與鍵盤事件的畫面測試（需要 debug 建置保留元件名稱，`app/build.rs` 已設定）。這個測試後端由整個程序共用，所以畫面測試集中在同一個測試函式 `pages_respond_to_clicks`。
 
-Rust 整合測試在 loopback 啟動測試 SSH 伺服器，驗證密碼／私鑰、指紋、PTY、sudo、系統偵測、APT 與 DNF 檢查／升級、套件管理器不符與混合批次阻擋，不接觸真實遠端主機。
+Rust 整合測試在 loopback 啟動測試 SSH 伺服器，驗證密碼／私鑰、指紋、PTY、sudo、系統偵測、APT 與 DNF 檢查／升級、套件管理器不符與混合批次阻擋，以及互動 shell（回顯、視窗大小、結束、輸出流量控制），不接觸真實遠端主機。
 
 LUKSbox 測試使用暫存資料，涵蓋未建立容器時拒絕主機操作且不寫出明文檔、新密碼長度與字元種類規則、明文保留、確認刪除與路徑限制、鎖定後拒絕操作、錯誤密碼、多 keyslot、重新啟動、加密備份、縮短資料、密文損壞及並行開啟阻擋。Passkey 核心流程由模擬驗證器測試，未代替實體 Windows Hello／USB 裝置驗證。
 

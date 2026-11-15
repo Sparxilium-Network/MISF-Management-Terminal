@@ -1,6 +1,6 @@
 # MISF Management Terminal 架構
 
-> 最後修改：2026-11-16 ｜ 基於 commit：`0ac559b`
+> 最後修改：2026-11-16 ｜ 基於 commit：`ea4c9a9`
 
 > [!WARNING]
 > **本專案仍處於開發階段，請勿用於正式環境。** 相關安全保護機制尚未完善。
@@ -8,6 +8,16 @@
 > 目前只有 **APT**（Debian／Ubuntu）在真實主機上測試過。DNF、YUM、pkg 等其他功能只通過 loopback 模擬伺服器的自動測試，不保證可用或安全。
 
 本文件描述目前的實作；每個 `.rs` 檔案的職責見 [原始碼檔案說明](PROJECT-DEV-ARCH.md)。建置、慣例與測試指令見 [開發說明](PROJECT-DEV.md)，加密容器的取捨見 [LUKSbox 加密儲存設計](luksbox-design.md)。
+
+## 目標
+
+讓使用者在 MISF 內就能處理大多數更新作業，不需要另外開 shell：
+
+- **常見作業用固定命令**：系統偵測、檢查更新、升級、APT dist-upgrade、重啟提示與重新開機，都是寫死在程式裡的命令，執行前在確認視窗顯示實際命令與風險，結果存進主機庫，可單台或批次執行。
+- **看得到遠端在做什麼**：這些作業的命令與輸出即時顯示在底部的終端機面板，每台主機一個分頁，密碼先遮蔽。
+- **其餘情況用內建的互動 shell**：固定命令處理不了的情況（例如 dpkg 中斷後要 `dpkg --configure -a`、要用 `nano` 改設定檔、看服務狀態），在終端機對單一主機開互動 shell，沿用 MISF 已保存的主機指紋與憑證，不必另外開 SSH 用戶端或終端機程式。
+
+MISF 不打算取代通用的設定管理工具：不支援排程、滾動升級或 Ansible，見[測試與限制](#測試與限制)。
 
 ## 概觀
 
@@ -34,6 +44,7 @@ flowchart LR
 | `app/src/preferences.rs` | 未加密的 `ui-settings.json`（語言、外觀、介面字型、清單與批次表格偏好、自動鎖定分鐘數） |
 | `app/src/i18n.rs`、`app/locales/` | 內嵌的 zh-tw／en-us 語系，以穩定 key 與命名參數取字 |
 | `app/src/theme.rs` | 淺色／深色／跟隨系統的外觀選項（配色在 `app/ui/theme.slint`） |
+| `app/src/ui/terminal.rs`、`app/src/ui/remote_shell.rs` | 底部終端機面板：操作輸出分頁、互動 shell 分頁與其終端機模擬（`vt100`） |
 | `core/src/lib.rs` | 主機請求的分派（下表） |
 | `core/src/batch.rs` | 批次作業：並行、逐台儲存與回報、失敗時暫停詢問 |
 | `core/src/reboot.rs` | 重新開機：固定命令 `shutdown -r +1`，只限 APT 主機 |
@@ -42,6 +53,8 @@ flowchart LR
 | `core/src/passkey.rs`、`core/src/windows_passkey.rs` | FIDO2／Windows WebAuthn 解鎖 |
 | `core/src/store.rs`、`core/src/sqlite.rs`、`core/src/db_upgrade/` | 資料模型的讀寫、SQLite 強化與結構遷移 |
 | `core/src/ssh.rs`、`core/src/transcript.rs` | SSH 傳輸：主機指紋、認證、執行單一命令（含 sudo 提示）、測試連線；輸出清理與 `heading` 區段標題框 |
+| `core/src/console.rs` | 即時遠端輸出：把執行中命令的輸出切成行、遮蔽密碼後交給終端機面板 |
+| `core/src/shell.rs` | 互動 shell：開 PTY 與 login shell，在背景雙向搬運位元組，含流量控制 |
 | `core/src/package_manager/` | 套件管理：`mod.rs`（`Manager` 與分派）、`detect.rs`（系統偵測）、`operation.rs`（檢查／升級／dist-upgrade 流程）、`apt.rs`、`dnf.rs`、`yum.rs`、`pkg.rs`（各自的固定命令、失敗判斷與解析）、`rpm.rs`（DNF／YUM 共用的清單解析） |
 | `core/src/model.rs` | `Host`、`SshKey`、`HostGroup`、`CheckResult`、`UpgradePlan`、`RestartStatus`、`ConnectionTest` |
 | `core/src/audit.rs`、`core/src/runtime.rs` | 操作日誌；資料目錄與 `--debug.*` 參數 |
@@ -52,7 +65,7 @@ UI 與 CLI 都送出 `{"action": …}` JSON 給 `Session::handle`。CLI 從 stdi
 
 - **儲存**：`storage_status`、`vault_create`、`vault_unlock`、`vault_unlock_passkey`、`vault_lock`、`vault_upgrade`、`vault_upgrade_cancel`、`vault_add_key`、`vault_add_passkey`、`vault_rename_key`、`vault_revoke_key`、`vault_backup`、`vault_delete_plaintext`。
 - **主機資料**（需已解鎖）：`list`、`save`、`delete`、`convert_storage`、`key_add`、`key_delete`、`group_add`、`group_rename`、`group_collapse`、`group_delete`、`arrange`。
-- **遠端**：`probe`、`trust`、`test`、`check`、`upgrade`、`dist_upgrade`、`batch`、`reboot`。
+- **遠端**：`probe`、`trust`、`test`、`check`、`upgrade`、`dist_upgrade`、`batch`、`reboot`、`shell_open`（只有 GUI 使用；shell 開啟後的按鍵與輸出不經請求協定，見[終端機與互動 shell](#終端機與互動-shell)）。
 
 ## 主機、金鑰與分類
 
@@ -107,6 +120,28 @@ UI 與 CLI 都送出 `{"action": …}` JSON 給 `Session::handle`。CLI 從 stdi
 每台主機一完成就寫回主機庫，再透過 `batch::Observer::finished` 回報；中途關閉程式也保留已完成的主機。某台結果不是 `success`（含工作異常結束，記為失敗）時呼叫 `Observer::failed`，在得到 `Decision` 之前不開始新主機，但已在執行的主機繼續跑完並照常儲存與回報；等待期間的其他失敗排隊依序詢問。`Abort` 後不再開始任何主機，已在執行的不會中途停止（可能正在安裝套件），回應的 `skipped` 列出未執行的主機 ID，稽核日誌記為 `cancelled`。某台結果無法儲存時同樣停止開始新主機，等執行中的跑完後回傳錯誤。
 
 GUI 的 worker 把 `finished` 轉成即時更新表格列、把 `failed` 轉成無法略過的視窗（「中斷批次作業」／「繼續其他主機」）；視窗關閉或程式結束時視為中斷。CLI 與 `dispatch` 使用 `batch::Unattended`：不回報、遇到失敗一律繼續。UI 依套件管理器分組，只能勾選同一組中已確認指紋的主機；升級前顯示主機清單、實際命令與風險，並要求勾選確認。
+
+## 終端機與互動 shell
+
+### 操作輸出
+
+檢查、升級、dist-upgrade 與重新開機執行時，`ssh::execute` 把每段輸出交給 `console::Echo`：
+
+- `Lines` 收到行尾（`\n`，或進度列用的 `\r`；跨兩段的 `\r\n` 只算一次）才送出整行，所以 ANSI 序列、UTF-8 字元與密碼不會被切開。
+- 送出前移除終端控制字元，並把該主機的密碼、sudo 密碼、私鑰密語與私鑰各行換成「[已隱藏]」。
+- 單行上限 8 KiB（`LINE_LIMIT`）：超過時只顯示開頭並標示截斷，其餘丟棄到下一個行尾；截斷點附近的密碼片段一定一起丟掉。存進主機庫的完整輸出不受影響。
+- sudo 提示以 `ssh::count_prompts` 增量計數，不重複掃描整個輸出緩衝區。
+
+UI 每台主機一個分頁，最多保留約 10,000 行；終端機只保存在記憶體，鎖定時清除。
+
+### 互動 shell
+
+- **開啟**：`shell_open` 與其他遠端操作走相同的指紋核對、認證與 debug 限制，開 `xterm-256color` PTY 與 login shell，等到伺服器回覆兩個請求都成功才算開啟。開啟不另外確認。
+- **輸入與輸出**：開啟後的按鍵、貼上、視窗大小與關閉經 `shell::Shells` 直接送進 shell，不經請求佇列；遠端輸出以 `Event::ShellOutput` 交給 UI，由 `vt100` 模擬畫面。MISF 不記錄輸入與輸出，稽核只記 `shell_open`、`shell_close`。
+- **與固定命令的關係**：檢查、升級等操作執行中，shell 暫停輸入，避免與 MISF 的命令同時改動主機。在 shell 中的操作不會更新主機庫裡的結果，需要重新檢查。
+- **流量控制**：每個 shell 未畫出的輸出超過 1 MiB（`WINDOW`）時 core 停止讀取 channel，讓 SSH 視窗擋住遠端；UI 每輪最多處理固定數量的事件，其餘以計時器接續。關閉要求可以中斷卡住的寫入。
+- **結束**：遠端結束、使用者關閉分頁、鎖定（含自動鎖定）、關閉程式（先詢問）都會結束 shell。終端機模擬器解析或繪製出錯時，只讓該 shell 失敗並關閉遠端連線。
+- **限制**：不支援中文輸入法與滑鼠選取；終端機內容不先 zeroize（`vt100` 的內部資料無法逐格抹除，與過往操作一致）。
 
 ## 本機儲存
 
@@ -166,11 +201,15 @@ Passkey 只使用 `Fido2HmacSecret` 包裝槽。Windows 透過 `windows_passkey.
 
 ## 介面與背景工作
 
-UI 把請求放入工作佇列，由背景執行緒與 Tokio runtime 執行 SSH 與磁碟操作，期間停用衝突操作。關閉程式會結束本機連線，但不能保證中止遠端已開始的套件程序。「設定」視窗以左側分類樹集中語言、外觀、偏好（再分為外觀與主機清單、安全性、批次作業）與 LUKSbox 管理，並顯示程式版本（Cargo 套件版本）、主機庫格式與結構版本；容器內仍為 JSON 時提供「轉換為 SQLite 資料庫」（`convert_storage`）。偏好存在 `ui-settings.json`，以暫存檔原子替換，主機庫鎖定時也能讀寫。自動鎖定（`auto_lock_minutes`，1～1440；設定檔沒有這個鍵時預設 15 分鐘，選「永不」存為 null）由 UI 計算閒置時間：滑鼠、鍵盤、捲動、貼上等使用者輸入與互動 shell 的輸出會重新計時，worker 忙碌時也重新計時以免中斷作業；時間到時 UI 先結束互動 shell（記 `shell_close`）、清除主機快取、終端機與相關視窗，再送出 `vault_lock`（core 也會關閉所有 shell），稽核記為 `vault_auto_lock`。互動 shell 的輸出有流量控制：每個 shell 未畫出的輸出超過 1 MiB 時 core 停止讀取 channel，讓 SSH 視窗擋住遠端；UI 每輪最多處理固定數量的事件，其餘以計時器接續。
+UI 把請求放入工作佇列，由背景執行緒與 Tokio runtime 執行 SSH 與磁碟操作，期間停用衝突操作。關閉程式會結束本機連線，但不能保證中止遠端已開始的套件程序。「設定」視窗以左側分類樹集中語言、外觀、偏好（再分為外觀與主機清單、安全性、批次作業）與 LUKSbox 管理，並顯示程式版本（Cargo 套件版本）、主機庫格式與結構版本；容器內仍為 JSON 時提供「轉換為 SQLite 資料庫」（`convert_storage`）。偏好存在 `ui-settings.json`，以暫存檔原子替換，主機庫鎖定時也能讀寫。自動鎖定（`auto_lock_minutes`，1～1440；設定檔沒有這個鍵時預設 15 分鐘，選「永不」存為 null）由 UI 計算閒置時間：滑鼠、鍵盤、捲動、貼上等使用者輸入與互動 shell 的輸出會重新計時，worker 忙碌時也重新計時以免中斷作業；所以開著持續輸出的程式（`top`、`tail -f`）時不會自動鎖定，使用指南有說明。時間到時 UI 先結束互動 shell（記 `shell_close`）、清除主機快取、終端機與相關視窗，再送出 `vault_lock`（core 也會關閉所有 shell），稽核記為 `vault_auto_lock`。
+
+主視窗不使用系統標題列（`no-frame`），最上方由 `app/ui/title_bar.slint` 自繪：選單式命令、最小化／最大化／關閉；拖曳移動與邊緣縮放交給 winit 的 `drag_window`／`drag_resize_window`，關閉按鈕送出與系統關閉相同的 `CloseRequested`。頁面下方的工具視窗（終端機、過往操作）由左側細直條切換，共用高度；工具視窗開啟時主機頁與批次頁可捲動。
 
 ## 測試與限制
 
-- 整合測試在 loopback 啟動測試 SSH 伺服器，涵蓋密碼／私鑰、指紋、連線資訊、PTY、拆包的 sudo 提示、系統偵測、APT 與 DNF 檢查／升級、套件管理器不符、混合批次、失敗處理與儲存流程；不接觸真實主機。
+- 整合測試在 loopback 啟動測試 SSH 伺服器，涵蓋密碼／私鑰、指紋、連線資訊、PTY、拆包的 sudo 提示、系統偵測、APT 與 DNF 檢查／升級、套件管理器不符、混合批次、失敗處理、儲存流程，以及互動 shell 的回顯、視窗大小、結束與流量控制；不接觸真實主機。
+- 互動 shell 只在 loopback 測試伺服器上測過，尚未在真實主機上實測 `nano`、`top` 等全螢幕程式。
 - 儲存測試涵蓋未建立容器時拒絕、轉入保留原檔、鎖定與錯誤密碼、多金鑰槽、備份、密文篡改、並行開啟、WAL 與結構竄改拒絕。Passkey 以模擬驗證器測試，實體裝置依 [Passkey 實體測試](passkey-testing.md) 驗證。
 - 實機只測試過 APT；YUM 與 pkg 只有輸出解析的單元測試。
-- 除了需逐次確認的 APT `dist-upgrade` 外，不支援 full-upgrade 類操作；MISF 自己執行的仍只有固定命令，但終端機可對單一主機開互動 shell（使用者自行輸入，不經 MISF 確認，不記錄輸入與輸出，稽核只記開啟與結束）；不支援排程、滾動升級或 Ansible；沒有原地改密碼、主金鑰輪替或 TPM。
+- 除了需逐次確認的 APT `dist-upgrade` 外，不支援 full-upgrade 類操作；MISF 自己執行的仍只有固定命令，其餘交給互動 shell（使用者自行輸入，不經 MISF 確認，不記錄輸入與輸出，稽核只記開啟與結束）。
+- 不支援排程、滾動升級或 Ansible；沒有原地改密碼、主金鑰輪替或 TPM。

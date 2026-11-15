@@ -1,6 +1,6 @@
 # 使用指南
 
-> 最後修改：2026-11-15 ｜ 基於 commit：`d3f9ecc`
+> 最後修改：2026-11-16 ｜ 基於 commit：`ea4c9a9`
 
 > [!WARNING]
 > 目前只有 **APT**（Debian／Ubuntu）在真實主機上測試過；DNF、YUM、pkg 等其他功能不保證可用或安全。
