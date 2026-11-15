@@ -2,7 +2,7 @@
 
 use super::{
     App, AppWindow, BatchState, CloseState, HostState, SettingsState, SettingsWindow, VaultState,
-    app::{SettingsPage, VaultMode, View},
+    app::{SettingsPage, Tool, VaultMode, View},
     build,
     format::{connection_rows, copied_commands},
     host_page::Advanced,
@@ -417,13 +417,14 @@ fn status_history_keeps_results_and_errors_but_not_progress() {
             .expect("no history toggle")
     };
     toggle().invoke_accessible_default_action();
-    assert!(ctx.app.borrow().history_open);
+    assert_eq!(ctx.app.borrow().tool, Some(Tool::History));
+    assert_eq!(main.global::<super::ToolWindow>().get_open(), 2);
     let shown = main.global::<super::Shell>().get_history();
     assert_eq!(shown.row_count(), 2);
     let newest = shown.row_data(0).unwrap();
     assert!(newest.error && newest.text == "SSH timed out");
     toggle().invoke_accessible_default_action();
-    assert!(!ctx.app.borrow().history_open);
+    assert_eq!(ctx.app.borrow().tool, None);
 
     // It names hosts, so locking the vault clears it.
     ctx.update(|app| app.received("vault_lock", json!({"encrypted":true,"locked":true})));
@@ -1281,6 +1282,7 @@ fn the_terminal_shows_each_hosts_output_live_in_its_own_tab() {
     let t = app.t();
     let (ctx, main, _settings) = build(app, true).unwrap();
     let state = main.global::<super::TerminalState>();
+    let tools = main.global::<super::ToolWindow>();
     let lines = || -> Vec<(String, bool)> {
         (state.get_lines().iter())
             .map(|line| (line.text.to_string(), line.command))
@@ -1296,14 +1298,24 @@ fn the_terminal_shows_each_hosts_output_live_in_its_own_tab() {
             })
             .unwrap();
     };
-    // Nothing has run yet: no panel.
+    // Nothing has run yet: no tool window open, and the terminal would say so.
     assert!(!state.get_shown());
+    assert_eq!(tools.get_open(), 0);
+    tools.invoke_chosen(1);
+    assert_eq!(tools.get_open(), 1);
+    tools.invoke_chosen(1);
+    assert_eq!(tools.get_open(), 0);
+    // The history is the other tool window; only one is open at a time.
+    tools.invoke_chosen(2);
+    assert_eq!(tools.get_open(), 2);
 
     // A batch opens one tab per host, in order, all waiting.
     ctx.update(|app| {
         app.send(json!({"action":"batch","operation":"upgrade","ids":["a","b","c","a"]}))
     });
-    assert!(state.get_shown() && state.get_open());
+    // It switches the tool window to the terminal.
+    assert!(state.get_shown());
+    assert_eq!(tools.get_open(), 1);
     let names: Vec<String> = state
         .get_tabs()
         .iter()
@@ -1386,13 +1398,14 @@ fn the_terminal_shows_each_hosts_output_live_in_its_own_tab() {
     // Work that reaches no host leaves the last run in place; the panel folds away.
     ctx.update(|app| app.send(json!({"action":"list"})));
     assert_eq!(states(), [2, 3, 4]);
-    state.invoke_toggle();
-    assert!(!state.get_open() && state.get_shown());
+    tools.invoke_chosen(0);
+    assert_eq!(tools.get_open(), 0);
+    assert!(state.get_shown());
 
     // A single-host run replaces it and settles from its result; old lines are dropped
     // in steps so a long run stays bounded.
     ctx.update(|app| app.send(json!({"action":"check","id":"c"})));
-    assert!(state.get_open());
+    assert_eq!(tools.get_open(), 1);
     let long: String = (0..super::terminal::MAX_LINES + 10)
         .map(|n| format!("line {n}\n"))
         .collect();

@@ -158,6 +158,32 @@ pub struct BatchFailure {
     pub error: String,
 }
 
+/// A tool window under the pages, like an IDE's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tool {
+    Terminal,
+    History,
+}
+
+impl Tool {
+    /// Its index in the Slint `ToolWindow.open`; 0 is none.
+    pub fn index(tool: Option<Self>) -> i32 {
+        match tool {
+            None => 0,
+            Some(Self::Terminal) => 1,
+            Some(Self::History) => 2,
+        }
+    }
+
+    pub fn from_index(index: i32) -> Option<Self> {
+        match index {
+            1 => Some(Self::Terminal),
+            2 => Some(Self::History),
+            _ => None,
+        }
+    }
+}
+
 pub struct TrustDialog {
     pub host_id: String,
     pub address: String,
@@ -245,7 +271,8 @@ pub struct App {
     /// since they name hosts.
     pub history: VecDeque<HistoryEntry>,
     /// Whether the status line is expanded to show [`Self::history`].
-    pub history_open: bool,
+    /// The tool window open under the pages, chosen from the stripe on the left.
+    pub tool: Option<Tool>,
     pub error: Option<String>,
     pub editor: Option<Editor>,
     pub delete_id: Option<String>,
@@ -326,7 +353,7 @@ impl App {
             busy: false,
             status: String::new(),
             history: VecDeque::new(),
-            history_open: false,
+            tool: None,
             error: loaded.err().map(|error| {
                 Translator(preferences.language).format("settings.load_error", &[("error", error)])
             }),
@@ -435,11 +462,21 @@ impl App {
                 .collect();
             let action = request["action"].as_str().unwrap_or_default();
             self.terminal.start(action, hosts);
+            self.tool = Some(Tool::Terminal);
         }
         if self.worker.requests.send(request).is_err() {
             self.busy = false;
             self.error = Some(t.get("status.worker_ended").into());
         }
+    }
+
+    /// Opens `tool`, or closes it when it is already open.
+    pub fn toggle_tool(&mut self, tool: Tool) {
+        self.tool = if self.tool == Some(tool) {
+            None
+        } else {
+            Some(tool)
+        };
     }
 
     /// The worker panicked or ended mid-request. Nothing more will answer, so stop

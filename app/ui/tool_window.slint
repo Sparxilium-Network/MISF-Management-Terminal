@@ -1,0 +1,145 @@
+// IDE-style tool windows: a stripe of icon buttons down the left edge, and one panel at a
+// time under the pages (the terminal or the past results), sharing one height.
+import { Theme, T } from "theme.slint";
+import { HintArea } from "widgets.slint";
+
+export global ToolWindow {
+    // 0 none, 1 the terminal, 2 the past results.
+    in property <int> open;
+    // Set from the saved preference once, then by dragging; `resized` saves it.
+    in-out property <length> body-height: 240px;
+    // Opens a tool window, or closes it when it is the one open.
+    callback chosen(tool: int);
+    callback resized(height: length);
+}
+
+component StripeButton inherits Rectangle {
+    in property <int> tool;
+    in property <string> label;
+    // A 20×20 drawing, stroked.
+    in property <string> icon;
+    property <bool> selected: ToolWindow.open == root.tool;
+    width: 30px;
+    height: 30px;
+    border-radius: 6px;
+    background: root.selected ? Theme.blue
+        : touch.has-hover ? Theme.selection.with-alpha(0.55) : transparent;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-expandable: true;
+    accessible-expanded: root.selected;
+    accessible-action-default => { ToolWindow.chosen(root.tool); }
+    HintArea {
+        width: parent.width;
+        height: parent.height;
+        plain: root.label;
+        delay: 0.5s;
+        touch := TouchArea {
+            mouse-cursor: pointer;
+            clicked => { ToolWindow.chosen(root.tool); }
+        }
+    }
+    Path {
+        x: 5px;
+        y: 5px;
+        width: 20px;
+        height: 20px;
+        viewbox-width: 20;
+        viewbox-height: 20;
+        commands: root.icon;
+        stroke: root.selected ? #ffffff : touch.has-hover ? Theme.ink : Theme.muted;
+        stroke-width: 1.6px;
+    }
+}
+
+// The narrow stripe at the window's left edge; its buttons sit at the bottom.
+export component ToolStripe inherits Rectangle {
+    width: 40px;
+    background: Theme.surface;
+    Rectangle {
+        x: parent.width - 1px;
+        width: 1px;
+        background: Theme.border;
+    }
+    VerticalLayout {
+        alignment: end;
+        padding: 5px;
+        padding-bottom: 8px;
+        spacing: 6px;
+        StripeButton {
+            tool: 1;
+            label: T.get("terminal.title");
+            // A window with a prompt and a cursor.
+            icon: "M 2.5 3.5 L 17.5 3.5 L 17.5 16.5 L 2.5 16.5 Z M 5.5 7.5 L 8.5 10 L 5.5 12.5 M 10 13 L 14.5 13";
+        }
+        StripeButton {
+            tool: 2;
+            label: T.get("status.history");
+            // A clock.
+            icon: "M 10 2.5 A 7.5 7.5 0 1 1 9.99 2.5 M 10 6 L 10 10 L 13 12";
+        }
+    }
+}
+
+// The top edge of an open tool window: drag it to change the height.
+export component DockHandle inherits Rectangle {
+    // The tallest a drag may make the body, so the pages above keep their room. Read only
+    // while dragging: a binding on the window's height would loop through its layout.
+    in property <length> max-body-height;
+    height: 5px;
+    background: handle.has-hover || handle.pressed ? Theme.blue.with-alpha(0.6) : Theme.border;
+    handle := TouchArea {
+        mouse-cursor: ns-resize;
+        moved => {
+            if (self.pressed) {
+                ToolWindow.body-height = max(80px, min(root.max-body-height, ToolWindow.body-height - (self.mouse-y - self.pressed-y)));
+            }
+        }
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.up) {
+                ToolWindow.resized(ToolWindow.body-height);
+            }
+        }
+    }
+}
+
+// The title of a tool window and its hide button; anything else goes between them.
+export component DockTitle inherits HorizontalLayout {
+    in property <string> title;
+    height: 36px;
+    padding-left: 12px;
+    padding-right: 6px;
+    spacing: 6px;
+    Text {
+        text: root.title;
+        font-size: 12px;
+        font-weight: 700;
+        color: Theme.ink;
+        vertical-alignment: center;
+    }
+    @children
+    hide := TouchArea {
+        width: 28px;
+        mouse-cursor: pointer;
+        accessible-role: button;
+        accessible-label: T.get("tool.hide");
+        accessible-action-default => { ToolWindow.chosen(0); }
+        clicked => { ToolWindow.chosen(0); }
+        Rectangle {
+            width: 24px;
+            height: 24px;
+            border-radius: 4px;
+            background: hide.has-hover ? Theme.selection.with-alpha(0.55) : transparent;
+            // A minus, like an IDE's hide button.
+            Path {
+                width: 12px;
+                height: 12px;
+                viewbox-width: 12;
+                viewbox-height: 12;
+                commands: "M 1 6 L 11 6";
+                stroke: hide.has-hover ? Theme.ink : Theme.muted;
+                stroke-width: 1.6px;
+            }
+        }
+    }
+}

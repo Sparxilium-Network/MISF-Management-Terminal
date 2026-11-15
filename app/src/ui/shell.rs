@@ -2,7 +2,7 @@
 
 use super::{
     App, AppWindow, CloseState, Ctx, HistoryLine, Shell,
-    app::{VaultMode, View},
+    app::{Tool, VaultMode, View},
 };
 use serde_json::json;
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
@@ -12,7 +12,7 @@ pub fn push(app: &mut App, w: &AppWindow) {
     let shell = w.global::<Shell>();
     shell.set_busy(app.busy);
     shell.set_status(app.status.clone().into());
-    shell.set_history_open(app.history_open);
+    shell.set_history_open(app.tool == Some(Tool::History));
     // Nothing left to interrupt: the question no longer applies.
     if !app.busy {
         app.close_prompt = false;
@@ -74,7 +74,7 @@ pub fn wire(ctx: &Ctx, w: &AppWindow) {
     let c = ctx.clone();
     shell.on_review_plaintext(move || c.update(App::check_plaintext_copy));
     let c = ctx.clone();
-    shell.on_history_toggled(move || c.update(|app| app.history_open = !app.history_open));
+    shell.on_history_toggled(move || c.update(|app| app.toggle_tool(Tool::History)));
     let c = ctx.clone();
     shell.on_view_chosen(move |view| {
         c.update(|app| {

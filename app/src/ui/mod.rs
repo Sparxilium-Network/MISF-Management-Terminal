@@ -342,6 +342,7 @@ fn sample_terminal(app: &mut App) {
     let t = app.t();
     let hosts = ["web", "db", "misc"].map(|id| (id.to_owned(), app.host_name(id)));
     app.terminal.start("batch", hosts.to_vec());
+    app.tool = Some(app::Tool::Terminal);
     let update =
         "sudo -S -p '__MISF_SUDO_PROMPT__' -- env DEBIAN_FRONTEND=noninteractive apt-get update";
     for (id, _) in &hosts {
@@ -386,7 +387,7 @@ fn sample_history(app: &mut App) {
     app.note_error();
     app.error = None;
     app.set_host_status(t.get("status.upgrade_done"));
-    app.history_open = true;
+    app.tool = Some(app::Tool::History);
 }
 
 /// Opens the advanced menu and, over its first item, the copy menu a right-click shows.

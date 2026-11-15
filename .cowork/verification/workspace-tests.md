@@ -1,5 +1,13 @@
 # 全工作區檢查結果
 
+## 2026-11-15（IDE 式工具列：終端機與過往操作，分支 `feat/WYSIWYG-Terminal`，基於 `76a2e60`）
+
+- 使用者要求：終端機與「過往操作」（使用者稱稽核紀錄，確認是指狀態列的過往操作）做成 JetBrains 左側圖示直條的樣式。使用者選擇：直條在視窗最左側、兩者共用頁面下方同一區塊且一次一個、終端機圖示一直顯示（沒有內容時顯示提示）。
+- 新增 `tool_window.slint`（`ToolWindow`、`ToolStripe`、`DockHandle`、`DockTitle`）。`App::history_open` 與終端機自己的開關合併為 `App::tool: Option<Tool>`；操作開始時切到終端機，狀態列點擊開關過往操作。過往操作從浮在頁面上改為停靠在頁面下方。偏好設定的高度改為共用的 `tool_height`（`terminal_height` 只存在於這個未合併的分支，不做轉換）。
+- 測試：UI 測試改為檢查 `ToolWindow.open`（互斥、再點收合、操作開始切到終端機、狀態列切換過往操作）。`cargo test --workspace`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo fmt` 通過。
+- 截圖：`MISF_OPEN_TERMINAL=1`（批次頁＋終端機）與 `MISF_OPEN_HISTORY=1`（主機頁＋過往操作）在 1280×820 下正常；未開啟工具視窗時直條只有兩個圖示。
+- 未驗證：滑鼠停留在圖示上的提示、實際拖曳高度的手感。
+
 ## 2026-11-15（底部即時終端機面板，分支 `feat/WYSIWYG-Terminal`，基於 `47a9b18`）
 
 - 使用者要求：執行過程在下方顯示模擬終端機，參考 JetBrains IDE 的佈局。使用者選擇：即時遠端輸出（唯讀）、批次每台一個分頁、操作開始自動展開且結束後保留（可收合、可拖曳高度並記住）、顯示實際下的遠端命令。

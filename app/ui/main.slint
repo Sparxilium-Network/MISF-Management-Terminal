@@ -17,56 +17,57 @@ import { UpgradeDialog, UpgradeState, KeptBackDialog, KeptBackState, RebootDialo
 import { TrustDialog, TrustState, DeleteDialog, DeleteState, GroupDialog, GroupState, PlaintextDialog, PlaintextState, SchemaDialog, SchemaState, CloseDialog, CloseState, ErrorDialog, ErrorState } from "dialogs/simple.slint";
 import { SettingsWindow, SettingsState, TreeRow, ColumnToggle } from "settings.slint";
 import { TerminalPanel, TerminalState, TerminalTab, TerminalLine } from "terminal.slint";
+import { ToolWindow, ToolStripe, DockHandle, DockTitle } from "tool_window.slint";
 
-export { HintData, Theme, T, Tip, Clip, MenuLine, PopMenu, Shell, HistoryLine, SidebarState, SidebarRow, HostState, ResultState, InfoLine, BatchState, ManagerChoice, BatchColumnView, BatchCell, BatchRowView, EditorState, KeysState, KeyView, VaultState, SlotView, UpgradeState, KeptBackState, RebootState, BatchFailureState, TrustState, DeleteState, GroupState, PlaintextState, SchemaState, CloseState, ErrorState, SettingsWindow, SettingsState, TreeRow, ColumnToggle, TerminalState, TerminalTab, TerminalLine }
+export { HintData, Theme, T, Tip, Clip, MenuLine, PopMenu, Shell, HistoryLine, SidebarState, SidebarRow, HostState, ResultState, InfoLine, BatchState, ManagerChoice, BatchColumnView, BatchCell, BatchRowView, EditorState, KeysState, KeyView, VaultState, SlotView, UpgradeState, KeptBackState, RebootState, BatchFailureState, TrustState, DeleteState, GroupState, PlaintextState, SchemaState, CloseState, ErrorState, SettingsWindow, SettingsState, TreeRow, ColumnToggle, TerminalState, TerminalTab, TerminalLine, ToolWindow }
 
-// This run's past results and errors, newest first, shown over the bottom of the page
-// above the status line, so the pages keep their size.
+// This run's past results and errors, newest first: the history tool window.
 component HistoryPanel inherits Rectangle {
+    in property <length> max-body-height;
     background: Theme.surface;
-    border-color: Theme.border;
-    border-width: 1px;
-    drop-shadow-blur: 12px;
-    drop-shadow-color: #00000050;
-    height: body.preferred-height;
-    // Swallows clicks so they never reach the page below.
-    TouchArea { }
-    body := VerticalLayout {
-        padding: 12px;
-        spacing: 6px;
-        Text {
-            text: T.get("status.history");
-            font-size: 12px;
-            font-weight: 700;
-            color: Theme.ink;
+    VerticalLayout {
+        DockHandle {
+            max-body-height: root.max-body-height;
         }
-        if Shell.history.length == 0: Text {
-            text: T.get("status.history_empty");
-            font-size: 12px;
-            color: Theme.muted;
+        DockTitle {
+            title: T.get("status.history");
+            Rectangle {
+                horizontal-stretch: 1;
+            }
         }
-        if Shell.history.length > 0: ScrollView {
-            min-height: min(200px, lines.preferred-height);
-            max-height: 200px;
-            preferred-height: lines.preferred-height;
-            content-height: lines.preferred-height;
-            content-width: self.visible-width;
-            lines := VerticalLayout {
-                width: parent.width - 14px;
-                spacing: 4px;
-                for entry in Shell.history: HorizontalLayout {
-                    spacing: 10px;
-                    Text {
-                        text: entry.time;
-                        font-family: Theme.mono-font;
-                        font-size: 12px;
-                        color: Theme.muted;
-                    }
-                    Body {
-                        text: entry.text;
-                        font-size: 12px;
-                        color: entry.error ? Theme.error : Theme.ink;
-                        horizontal-stretch: 1;
+        Rectangle {
+            height: max(80px, ToolWindow.body-height);
+            background: Theme.background;
+            border-color: Theme.border;
+            border-width: 1px;
+            if Shell.history.length == 0: Text {
+                x: 12px;
+                y: 10px;
+                text: T.get("status.history_empty");
+                font-size: 12px;
+                color: Theme.muted;
+            }
+            if Shell.history.length > 0: ScrollView {
+                content-height: lines.preferred-height;
+                content-width: self.visible-width;
+                lines := VerticalLayout {
+                    width: parent.width - 14px;
+                    padding: 10px;
+                    spacing: 4px;
+                    for entry in Shell.history: HorizontalLayout {
+                        spacing: 10px;
+                        Text {
+                            text: entry.time;
+                            font-family: Theme.mono-font;
+                            font-size: 12px;
+                            color: Theme.muted;
+                        }
+                        Body {
+                            text: entry.text;
+                            font-size: 12px;
+                            color: entry.error ? Theme.error : Theme.ink;
+                            horizontal-stretch: 1;
+                        }
                     }
                 }
             }
@@ -279,13 +280,12 @@ export component AppWindow inherits Window {
     default-font-size: 14px;
     default-font-family: Theme.font-family;
     default-font-weight: Theme.font-weight;
-    // The terminal body's tallest height, leaving the pages at least 420px. Applied when
+    // The tool window body's tallest height, leaving the pages at least 420px. Applied when
     // the window changes size, not bound, since the window's height follows its layout.
-    property <length> terminal-limit: max(80px, self.height - 420px);
-    function fit-terminal() {
-        TerminalState.body-height = min(TerminalState.body-height, self.terminal-limit);
+    property <length> tool-limit: max(80px, self.height - 420px);
+    changed height => {
+        ToolWindow.body-height = min(ToolWindow.body-height, self.tool-limit);
     }
-    changed height => { self.fit-terminal(); }
     AppearanceSync { }
     ClipboardSink { }
     // Runs a chosen right-click menu line.
@@ -304,26 +304,35 @@ export component AppWindow inherits Window {
     }
     VerticalLayout {
         TopBar { }
-        // The terminal takes its height from here: the pages may be shorter than they
-        // would like, and are clipped at the bottom rather than pushing the status line
-        // out of the window.
-        Rectangle {
+        HorizontalLayout {
             vertical-stretch: 1;
-            min-height: 200px;
-            clip: true;
-            HorizontalLayout {
-                Sidebar {
-                    width: 280px;
-                    busy: Shell.busy;
+            ToolStripe { }
+            VerticalLayout {
+                // The open tool window takes its height from here: the pages may be shorter
+                // than they would like, and are clipped at the bottom rather than pushing
+                // the status line out of the window.
+                Rectangle {
+                    vertical-stretch: 1;
+                    min-height: 200px;
+                    clip: true;
+                    HorizontalLayout {
+                        Sidebar {
+                            width: 280px;
+                            busy: Shell.busy;
+                        }
+                        Workspace {
+                            horizontal-stretch: 1;
+                        }
+                    }
                 }
-                Workspace {
-                    horizontal-stretch: 1;
+                // Under the pages and sidebar, like an IDE's tool windows.
+                if ToolWindow.open == 1: TerminalPanel {
+                    max-body-height: root.tool-limit;
+                }
+                if ToolWindow.open == 2: HistoryPanel {
+                    max-body-height: root.tool-limit;
                 }
             }
-        }
-        // Under the pages and sidebar, like an IDE's terminal.
-        if TerminalState.shown: TerminalPanel {
-            max-body-height: root.terminal-limit;
         }
         status-bar := StatusBar { }
     }
@@ -347,11 +356,6 @@ export component AppWindow inherits Window {
             vertical-stretch: 1;
             min-height: max(160px, root.height - 300px);
         }
-    }
-    if Shell.history-open: HistoryPanel {
-        x: 0;
-        width: root.width;
-        y: root.height - status-bar.height - self.height;
     }
     if EditorState.shown: EditorDialog {
         width: root.width;

@@ -1,7 +1,9 @@
 //! The terminal panel under the pages: each host's remote commands and output as they
 //! run, one tab per host. Read-only; the text is already redacted by the core.
 
-use super::{App, AppWindow, Clip, Ctx, TerminalLine, TerminalState, TerminalTab};
+use super::{
+    App, AppWindow, Clip, Ctx, TerminalLine, TerminalState, TerminalTab, ToolWindow, app::Tool,
+};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use std::rc::Rc;
 
@@ -47,7 +49,6 @@ pub struct Tab {
 pub struct Terminal {
     pub tabs: Vec<Tab>,
     pub current: usize,
-    pub open: bool,
     /// The request whose hosts the tabs show; its `Done` settles them.
     pub action: String,
     /// Bumped whenever shown lines change other than at the end, so the view rebuilds.
@@ -69,7 +70,6 @@ impl Terminal {
             .collect();
         self.action = action.into();
         self.current = 0;
-        self.open = true;
         self.generation += 1;
     }
 
@@ -176,10 +176,10 @@ fn view(line: &Line) -> TerminalLine {
 }
 
 pub fn push(app: &mut App, w: &AppWindow) {
+    w.global::<ToolWindow>().set_open(Tool::index(app.tool));
     let state = w.global::<TerminalState>();
     let terminal = &mut app.terminal;
     state.set_shown(!terminal.tabs.is_empty());
-    state.set_open(terminal.open);
     state.set_current(terminal.current as i32);
     let tabs: Vec<TerminalTab> = (terminal.tabs.iter())
         .map(|tab| TerminalTab {
@@ -220,10 +220,6 @@ pub fn push(app: &mut App, w: &AppWindow) {
 
 pub fn wire(ctx: &Ctx, w: &AppWindow) {
     let state = w.global::<TerminalState>();
-    let height = ctx.app.borrow().preferences.terminal_height;
-    state.set_body_height(height.unwrap_or(crate::preferences::TERMINAL_HEIGHT));
-    let c = ctx.clone();
-    state.on_toggle(move || c.update(|app| app.terminal.open = !app.terminal.open));
     let c = ctx.clone();
     state.on_select(move |index| {
         c.update(|app| {
@@ -231,7 +227,6 @@ pub fn wire(ctx: &Ctx, w: &AppWindow) {
                 && index < app.terminal.tabs.len()
             {
                 app.terminal.current = index;
-                app.terminal.open = true;
             }
         })
     });
@@ -245,10 +240,25 @@ pub fn wire(ctx: &Ctx, w: &AppWindow) {
             clip.set_serial(clip.get_serial() + 1);
         }
     });
+
+    // The stripe of tool buttons and the shared tool window height.
+    let tools = w.global::<ToolWindow>();
+    let height = ctx.app.borrow().preferences.tool_height;
+    tools.set_body_height(height.unwrap_or(crate::preferences::TOOL_HEIGHT));
     let c = ctx.clone();
-    state.on_resized(move |height| {
+    tools.on_chosen(move |index| {
         c.update(|app| {
-            app.preferences.terminal_height = Some(height);
+            if let Some(tool) = Tool::from_index(index) {
+                app.toggle_tool(tool);
+            } else {
+                app.tool = None;
+            }
+        })
+    });
+    let c = ctx.clone();
+    tools.on_resized(move |height| {
+        c.update(|app| {
+            app.preferences.tool_height = Some(height);
             let _ = app.save_preferences();
         })
     });

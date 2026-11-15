@@ -8,6 +8,8 @@
   "terminal.succeeded": "完成",
   "terminal.failed": "失敗",
   "terminal.interrupted": "背景工作意外結束，結果未知",
+  "terminal.empty": "尚未執行任何檢查、升級或重新開機。",
+  "tool.hide": "隱藏",
   "worker.unknown_hosts": "以下主機的升級結果未知，已在主機清單標示為失敗，請逐台登入確認：\n{hosts}",
   "worker.unknown_unsaved": "無法把「結果未知」存入主機庫（{error}）；重新啟動後這些主機會顯示先前的狀態，請先記下上面的名稱。",
   "status.failed": "操作失敗",
