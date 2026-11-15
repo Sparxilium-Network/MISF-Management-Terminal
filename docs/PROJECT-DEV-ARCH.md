@@ -1,6 +1,6 @@
 # 原始碼檔案說明
 
-> 最後修改：2026-11-15 ｜ 基於 commit：`76a2e60`
+> 最後修改：2026-11-15 ｜ 基於 commit：`caa6389`
 
 每個 `.rs` 檔案負責什麼。整體設計與資料流見 [架構](architecture.md)，建置與慣例見 [開發說明](PROJECT-DEV.md)。新增、改名或刪除 `.rs` 檔案時，請一併更新本文件。
 
@@ -85,7 +85,7 @@ Workspace 有三個 crate：`core`（`misf-core`，核心函式庫與 JSON CLI�
 | `app/src/ui/settings.rs` | 獨立的設定視窗：分類樹（`SettingsPage::PREFERENCES` 為「偏好設定」底下的外觀與主機清單／安全性／批次作業）、各偏好的套用與儲存、LOG 頁、關於頁。 |
 | `app/src/ui/logging.rs` | 工作階段記錄：請求標題、結果寫入與匯出。 |
 | `app/src/ui/tests.rs` | 狀態邏輯測試，以及用 Slint 測試後端送出實際指標與鍵盤事件的畫面測試（進階選單、批次表格雙擊、欄寬拖曳、Esc 關閉明細、懸停提示時機與位置、側欄拖曳排序、右鍵複製命令、設定樹）。 |
-| `app/ui/main.slint` | 主視窗 `AppWindow`：工具列、側欄、工作區、狀態列（`StatusBar`，點它開關過往操作工具視窗），最左側的 `ToolStripe` 與側欄、工作區下方的工具視窗（`TerminalPanel` 或停靠的 `HistoryPanel`，依 `ToolWindow.open` 一次一個；側欄與工作區包在 `clip` 的 Rectangle 內，工具視窗開啟時它們被壓縮並裁切底部，而不是把狀態列推出視窗；高度只在拖曳與視窗縮放時夾住，不綁定視窗高度以免佈局迴圈），以及疊在上方的對話框、進階選單、右鍵選單 `MenuOverlay` 與提示框；`run-menu` 依選單行的 `action` 執行對應操作；匯出所有 global 給 Rust。 |
+| `app/ui/main.slint` | 主視窗 `AppWindow`：工具列、側欄、工作區、狀態列（`StatusBar`，點它開關過往操作工具視窗），最左側的 `ToolStripe` 與側欄、工作區下方的工具視窗（`TerminalPanel` 或停靠的 `HistoryPanel`，依 `ToolWindow.open` 一次一個；側欄與工作區包在 `clip` 的 Rectangle 內，工具視窗開啟時它們被壓縮，而不是把狀態列推出視窗；主機頁與批次頁各包在 `ScrollView` 內，內容高度取可見高度與頁面最小高度的較大者，放不下時捲動而不是被裁切；高度只在拖曳與視窗縮放時夾住，不綁定視窗高度以免佈局迴圈），以及疊在上方的對話框、進階選單、右鍵選單 `MenuOverlay` 與提示框；`run-menu` 依選單行的 `action` 執行對應操作；匯出所有 global 給 Rust。 |
 | `app/ui/theme.slint` | 配色 `Theme`、介面字型（Noto Sans TC／粗體／系統字型）、翻譯查詢 `T`（向 Rust 的語言目錄查字串）、外觀同步。 |
 | `app/ui/widgets.slint` | 共用元件：懸停提示 `HintArea`（1.5 秒後顯示命令、效果與風險；右鍵開啟 `menu` 或複製命令）、自繪右鍵選單（`MenuLine`、`PopMenu`、`MenuArea`、`MenuOverlay`：外觀與進階選單一致，不用 Slint 內建的 `ContextMenuArea`，因其外觀無法套用 Theme；`MenuArea` 疊在控制項上方，只在 `right-down` 為真時啟用，因為控制項的 `TouchArea` 會抓住所有按下事件，停用的 `TouchArea` 才會讓事件穿過）、提示框、剪貼簿、彩色按鈕、三態勾選框、對話框外框等。 |
 | `app/ui/tool_window.slint` | IDE 式工具視窗：`ToolWindow`（目前開啟的工具視窗與共用高度）、視窗最左側的圖示直條 `ToolStripe`（終端機、過往操作）、可拖曳的上緣 `DockHandle` 與標題列 `DockTitle`（含收合鈕）。 |

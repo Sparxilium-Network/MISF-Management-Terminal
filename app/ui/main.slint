@@ -249,6 +249,8 @@ component Workspace inherits Rectangle {
     background: Theme.background;
     VerticalLayout {
         padding: 28px;
+        // The pages keep 14px more for their scroll bar.
+        padding-right: 14px;
         spacing: 8px;
         if Shell.locked: LockedPage { }
         if !Shell.locked: Tabs {
@@ -257,11 +259,33 @@ component Workspace inherits Rectangle {
             current: Shell.view;
             chosen(id) => { Shell.view-chosen(id); }
         }
-        if !Shell.locked && Shell.view == 0: HostPage {
+        // A page fills the room it gets; when a tool window leaves it less than the page
+        // needs, the page keeps its size and scrolls instead of being cut off.
+        if !Shell.locked && Shell.view == 0: host-view := ScrollView {
             vertical-stretch: 1;
+            min-height: 120px;
+            content-width: max(self.visible-width, host.min-width + 14px);
+            content-height: max(self.visible-height, host.min-height);
+            host := HostPage {
+                x: 0;
+                y: 0;
+                // Clear of the scroll bar.
+                width: host-view.content-width - 14px;
+                height: host-view.content-height;
+            }
         }
-        if !Shell.locked && Shell.view == 1: BatchPage {
+        if !Shell.locked && Shell.view == 1: batch-view := ScrollView {
             vertical-stretch: 1;
+            min-height: 120px;
+            content-width: max(self.visible-width, batch.min-width + 14px);
+            content-height: max(self.visible-height, batch.min-height);
+            batch := BatchPage {
+                x: 0;
+                y: 0;
+                // Clear of the scroll bar.
+                width: batch-view.content-width - 14px;
+                height: batch-view.content-height;
+            }
         }
     }
     // Pages ignore input while work runs.
