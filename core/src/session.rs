@@ -38,6 +38,15 @@ impl Session {
     pub fn set_console(&mut self, console: std::sync::Arc<dyn crate::console::Console>) {
         self.storage.set_console(console);
     }
+    /// Where interactive shells are kept and where their output goes; without this, a
+    /// request to open one fails.
+    pub fn set_shells(
+        &mut self,
+        shells: crate::shell::Shells,
+        screen: std::sync::Arc<dyn crate::shell::Screen>,
+    ) {
+        self.storage.set_shells(shells, screen);
+    }
     /// Saves results outside a request: used after a request panicked, to mark the
     /// upgrades it left unknown.
     pub fn save_results(&self, results: Vec<(String, crate::model::CheckResult)>) -> Result<()> {
@@ -78,7 +87,14 @@ impl Session {
         if self.debug {
             let remote = matches!(
                 name.as_str(),
-                "probe" | "test" | "check" | "upgrade" | "dist_upgrade" | "batch" | "reboot"
+                "probe"
+                    | "test"
+                    | "check"
+                    | "upgrade"
+                    | "dist_upgrade"
+                    | "batch"
+                    | "reboot"
+                    | "shell_open"
             );
             let blocked = (matches!(name.as_str(), "vault_add_passkey" | "vault_unlock_passkey")
                 && !self.allow_passkey)

@@ -11,6 +11,7 @@ mod passkey;
 pub mod reboot;
 pub mod runtime;
 pub mod session;
+pub mod shell;
 pub mod sqlite;
 pub mod ssh;
 pub mod store;

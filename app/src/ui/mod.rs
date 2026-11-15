@@ -8,6 +8,7 @@ mod editor;
 mod format;
 mod host_page;
 mod logging;
+mod remote_shell;
 mod settings;
 mod shell;
 mod sidebar;
@@ -297,6 +298,9 @@ fn capture(ctx: &Ctx) {
                     if std::env::var("MISF_OPEN_TERMINAL").as_deref() == Ok("1") {
                         sample_terminal(app);
                     }
+                    if std::env::var("MISF_OPEN_TERMINAL").as_deref() == Ok("shell") {
+                        sample_shell(app);
+                    }
                     let reboot = std::env::var("MISF_OPEN_REBOOT");
                     if matches!(reboot.as_deref(), Ok("1" | "final")) {
                         app.choose_advanced(host_page::Advanced::Reboot);
@@ -378,6 +382,35 @@ fn sample_terminal(app: &mut App) {
     app.terminal
         .finish("misc", true, format!("[{}]", t.get("terminal.succeeded")));
     app.busy = false;
+}
+
+/// An open shell showing a nano-like screen: a reverse-video title, coloured text, a
+/// wide character and the cursor.
+#[cfg(feature = "capture")]
+fn sample_shell(app: &mut App) {
+    use remote_shell::{ShellState, ShellTab};
+    let mut shell = ShellTab::new(1, "web".into(), app.host_name("web"), (100, 11));
+    shell.state = ShellState::Open;
+    shell.parser.process(
+        concat!(
+            "\x1b[?1049h\x1b[H\x1b[7m  GNU nano 8.4",
+            "                              /etc/hosts",
+            "                                         \x1b[0m\r\n",
+            "\r\n",
+            "127.0.0.1 localhost\r\n",
+            "\x1b[32m# 內部主機\x1b[0m\r\n",
+            "10.0.0.13 web-01\r\n",
+            "10.0.0.12 db-01\r\n",
+            "\x1b[9;1H\x1b[7m^G\x1b[0m Help    \x1b[7m^O\x1b[0m Write Out \x1b[7m^W\x1b[0m Where Is",
+            "  \x1b[7m^K\x1b[0m Cut     \x1b[7m^X\x1b[0m Exit\r\n",
+            "\x1b[1;31mbold red\x1b[0m \x1b[38;5;214morange\x1b[0m \x1b[44;37mblue\x1b[0m",
+            "\x1b[7;17H",
+        )
+        .as_bytes(),
+    );
+    app.terminal.size = Some((100, 11));
+    app.terminal.add_shell(shell);
+    app.tool = Some(app::Tool::Terminal);
 }
 
 /// A few past results and an error, with the status line expanded to show them.

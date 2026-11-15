@@ -1,5 +1,15 @@
 # 全工作區檢查結果
 
+## 2026-11-15（終端機互動 shell，分支 `feat/WYSIWYG-Terminal`，基於 `be447e4`）
+
+- 使用者要求：終端機可以互動輸入，需能使用 nano（完整終端機模擬，方案 B）；操作進行中使用者不能輸入。使用者同意嘗試，困難時再討論。
+- 新增依賴：`vt100` 0.18.1（MIT，連帶 `vte` 0.15.0，MIT）。`cargo deny check licenses` 通過。
+- core：新增 `shell.rs`（`Shells`、`Input`、`Screen`、`open`、`pump`）。`StorageSession` 處理 `shell_open`，`vault_lock` 先關閉所有 shell；稽核新增 `shell_open`／`shell_close`；debug 模式只允許 loopback。`open` 會等 PTY 與 shell 的回覆（russh 的 `request_pty`／`request_shell` 不等回覆）。
+- app：worker 轉送 `ShellOutput`／`ShellEnded`；新增 `remote_shell.rs`（vt100 畫面轉樣式片段、按鍵轉位元組、貼上）；終端機面板加「開啟 Shell」、shell 分頁（>_、關閉鈕）、`ShellScreen`（格線、游標、焦點、滾輪、Ctrl+Shift+V）。忙碌或鎖定時拒絕輸入並顯示說明；結束時保留分頁與說明，提醒重新檢查主機；關閉 MISF 時關閉所有 shell。
+- 測試：core 單元測試（`Shells` 關閉與編號）、整合測試（模擬 SSH 伺服器：PTY 類型與大小、回顯、視窗大小、遠端 `exit` 與本機 `close_all`）；app 單元測試（按鍵、貼上、畫面片段與寬字元、歷史捲動）與 UI 測試（開啟請求、輸出畫面與游標、按鍵與縮放送出、忙碌時暫停、關閉與移除分頁）。`cargo test --workspace`、兩種 clippy、`cargo fmt` 通過。
+- 截圖：`MISF_OPEN_TERMINAL=shell` 的類 nano 畫面（反白標題列、綠色中文註解、寬字元對齊、256 色、背景色、游標）正確。
+- 未驗證（需真實主機）：實際 nano／top／less 操作、按鍵手感與延遲、大量輸出效能、Ctrl+Shift+V 貼上是否可用、Windows 上 Tab 鍵是否被焦點切換攔截、中文輸入法（已知不支援）、自動鎖定時 shell 的結束。
+
 ## 2026-11-15（狀態列不再開關過往操作，分支 `feat/WYSIWYG-Terminal`，基於 `a2cdd94`）
 
 - 使用者要求：狀態列的點擊開關與箭頭刪除，改由左側直條負責。

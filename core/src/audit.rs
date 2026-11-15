@@ -87,6 +87,10 @@ pub enum Action {
     FormEdit,
     ValidationRejected,
     PasskeyMethod,
+    /// An interactive shell was opened on a host; what is typed in it is never logged.
+    ShellOpen,
+    /// An interactive shell ended, closed by the user or not.
+    ShellClose,
     Unsupported,
 }
 impl Action {
@@ -103,6 +107,7 @@ impl Action {
             "upgrade" => Self::Upgrade,
             "dist_upgrade" => Self::DistUpgrade,
             "reboot" => Self::Reboot,
+            "shell_open" => Self::ShellOpen,
             "batch" => match operation {
                 Some("check") => Self::BatchCheck,
                 Some("upgrade") => Self::BatchUpgrade,

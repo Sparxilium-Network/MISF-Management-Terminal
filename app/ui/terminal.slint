@@ -1,14 +1,17 @@
-// The terminal tool window: each host's remote commands and output as they run, one tab
-// per host. Read-only.
+// The terminal tool window: each host's remote commands and output as an operation runs,
+// one read-only tab per host, then interactive shells the user opened, drawn by a
+// terminal emulator in Rust.
 import { ListView, ScrollView } from "std-widgets.slint";
 import { Theme, T } from "theme.slint";
-import { TextButton } from "widgets.slint";
+import { TextButton, HintArea } from "widgets.slint";
 import { ToolWindow, DockHandle, DockTitle } from "tool_window.slint";
 
 export struct TerminalTab {
     name: string,
-    // 0 waiting, 1 running, 2 succeeded, 3 failed, 4 skipped.
+    // 0 waiting, 1 running, 2 succeeded, 3 failed, 4 skipped. A shell: 0 opening,
+    // 1 open, 3 failed, 4 closed.
     state: int,
+    shell: bool,
 }
 
 export struct TerminalLine {
@@ -16,14 +19,54 @@ export struct TerminalLine {
     command: bool,
 }
 
+// Cells of one style on a shell's screen row.
+export struct ShellRun {
+    col: int,
+    cells: int,
+    text: string,
+    fg: color,
+    // 0 `fg`, 1 the theme's text colour, 2 the theme's background.
+    fg-mode: int,
+    bg: color,
+    // 0 `bg`, 1 the theme's text colour, 2 the theme's background, 3 none.
+    bg-mode: int,
+    bold: bool,
+    underline: bool,
+}
+
+export struct ShellRow {
+    runs: [ShellRun],
+}
+
 export global TerminalState {
-    // There is a run to show.
+    // There is a run or a shell to show.
     in property <bool> shown;
     in property <[TerminalTab]> tabs;
     in property <int> current;
     in property <[TerminalLine]> lines;
     callback select(index: int);
     callback copy();
+    // Shells.
+    in property <bool> can-open-shell;
+    in property <string> open-shell-hint;
+    // The current tab is a shell.
+    in property <bool> shell-view;
+    in property <[ShellRow]> screen;
+    in property <int> cursor-row;
+    in property <int> cursor-col;
+    in property <bool> cursor-shown;
+    // Keys reach the shell: it is open and no operation is running.
+    in property <bool> shell-typing;
+    // Why keys do not reach it, or how it ended.
+    in property <string> shell-notice;
+    callback open-shell();
+    callback close-shell(index: int);
+    // A key typed into the shell; true when it was sent.
+    callback shell-key(text: string, control: bool, alt: bool, shift: bool) -> bool;
+    callback shell-paste(text: string);
+    callback shell-resized(cols: int, rows: int);
+    // Lines to scroll back (positive) or forward.
+    callback shell-scrolled(lines: int);
 }
 
 component StateDot inherits Rectangle {
@@ -40,6 +83,7 @@ component HostTab inherits Rectangle {
     in property <TerminalTab> tab;
     in property <bool> selected;
     callback clicked();
+    callback close();
     height: 28px;
     width: row.preferred-width;
     border-radius: 4px;
@@ -54,7 +98,7 @@ component HostTab inherits Rectangle {
     }
     row := HorizontalLayout {
         padding-left: 8px;
-        padding-right: 8px;
+        padding-right: root.tab.shell ? 2px : 8px;
         spacing: 6px;
         alignment: start;
         VerticalLayout {
@@ -63,12 +107,166 @@ component HostTab inherits Rectangle {
                 state: root.tab.state;
             }
         }
+        // A shell tab: a prompt mark before the host's name.
+        if root.tab.shell: Text {
+            text: ">_";
+            font-family: Theme.mono-font;
+            font-size: 11px;
+            font-weight: 700;
+            color: Theme.muted;
+            vertical-alignment: center;
+        }
         Text {
             text: root.tab.name;
             font-size: 12px;
-            color: root.tab.state == 4 ? Theme.muted : Theme.ink;
+            color: root.tab.state == 4 && !root.tab.shell ? Theme.muted : Theme.ink;
             vertical-alignment: center;
             max-width: 180px;
+            overflow: elide;
+        }
+        if root.tab.shell: close := TouchArea {
+            width: 20px;
+            mouse-cursor: pointer;
+            accessible-role: button;
+            accessible-label: T.get("shell.close");
+            accessible-action-default => { root.close(); }
+            clicked => { root.close(); }
+            Rectangle {
+                width: 16px;
+                height: 16px;
+                border-radius: 3px;
+                background: close.has-hover ? Theme.selection : transparent;
+                Path {
+                    width: 8px;
+                    height: 8px;
+                    viewbox-width: 8;
+                    viewbox-height: 8;
+                    commands: "M 0 0 L 8 8 M 8 0 L 0 8";
+                    stroke: close.has-hover ? Theme.ink : Theme.muted;
+                    stroke-width: 1.2px;
+                }
+            }
+        }
+    }
+}
+
+// A shell's screen: rows of styled runs on a grid of cells, the cursor, and the keys.
+component ShellScreen inherits Rectangle {
+    in property <length> row-height;
+    property <length> pad: 6px;
+    property <length> notice-height: TerminalState.shell-notice == "" ? 0px : 26px;
+    // One cell's width, measured from the monospace font.
+    property <length> cell: max(1px, probe.preferred-width / 10);
+    property <int> cols: max(2, floor((self.width - 2 * root.pad) / root.cell));
+    property <int> rows: max(2, floor((self.height - 2 * root.pad - root.notice-height) / root.row-height));
+    function report() {
+        if (self.width > 50px && self.height > 40px) {
+            TerminalState.shell-resized(root.cols, root.rows);
+        }
+    }
+    init => {
+        self.report();
+        keys.focus();
+    }
+    changed cols => { self.report(); }
+    changed rows => { self.report(); }
+    clip: true;
+    probe := Text {
+        text: "MMMMMMMMMM";
+        font-family: Theme.mono-font;
+        font-size: Theme.mono-size;
+        visible: false;
+    }
+    // Pasting goes through a hidden text field, the one way to read the clipboard.
+    paster := TextInput {
+        visible: false;
+        width: 0px;
+        height: 0px;
+        changed text => {
+            if (self.text != "") {
+                TerminalState.shell-paste(self.text);
+                self.text = "";
+            }
+        }
+    }
+    keys := FocusScope {
+        key-pressed(event) => {
+            if (!TerminalState.shell-typing) {
+                return reject;
+            }
+            if (event.modifiers.control && event.modifiers.shift && (event.text == "v" || event.text == "V")) {
+                paster.paste();
+                return accept;
+            }
+            if (TerminalState.shell-key(event.text, event.modifiers.control, event.modifiers.alt, event.modifiers.shift)) {
+                return accept;
+            }
+            reject
+        }
+        TouchArea {
+            mouse-cursor: text;
+            clicked => { keys.focus(); }
+            scroll-event(event) => {
+                TerminalState.shell-scrolled(event.delta-y > 0 ? 3 : -3);
+                accept
+            }
+        }
+    }
+    for line[r] in TerminalState.screen: Rectangle {
+        x: root.pad;
+        y: root.pad + r * root.row-height;
+        width: root.cols * root.cell;
+        height: root.row-height;
+        for run in line.runs: Rectangle {
+            x: run.col * root.cell;
+            width: run.cells * root.cell;
+            height: root.row-height;
+            background: run.bg-mode == 0 ? run.bg
+                : run.bg-mode == 1 ? Theme.ink
+                : run.bg-mode == 2 ? Theme.background : transparent;
+            property <color> ink: run.fg-mode == 0 ? run.fg : run.fg-mode == 1 ? Theme.ink : Theme.background;
+            Text {
+                x: 0;
+                // A little wider than its cells, so a font a hair off the grid is not cut.
+                width: parent.width + 2px;
+                height: parent.height;
+                text: run.text;
+                font-family: Theme.mono-font;
+                font-size: Theme.mono-size;
+                font-weight: run.bold ? 700 : 400;
+                color: parent.ink;
+                vertical-alignment: center;
+                wrap: no-wrap;
+                overflow: clip;
+            }
+            if run.underline: Rectangle {
+                y: parent.height - 3px;
+                height: 1px;
+                background: parent.ink;
+            }
+        }
+    }
+    if TerminalState.cursor-shown: Rectangle {
+        x: root.pad + TerminalState.cursor-col * root.cell;
+        y: root.pad + TerminalState.cursor-row * root.row-height;
+        width: root.cell;
+        height: root.row-height;
+        // Solid while typing goes here, an outline otherwise.
+        background: keys.has-focus && TerminalState.shell-typing ? Theme.ink.with-alpha(0.55) : transparent;
+        border-width: 1px;
+        border-color: Theme.ink.with-alpha(0.8);
+    }
+    if TerminalState.shell-notice != "": Rectangle {
+        y: parent.height - root.notice-height;
+        height: root.notice-height;
+        background: Theme.surface;
+        Text {
+            x: 10px;
+            width: parent.width - 20px;
+            text: TerminalState.shell-notice;
+            font-size: 12px;
+            color: Theme.warning;
+            vertical-alignment: center;
             overflow: elide;
         }
     }
@@ -112,14 +310,26 @@ export component TerminalPanel inherits Rectangle {
                         tab: tab;
                         selected: i == TerminalState.current;
                         clicked => { TerminalState.select(i); }
+                        close => { TerminalState.close-shell(i); }
                     }
+                }
+            }
+            HintArea {
+                horizontal-stretch: 0;
+                plain: TerminalState.open-shell-hint;
+                delay: 0.5s;
+                TextButton {
+                    text: T.get("shell.open");
+                    font-size: 12px;
+                    enabled: TerminalState.can-open-shell;
+                    clicked => { TerminalState.open-shell(); }
                 }
             }
             TextButton {
                 horizontal-stretch: 0;
                 text: T.get("terminal.copy");
                 font-size: 12px;
-                enabled: TerminalState.lines.length > 0;
+                enabled: TerminalState.lines.length > 0 || TerminalState.shell-view;
                 clicked => { TerminalState.copy(); }
             }
         }
@@ -136,6 +346,7 @@ export component TerminalPanel inherits Rectangle {
                 color: Theme.muted;
             }
             list := ListView {
+                visible: !TerminalState.shell-view;
                 // Scrolled away from the end: stop following until back at it.
                 changed content-y => {
                     root.follow = self.content-y <= root.bottom + 2px;
@@ -152,6 +363,13 @@ export component TerminalPanel inherits Rectangle {
                     vertical-alignment: center;
                     overflow: elide;
                 }
+            }
+            if TerminalState.shell-view: ShellScreen {
+                x: 1px;
+                y: 1px;
+                width: parent.width - 2px;
+                height: parent.height - 2px;
+                row-height: root.row-height;
             }
         }
     }

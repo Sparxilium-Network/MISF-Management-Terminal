@@ -152,6 +152,10 @@ fn wire_chrome(w: &AppWindow) {
 }
 
 fn quit(ctx: &Ctx) {
+    // Say goodbye to open shells rather than drop their links.
+    if let Ok(app) = ctx.app.try_borrow() {
+        app.worker.shells.close_all();
+    }
     if let Some(settings) = ctx.settings.upgrade() {
         let _ = settings.hide();
     }

@@ -5,6 +5,7 @@ use misf_core::{
     model::CheckResult,
     runtime::RuntimePaths,
     session::Session,
+    shell::{self, Shells},
 };
 use serde_json::Value;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -26,6 +27,17 @@ pub enum Event {
         host: String,
         text: String,
         command: bool,
+    },
+    /// Raw output from an interactive shell, for its terminal emulator. Shares the
+    /// terminal's wake-up.
+    ShellOutput {
+        shell: u64,
+        data: Vec<u8>,
+    },
+    /// An interactive shell ended; `error` when the link broke rather than closed.
+    ShellEnded {
+        shell: u64,
+        error: Option<String>,
     },
     /// One batch host finished; its result is already saved.
     BatchHost {
@@ -115,6 +127,8 @@ pub struct Worker {
     /// Set when terminal output woke the UI; cleared by the UI before it reads
     /// [`Self::events`], so lines arriving later wake it again.
     pub terminal: Arc<AtomicBool>,
+    /// Open interactive shells: typing goes straight to them, not through `requests`.
+    pub shells: Shells,
 }
 
 /// Forwards live remote output to the UI, waking it at most once per read.
@@ -134,6 +148,22 @@ impl Screen {
         if !self.woken.swap(true, Ordering::AcqRel) {
             (self.wake)();
         }
+    }
+}
+
+impl shell::Screen for Screen {
+    fn output(&self, shell: u64, data: &[u8]) {
+        let _ = self.events.send(Event::ShellOutput {
+            shell,
+            data: data.to_vec(),
+        });
+        if !self.woken.swap(true, Ordering::AcqRel) {
+            (self.wake)();
+        }
+    }
+    fn ended(&self, shell: u64, error: Option<String>) {
+        let _ = self.events.send(Event::ShellEnded { shell, error });
+        (self.wake)();
     }
 }
 
@@ -201,6 +231,8 @@ impl Worker {
         let (decisions, answers) = unbounded_channel();
         let terminal = Arc::new(AtomicBool::new(false));
         let woken = terminal.clone();
+        let shells = Shells::default();
+        let open = shells.clone();
         std::thread::spawn(move || {
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
@@ -213,11 +245,13 @@ impl Worker {
                 decisions: Mutex::new(answers),
                 reported: done.clone(),
             }));
-            session.set_console(Arc::new(Screen {
+            let screen = Arc::new(Screen {
                 events: events.clone(),
                 wake: wake.clone(),
                 woken,
-            }));
+            });
+            session.set_console(screen.clone());
+            session.set_shells(open, screen);
             while let Ok(request) = jobs.recv() {
                 let action = request["action"].as_str().unwrap_or_default().to_string();
                 let running = Running::of(&request);
@@ -257,6 +291,7 @@ impl Worker {
             events: results,
             decisions,
             terminal,
+            shells,
         }
     }
 }

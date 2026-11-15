@@ -609,6 +609,8 @@ impl App {
                     text,
                     command,
                 } => self.terminal.write(&host, &text, command),
+                Event::ShellOutput { shell, data } => self.terminal.shell_output(shell, &data),
+                Event::ShellEnded { shell, error } => self.shell_ended(shell, error),
                 Event::BatchHost { id, result } => {
                     let (succeeded, note) = terminal_note(t, &result.status, &result.error);
                     self.terminal.finish(&id, succeeded, note);
@@ -653,6 +655,9 @@ impl App {
                         self.terminal.end(succeeded, &note);
                     }
                     self.log_done(&action, &result);
+                    if action == "shell_open" {
+                        self.shell_opened(&result);
+                    }
                     match result {
                         Ok(data) => self.received(&action, data),
                         Err(error) => {

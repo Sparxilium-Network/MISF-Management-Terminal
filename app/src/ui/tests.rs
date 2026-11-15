@@ -46,6 +46,7 @@ fn test_app(allow_passkey: bool) -> (App, Receiver<Value>, Sender<Event>, tempfi
             events: results,
             decisions: tokio::sync::mpsc::unbounded_channel().0,
             terminal: Default::default(),
+            shells: Default::default(),
         },
     );
     assert_eq!(commands.recv().unwrap()["action"], "storage_status");
@@ -1424,4 +1425,89 @@ fn the_terminal_shows_each_hosts_output_live_in_its_own_tab() {
         shown[shown.len() - 2].0,
         format!("line {}", super::terminal::MAX_LINES + 9)
     );
+}
+
+#[test]
+fn a_shell_opens_on_the_chosen_host_takes_keys_only_while_idle_and_ends_in_its_tab() {
+    use misf_core::shell::Input;
+    i_slint_backend_testing::init_no_event_loop();
+    let (mut app, commands, events, _directory) = test_app(false);
+    unlocked(&mut app);
+    app.hosts = vec![host("a", "apt", "SHA256:a")];
+    app.hosts[0].name = "server-a".into();
+    app.selected = "a".into();
+    // The vault's status has answered.
+    app.busy = false;
+    let t = app.t();
+    let (ctx, main, _settings) = build(app, true).unwrap();
+    let state = main.global::<super::TerminalState>();
+    assert!(state.get_can_open_shell());
+
+    // Opening asks the worker for a shell on the chosen host, in a new tab.
+    state.invoke_open_shell();
+    let request = commands.try_iter().last().unwrap();
+    assert_eq!(request["action"], "shell_open");
+    assert_eq!(request["id"], "a");
+    let shell = request["shell"].as_u64().unwrap();
+    assert!(state.get_shell_view());
+    assert_eq!(main.global::<super::ToolWindow>().get_open(), 1);
+    let tab = state.get_tabs().row_data(0).unwrap();
+    assert!(tab.shell && tab.name == "server-a" && tab.state == 0);
+    assert_eq!(state.get_shell_notice(), t.get("shell.opening"));
+    // Busy opening it: no keys yet.
+    assert!(!state.invoke_shell_key("a".into(), false, false, false));
+
+    // The worker opened it.
+    let mut input = ctx.app.borrow().worker.shells.register(shell);
+    events
+        .send(Event::Done {
+            action: "shell_open".into(),
+            result: Ok(json!({"shell":shell,"id":"a","name":"server-a"})),
+        })
+        .unwrap();
+    events
+        .send(Event::ShellOutput {
+            shell,
+            data: b"\x1b[7mtitle\x1b[0m\r\n$ ".to_vec(),
+        })
+        .unwrap();
+    ctx.update(App::process_events);
+    assert_eq!(state.get_tabs().row_data(0).unwrap().state, 1);
+    assert!(state.get_shell_typing());
+    let first: Vec<String> = (state.get_screen().row_data(0).unwrap().runs.iter())
+        .map(|run| run.text.to_string())
+        .collect();
+    assert_eq!(first, ["title"]);
+    assert_eq!((state.get_cursor_row(), state.get_cursor_col()), (1, 2));
+
+    // Keys go straight to the shell as terminal bytes.
+    assert!(state.invoke_shell_key("x".into(), true, false, false));
+    assert!(matches!(input.try_recv(), Ok(Input::Data(bytes)) if bytes == [0x18]));
+    state.invoke_shell_resized(80, 20);
+    assert!(matches!(
+        input.try_recv(),
+        Ok(Input::Resize { cols: 80, rows: 20 })
+    ));
+
+    // While an operation runs, typing is paused.
+    ctx.update(|app| app.busy = true);
+    assert!(!state.get_shell_typing());
+    assert_eq!(state.get_shell_notice(), t.get("shell.paused"));
+    assert!(!state.invoke_shell_key("y".into(), false, false, false));
+    assert!(input.try_recv().is_err());
+    ctx.update(|app| app.busy = false);
+
+    // Closing asks the shell to end; its end marks the tab, which then can go.
+    state.invoke_close_shell(0);
+    assert!(matches!(input.try_recv(), Ok(Input::Close)));
+    events
+        .send(Event::ShellEnded { shell, error: None })
+        .unwrap();
+    ctx.update(App::process_events);
+    assert_eq!(state.get_tabs().row_data(0).unwrap().state, 4);
+    assert_eq!(state.get_shell_notice(), t.get("shell.ended"));
+    assert!(!state.get_shell_typing());
+    state.invoke_close_shell(0);
+    assert_eq!(state.get_tabs().row_count(), 0);
+    assert!(!state.get_shown());
 }

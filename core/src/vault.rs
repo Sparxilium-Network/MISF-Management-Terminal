@@ -271,6 +271,11 @@ pub struct StorageSession {
     observer: Box<dyn batch::Observer + Send>,
     /// Shows remote commands and their output as they run.
     console: std::sync::Arc<dyn crate::console::Console>,
+    /// Interactive shells and where they draw; none until the app sets them.
+    shells: Option<(
+        crate::shell::Shells,
+        std::sync::Arc<dyn crate::shell::Screen>,
+    )>,
 }
 
 impl StorageSession {
@@ -279,6 +284,13 @@ impl StorageSession {
     }
     pub fn set_console(&mut self, console: std::sync::Arc<dyn crate::console::Console>) {
         self.console = console;
+    }
+    pub fn set_shells(
+        &mut self,
+        shells: crate::shell::Shells,
+        screen: std::sync::Arc<dyn crate::shell::Screen>,
+    ) {
+        self.shells = Some((shells, screen));
     }
     pub(crate) fn host_for_audit(&self, id: &str) -> Result<crate::model::Host> {
         self.store.as_ref().context("Vault locked")?.host(id)
@@ -308,6 +320,7 @@ impl StorageSession {
             warning: String::new(),
             observer: Box::new(batch::Unattended),
             console: std::sync::Arc::new(crate::console::Silent),
+            shells: None,
         }
     }
 
@@ -400,6 +413,10 @@ impl StorageSession {
             }
             "vault_lock" => {
                 ensure!(self.encrypted, "目前使用明文儲存");
+                // Shells signed in with the vault's credentials end with it.
+                if let Some((shells, _)) = &self.shells {
+                    shells.close_all();
+                }
                 let result = match self.pending.take() {
                     Some(mut vault) => vault.finish(),
                     None => self.with_vault(|vault| vault.finish()),
@@ -481,6 +498,34 @@ impl StorageSession {
                 let destination = request["path"].as_str().context("缺少備份路徑")?;
                 self.backup(Path::new(destination))?;
                 Ok(json!({"path":destination}))
+            }
+            "shell_open" => {
+                let (shells, screen) = self.shells.clone().context("此介面不支援互動 shell")?;
+                let store = self
+                    .store
+                    .as_ref()
+                    .context("主機庫已鎖定，請先輸入解鎖密碼")?;
+                let host = store.host(request["id"].as_str().context("缺少主機 ID")?)?;
+                let shell = request["shell"].as_u64().context("缺少 shell 編號")?;
+                let size = |key: &str, fallback: u32| {
+                    request[key]
+                        .as_u64()
+                        .and_then(|n| u32::try_from(n).ok())
+                        .filter(|n| (2..=1000).contains(n))
+                        .unwrap_or(fallback)
+                };
+                progress(&format!("正在開啟 {} 的互動 shell…", host.name));
+                crate::shell::open(
+                    &host,
+                    shell,
+                    size("cols", 120),
+                    size("rows", 30),
+                    &shells,
+                    screen,
+                )
+                .await
+                .map_err(|error| anyhow::anyhow!(host.redact(&format!("{error:#}"))))?;
+                Ok(json!({"shell":shell,"id":host.id,"name":host.name}))
             }
             _ => {
                 ensure!(

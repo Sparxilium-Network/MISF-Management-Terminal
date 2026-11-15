@@ -1,11 +1,22 @@
-//! The terminal panel under the pages: each host's remote commands and output as they
-//! run, one tab per host. Read-only; the text is already redacted by the core.
+//! The terminal tool window: each host's remote commands and output as an operation
+//! runs, one read-only tab per host (the text is already redacted by the core), then
+//! any interactive shells the user opened, see [`super::remote_shell`].
 
 use super::{
-    App, AppWindow, Clip, Ctx, TerminalLine, TerminalState, TerminalTab, ToolWindow, app::Tool,
+    App, AppWindow, Clip, Ctx, ShellRow, TerminalLine, TerminalState, TerminalTab, ToolWindow,
+    app::Tool,
+    remote_shell::{self, ShellState, ShellTab},
 };
+use misf_core::{
+    audit::{Action, Outcome},
+    shell::Input,
+};
+use serde_json::json;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use std::rc::Rc;
+
+/// A shell's size before the panel has reported one.
+const SHELL_SIZE: (u16, u16) = (100, 24);
 
 /// Lines kept per host; older ones are dropped in steps of [`TRIM`].
 pub const MAX_LINES: usize = 10_000;
@@ -48,7 +59,16 @@ pub struct Tab {
 #[derive(Default)]
 pub struct Terminal {
     pub tabs: Vec<Tab>,
+    /// Interactive shells, shown after the run's tabs.
+    pub shells: Vec<ShellTab>,
+    /// Into the run's tabs, then the shells.
     pub current: usize,
+    /// The shell area's size in cells, as the panel last reported it.
+    pub size: Option<(u16, u16)>,
+    /// A shell's screen changed since the view last drew it.
+    screen_dirty: bool,
+    /// The shell tab the view's screen was drawn from.
+    screen_synced: Option<usize>,
     /// The request whose hosts the tabs show; its `Done` settles them.
     pub action: String,
     /// Bumped whenever shown lines change other than at the end, so the view rebuilds.
@@ -59,6 +79,7 @@ pub struct Terminal {
 
 impl Terminal {
     /// Starts a new run on `hosts` (ID and name), replacing the previous one.
+    /// Shells stay, after the new run's tabs.
     pub fn start(&mut self, action: &str, hosts: Vec<(String, String)>) {
         self.tabs = (hosts.into_iter())
             .map(|(host, name)| Tab {
@@ -71,6 +92,7 @@ impl Terminal {
         self.action = action.into();
         self.current = 0;
         self.generation += 1;
+        self.screen_dirty = true;
     }
 
     fn tab(&mut self, host: &str) -> Option<&mut Tab> {
@@ -138,8 +160,70 @@ impl Terminal {
         self.action.clear();
     }
 
+    /// The shell the current tab shows, if it is one.
+    pub fn shell(&self) -> Option<&ShellTab> {
+        self.shells.get(self.current.checked_sub(self.tabs.len())?)
+    }
+
+    fn shell_mut(&mut self) -> Option<&mut ShellTab> {
+        let index = self.current.checked_sub(self.tabs.len())?;
+        self.shells.get_mut(index)
+    }
+
+    fn shell_by_id(&mut self, id: u64) -> Option<&mut ShellTab> {
+        self.shells.iter_mut().find(|shell| shell.id == id)
+    }
+
+    /// The shells' size in cells.
+    pub fn size(&self) -> (u16, u16) {
+        self.size.unwrap_or(SHELL_SIZE)
+    }
+
+    /// Adds a shell tab and shows it.
+    pub fn add_shell(&mut self, shell: ShellTab) {
+        self.shells.push(shell);
+        self.current = self.tabs.len() + self.shells.len() - 1;
+        self.screen_dirty = true;
+    }
+
+    /// Output for a shell's screen.
+    pub fn shell_output(&mut self, id: u64, data: &[u8]) {
+        if let Some(shell) = self.shell_by_id(id) {
+            shell.parser.process(data);
+            self.screen_dirty = true;
+        }
+    }
+
+    /// A shell ended; returns its host when it was open, for the audit log.
+    pub fn shell_ended(&mut self, id: u64, failed: bool, note: String) -> Option<String> {
+        let shell = self.shell_by_id(id)?;
+        let was_open = shell.state == ShellState::Open;
+        shell.state = if failed {
+            ShellState::Failed
+        } else {
+            ShellState::Closed
+        };
+        shell.note = note;
+        let host = shell.host.clone();
+        self.screen_dirty = true;
+        was_open.then_some(host)
+    }
+
+    /// Drops an ended shell's tab.
+    pub fn remove_shell(&mut self, index: usize) {
+        if index < self.shells.len() {
+            self.shells.remove(index);
+            let last = (self.tabs.len() + self.shells.len()).saturating_sub(1);
+            self.current = self.current.min(last);
+            self.screen_dirty = true;
+        }
+    }
+
     /// The current tab's text, for copying.
     pub fn text(&self) -> String {
+        if let Some(shell) = self.shell() {
+            return shell.text();
+        }
         (self.tabs.get(self.current).into_iter())
             .flat_map(|tab| &tab.lines)
             .map(|line| format!("{}\n", line.text))
@@ -178,14 +262,35 @@ fn view(line: &Line) -> TerminalLine {
 pub fn push(app: &mut App, w: &AppWindow) {
     w.global::<ToolWindow>().set_open(Tool::index(app.tool));
     let state = w.global::<TerminalState>();
+    let t = app.t();
+    let typing_allowed = !app.busy && !app.locked;
+    let opener = app.current().map(|host| host.name.clone());
     let terminal = &mut app.terminal;
-    state.set_shown(!terminal.tabs.is_empty());
+    state.set_shown(!terminal.tabs.is_empty() || !terminal.shells.is_empty());
     state.set_current(terminal.current as i32);
+    state.set_can_open_shell(typing_allowed && opener.is_some());
+    state.set_open_shell_hint(
+        opener
+            .map(|name| t.format("shell.open_hint", &[("name", name)]))
+            .unwrap_or_else(|| t.get("shell.open_none").into())
+            .into(),
+    );
     let tabs: Vec<TerminalTab> = (terminal.tabs.iter())
         .map(|tab| TerminalTab {
             name: tab.name.as_str().into(),
             state: tab.state.index(),
+            shell: false,
         })
+        .chain(terminal.shells.iter().map(|shell| TerminalTab {
+            name: shell.name.as_str().into(),
+            state: match shell.state {
+                ShellState::Opening => 0,
+                ShellState::Open => 1,
+                ShellState::Failed => 3,
+                ShellState::Closed => 4,
+            },
+            shell: true,
+        }))
         .collect();
     let shown = state.get_tabs();
     if shown.row_count() != tabs.len() || shown.iter().zip(&tabs).any(|(a, b)| a != *b) {
@@ -206,6 +311,7 @@ pub fn push(app: &mut App, w: &AppWindow) {
         .as_any()
         .downcast_ref::<VecModel<TerminalLine>>()
         .expect("terminal lines are a VecModel");
+    push_shell(terminal, &state, typing_allowed, t);
     let current = terminal.tabs.get(terminal.current);
     let key = (terminal.current, terminal.generation);
     if terminal.synced != Some(key) {
@@ -218,15 +324,229 @@ pub fn push(app: &mut App, w: &AppWindow) {
     }
 }
 
+/// The current shell's screen, cursor and whether keys reach it.
+fn push_shell(
+    terminal: &mut Terminal,
+    state: &TerminalState,
+    typing_allowed: bool,
+    t: crate::i18n::Translator,
+) {
+    let current = terminal.current;
+    let Some(shell) = terminal.shell() else {
+        state.set_shell_view(false);
+        terminal.screen_synced = None;
+        return;
+    };
+    state.set_shell_view(true);
+    let open = shell.state == ShellState::Open;
+    state.set_shell_typing(open && typing_allowed);
+    state.set_shell_notice(
+        match shell.state {
+            ShellState::Opening => t.get("shell.opening").into(),
+            ShellState::Open if !typing_allowed => t.get("shell.paused").into(),
+            ShellState::Open => String::new(),
+            ShellState::Closed | ShellState::Failed => shell.note.clone(),
+        }
+        .into(),
+    );
+    if terminal.screen_dirty || terminal.screen_synced != Some(current) {
+        let screen = shell.parser.screen();
+        let (row, col) = screen.cursor_position();
+        state.set_cursor_row(i32::from(row));
+        state.set_cursor_col(i32::from(col));
+        state.set_cursor_shown(open && !screen.hide_cursor() && screen.scrollback() == 0);
+        let rows: Vec<ShellRow> = remote_shell::rows(screen);
+        state.set_screen(ModelRc::new(VecModel::from(rows)));
+        terminal.screen_dirty = false;
+        terminal.screen_synced = Some(current);
+    }
+}
+
+impl App {
+    /// Opens an interactive shell on the chosen host in a new terminal tab.
+    pub fn open_shell(&mut self) {
+        if self.busy || self.locked {
+            return;
+        }
+        let Some(host) = self.current() else {
+            return;
+        };
+        let (id, name) = (host.id.clone(), host.name.clone());
+        let shell = self.worker.shells.reserve();
+        let size = self.terminal.size();
+        self.terminal
+            .add_shell(ShellTab::new(shell, id.clone(), name, size));
+        self.tool = Some(Tool::Terminal);
+        self.send(json!({
+            "action": "shell_open",
+            "id": id,
+            "shell": shell,
+            "cols": size.0,
+            "rows": size.1,
+        }));
+    }
+
+    /// The answer to a request to open a shell.
+    pub fn shell_opened(&mut self, result: &Result<serde_json::Value, String>) {
+        let t = self.t();
+        let opening = (self.terminal.shells.iter_mut())
+            .filter(|shell| shell.state == ShellState::Opening)
+            .last();
+        if let Some(shell) = opening {
+            match result {
+                Ok(_) => shell.state = ShellState::Open,
+                Err(error) => {
+                    shell.state = ShellState::Failed;
+                    shell.note = t.format("shell.failed", &[("error", error.clone())]);
+                }
+            }
+            self.terminal.screen_dirty = true;
+        }
+    }
+
+    /// A shell ended, by the user, the remote side or a lock; its tab stays to read.
+    pub fn shell_ended(&mut self, id: u64, error: Option<String>) {
+        let t = self.t();
+        let note = match &error {
+            Some(error) => t.format("shell.broken", &[("error", error.clone())]),
+            None => t.get("shell.ended").into(),
+        };
+        if let Some(host) = self.terminal.shell_ended(id, error.is_some(), note) {
+            let outcome = if error.is_some() {
+                Outcome::Failed
+            } else {
+                Outcome::Succeeded
+            };
+            let host = self.hosts.iter().find(|h| h.id == host);
+            if self
+                .audit
+                .record(Action::ShellClose, outcome, host, None)
+                .is_err()
+            {
+                self.error = Some(self.t().get("audit.failed").into());
+            }
+        }
+    }
+
+    /// Sends the current shell bytes typed into it.
+    fn type_into_shell(&mut self, bytes: Vec<u8>) -> bool {
+        if self.busy || self.locked {
+            return false;
+        }
+        let Some(shell) = self.terminal.shell_mut() else {
+            return false;
+        };
+        if shell.state != ShellState::Open {
+            return false;
+        }
+        let id = shell.id;
+        // Typing returns to the live screen.
+        if shell.parser.screen().scrollback() > 0 {
+            shell.parser.screen_mut().set_scrollback(0);
+            self.terminal.screen_dirty = true;
+        }
+        self.worker.shells.send(id, Input::Data(bytes))
+    }
+}
+
 pub fn wire(ctx: &Ctx, w: &AppWindow) {
     let state = w.global::<TerminalState>();
     let c = ctx.clone();
     state.on_select(move |index| {
         c.update(|app| {
             if let Ok(index) = usize::try_from(index)
-                && index < app.terminal.tabs.len()
+                && index < app.terminal.tabs.len() + app.terminal.shells.len()
             {
                 app.terminal.current = index;
+            }
+        })
+    });
+    let c = ctx.clone();
+    state.on_open_shell(move || c.update(App::open_shell));
+    let c = ctx.clone();
+    state.on_close_shell(move |index| {
+        c.update(|app| {
+            let Some(index) = usize::try_from(index)
+                .ok()
+                .and_then(|i| i.checked_sub(app.terminal.tabs.len()))
+            else {
+                return;
+            };
+            let Some(shell) = app.terminal.shells.get(index) else {
+                return;
+            };
+            match shell.state {
+                // Ended in its own time: its tab goes.
+                ShellState::Closed | ShellState::Failed => app.terminal.remove_shell(index),
+                // Its end arrives as an event and marks the tab.
+                ShellState::Open => {
+                    app.worker.shells.send(shell.id, Input::Close);
+                }
+                ShellState::Opening => {}
+            }
+        })
+    });
+    let c = ctx.clone();
+    state.on_shell_key(move |text, control, alt, shift| {
+        let typed = {
+            let Ok(mut app) = c.app.try_borrow_mut() else {
+                return false;
+            };
+            let cursor_app = app
+                .terminal
+                .shell()
+                .is_some_and(|shell| shell.parser.screen().application_cursor());
+            let Some(bytes) = remote_shell::key_bytes(&text, control, alt, shift, cursor_app)
+            else {
+                return false;
+            };
+            app.type_into_shell(bytes)
+        };
+        c.update(|_| {});
+        typed
+    });
+    let c = ctx.clone();
+    state.on_shell_paste(move |text| {
+        c.update(|app| {
+            let bracketed = app
+                .terminal
+                .shell()
+                .is_some_and(|shell| shell.parser.screen().bracketed_paste());
+            app.type_into_shell(remote_shell::paste_bytes(&text, bracketed));
+        })
+    });
+    let c = ctx.clone();
+    state.on_shell_resized(move |cols, rows| {
+        let (Ok(cols), Ok(rows)) = (u16::try_from(cols), u16::try_from(rows)) else {
+            return;
+        };
+        let size = (cols.clamp(2, 1000), rows.clamp(2, 1000));
+        c.update(|app| {
+            if app.terminal.size == Some(size) {
+                return;
+            }
+            app.terminal.size = Some(size);
+            for shell in &mut app.terminal.shells {
+                shell.resize(size);
+                if shell.state == ShellState::Open {
+                    app.worker.shells.send(
+                        shell.id,
+                        Input::Resize {
+                            cols: u32::from(size.0),
+                            rows: u32::from(size.1),
+                        },
+                    );
+                }
+            }
+            app.terminal.screen_dirty = true;
+        })
+    });
+    let c = ctx.clone();
+    state.on_shell_scrolled(move |lines| {
+        c.update(|app| {
+            if let Some(shell) = app.terminal.shell_mut() {
+                shell.scroll(lines);
+                app.terminal.screen_dirty = true;
             }
         })
     });

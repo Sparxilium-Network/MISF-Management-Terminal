@@ -4,7 +4,7 @@ use misf_core::{
     dispatch, dispatch_with,
     model::{CheckResult, Host},
     package_manager::{self, Manager, Mode, apt, dnf},
-    reboot, ssh,
+    reboot, shell, ssh,
     store::Store,
 };
 use russh::{
@@ -37,6 +37,10 @@ struct State {
     upgraded: AtomicBool,
     /// Set once a dist-upgrade ran: later listings are empty.
     dist_upgraded: AtomicBool,
+    /// Interactive shells asked for: the terminal type and size of each PTY.
+    shell_ptys: Mutex<Vec<(String, u32, u32)>>,
+    /// Window size changes, as (columns, rows).
+    resizes: Mutex<Vec<(u32, u32)>>,
 }
 
 impl State {
@@ -146,6 +150,8 @@ struct Mock {
     state: Arc<State>,
     /// Commands waiting for their sudo password, by channel.
     waiting: HashMap<ChannelId, String>,
+    /// Channels running an interactive shell, which echoes what it gets.
+    shells: Vec<ChannelId>,
 }
 impl server::Server for Mock {
     type Handler = Self;
@@ -153,6 +159,7 @@ impl server::Server for Mock {
         Self {
             state: self.state.clone(),
             waiting: HashMap::new(),
+            shells: Vec::new(),
         }
     }
 }
@@ -209,17 +216,43 @@ impl server::Handler for Mock {
     async fn pty_request(
         &mut self,
         channel: ChannelId,
-        _: &str,
-        _: u32,
-        _: u32,
+        term: &str,
+        cols: u32,
+        rows: u32,
         _: u32,
         _: u32,
         modes: &[(Pty, u32)],
         session: &mut Session,
     ) -> Result<(), Self::Error> {
-        assert!(modes.contains(&(Pty::ECHO, 0)));
-        self.state.pty_count.fetch_add(1, Ordering::SeqCst);
+        if term == "dumb" {
+            // Commands run without echo, so a sudo password is never printed back.
+            assert!(modes.contains(&(Pty::ECHO, 0)));
+            self.state.pty_count.fetch_add(1, Ordering::SeqCst);
+        } else {
+            (self.state.shell_ptys.lock().unwrap()).push((term.into(), cols, rows));
+        }
         session.channel_success(channel)
+    }
+    async fn shell_request(
+        &mut self,
+        channel: ChannelId,
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        self.shells.push(channel);
+        session.channel_success(channel)?;
+        session.data(channel, b"\x1b[1mwelcome\x1b[0m\r\n$ ".to_vec())
+    }
+    async fn window_change_request(
+        &mut self,
+        _: ChannelId,
+        cols: u32,
+        rows: u32,
+        _: u32,
+        _: u32,
+        _: &mut Session,
+    ) -> Result<(), Self::Error> {
+        self.state.resizes.lock().unwrap().push((cols, rows));
+        Ok(())
     }
     async fn exec_request(
         &mut self,
@@ -246,6 +279,14 @@ impl server::Handler for Mock {
         data: &[u8],
         session: &mut Session,
     ) -> Result<(), Self::Error> {
+        if self.shells.contains(&channel) {
+            // `exit` ends the shell, as a login shell would.
+            if data == b"exit\r" {
+                session.eof(channel)?;
+                return session.close(channel);
+            }
+            return session.data(channel, data.to_vec());
+        }
         if let Some(command) = self.waiting.remove(&channel) {
             assert_eq!(data, b"sudo-secret\n");
             if self.state.wrong_sudo {
@@ -297,6 +338,7 @@ async fn fixture_on(detect: &str, fail_update: bool, wrong_sudo: bool) -> Fixtur
     let mut server = Mock {
         state: state.clone(),
         waiting: HashMap::new(),
+        shells: Vec::new(),
     };
     let task = tokio::spawn(async move {
         server.run_on_socket(config, &listener).await.unwrap();
@@ -1301,4 +1343,74 @@ async fn hosts_are_dragged_between_groups_and_survive_group_deletion() {
     assert!(database.groups.is_empty());
     assert_eq!(database.hosts[0].name, "db");
     assert_eq!(database.hosts[0].group_id, "");
+}
+
+/// Collects a shell's output and its end.
+#[derive(Default)]
+struct ShellScreen {
+    output: Mutex<Vec<u8>>,
+    ended: Mutex<Option<Option<String>>>,
+}
+
+impl shell::Screen for ShellScreen {
+    fn output(&self, _: u64, data: &[u8]) {
+        self.output.lock().unwrap().extend_from_slice(data);
+    }
+    fn ended(&self, _: u64, error: Option<String>) {
+        *self.ended.lock().unwrap() = Some(error);
+    }
+}
+
+/// Waits up to five seconds for `done`.
+async fn until(done: impl Fn() -> bool) {
+    for _ in 0..500 {
+        if done() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("timed out");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_interactive_shell_echoes_keys_follows_resizes_and_ends() {
+    let fixture = fixture(false, false).await;
+    let shells = shell::Shells::default();
+    let screen = Arc::new(ShellScreen::default());
+    let id = shells.reserve();
+    shell::open(&fixture.host, id, 100, 30, &shells, screen.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        *fixture.state.shell_ptys.lock().unwrap(),
+        [("xterm-256color".to_owned(), 100, 30)]
+    );
+    // Output arrives raw, escape sequences and all, for the emulator to draw.
+    let output = || String::from_utf8_lossy(&screen.output.lock().unwrap()).into_owned();
+    until(|| output().contains("$ ")).await;
+    assert!(output().starts_with("\x1b[1mwelcome"));
+    assert_eq!(shells.count(), 1);
+
+    assert!(shells.send(id, shell::Input::Data(b"nano\x18".to_vec())));
+    until(|| output().ends_with("nano\x18")).await;
+    assert!(shells.send(id, shell::Input::Resize { cols: 80, rows: 20 }));
+    until(|| !fixture.state.resizes.lock().unwrap().is_empty()).await;
+    assert_eq!(*fixture.state.resizes.lock().unwrap(), [(80, 20)]);
+
+    // The remote side ends it: the screen hears, and it is no longer open.
+    assert!(shells.send(id, shell::Input::Data(b"exit\r".to_vec())));
+    until(|| screen.ended.lock().unwrap().is_some()).await;
+    assert_eq!(*screen.ended.lock().unwrap(), Some(None));
+    assert_eq!(shells.count(), 0);
+    assert!(!shells.send(id, shell::Input::Data(b"x".to_vec())));
+
+    // Closing from this side, e.g. when the vault locks, ends it too.
+    let screen = Arc::new(ShellScreen::default());
+    let id = shells.reserve();
+    shell::open(&fixture.host, id, 100, 30, &shells, screen.clone())
+        .await
+        .unwrap();
+    shells.close_all();
+    until(|| screen.ended.lock().unwrap().is_some()).await;
+    assert_eq!(shells.count(), 0);
 }
