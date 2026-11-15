@@ -1,5 +1,13 @@
 # 全工作區檢查結果
 
+## 2026-11-16（即時輸出單行上限與 sudo 提示計數，分支 `feat/WYSIWYG-Terminal`，基於 `d3f9ecc`）
+
+- 依使用者提供的修法調整（MYTHOS-r2 遺留項目）：
+  - `console::Lines`：`\r` 也是行尾（資料結尾的 `\r` 與下一段開頭的 `\n` 合併），只掃描新資料；單行上限 8 KiB，超過時保留「上限＋最長密碼長度」原始位元組 → 清理 → 遮蔽 → 丟掉結尾最長密碼長度個字元 → 超過上限再切 → 加上「（此行過長，已截斷）」，之後丟棄到下一個行尾。
+  - `ssh::execute`：sudo 提示改由 `count_prompts` 增量計數（新資料加上前一段結尾提示長度減一個位元組），「一次送密碼、第二次中止」不變。
+- 互動 shell 不受影響。存檔的完整輸出不變。
+- 測試：console 新增 5 個（長行截斷且下一行完整、密碼跨截斷點、幾乎全是控制序列時密碼跨截斷點、中文字跨截斷點不留替代字元、`\r` 進度列即時送出且 `\r\n` 跨兩段不多空行）；ssh 新增 1 個（提示拆成多段、逐位元組、同段兩次、與 `str::matches` 結果一致）；既有的「sudo 提示拆在兩個封包」與「重複提示中止」整合測試通過。`cargo test --workspace`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo fmt` 通過。
+
 ## 2026-11-16（處理 MYTHOS-r2 的問題，分支 `feat/WYSIWYG-Terminal`，基於 `0ac559b`）
 
 - 依 `.daybrake/dangerzone/MYTHOS-r2.md`。使用者決定：自動鎖定時 shell 有輸出算活動；開 shell 不另外確認；自動鎖定預設啟用 15 分鐘（只影響沒設定過的人）；多行貼上不確認。

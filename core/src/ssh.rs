@@ -248,6 +248,9 @@ pub(crate) async fn execute(
         let mut output = Vec::new();
         let mut exit = None;
         let mut sent = false;
+        // sudo prompts seen so far, counted over new output only.
+        let mut prompts = 0;
+        let mut searched = 0;
         while let Some(msg) = channel.wait().await {
             match msg {
                 ChannelMsg::Data { data } | ChannelMsg::ExtendedData { data, .. } => {
@@ -255,9 +258,10 @@ pub(crate) async fn execute(
                         output.len() + data.len() <= LIMIT,
                         "遠端輸出超過 32 MiB 限制"
                     );
+                    let before = output.len();
                     output.extend_from_slice(&data);
                     lines.push(&data);
-                    let prompts = String::from_utf8_lossy(&output).matches(PROMPT).count();
+                    prompts += count_prompts(&output, before, &mut searched);
                     if prompts > 0 && !sent {
                         ensure!(
                             !secret.is_empty(),
@@ -285,6 +289,26 @@ pub(crate) async fn execute(
     })
     .await
     .context("遠端命令逾時；請確認目標主機上的套件管理器狀態")?
+}
+
+/// Counts sudo prompts that end in `output[before..]`, the bytes just added, so long
+/// output is never searched again. `searched` is where the last prompt found ended:
+/// prompts do not overlap, as `str::matches` counts them.
+fn count_prompts(output: &[u8], before: usize, searched: &mut usize) -> usize {
+    let prompt = PROMPT.as_bytes();
+    // A prompt split across chunks starts at most its length less one before the new bytes.
+    let mut at = (*searched).max(before.saturating_sub(prompt.len() - 1));
+    let mut found = 0;
+    while at + prompt.len() <= output.len() {
+        if output[at..].starts_with(prompt) {
+            found += 1;
+            at += prompt.len();
+            *searched = at;
+        } else {
+            at += 1;
+        }
+    }
+    found
 }
 
 /// Signs in, runs DETECT and records what was negotiated; failures are recorded, not returned.
@@ -319,4 +343,39 @@ pub async fn test_connection(host: &Host) -> ConnectionTest {
         }
     }
     test
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Feeds `chunks` one by one, as `execute` does, and counts the prompts.
+    fn count(chunks: &[&[u8]]) -> usize {
+        let (mut output, mut searched, mut found) = (Vec::new(), 0, 0);
+        for chunk in chunks {
+            let before = output.len();
+            output.extend_from_slice(chunk);
+            found += count_prompts(&output, before, &mut searched);
+        }
+        found
+    }
+
+    #[test]
+    fn prompts_are_counted_once_even_when_split_across_chunks() {
+        let prompt = PROMPT.as_bytes();
+        let (head, tail) = prompt.split_at(7);
+        assert_eq!(count(&[b"before ", head, tail, b" after"]), 1);
+        // Split one byte at a time.
+        let bytes: Vec<&[u8]> = prompt.chunks(1).collect();
+        assert_eq!(count(&bytes), 1);
+        // Two prompts: once in one chunk, once split; nothing is counted twice.
+        let twice = [prompt, b"Sorry, try again.\n".as_slice(), prompt].concat();
+        assert_eq!(count(&[&twice]), 2);
+        assert_eq!(count(&[prompt, b"x", head, tail]), 2);
+        // Matches what `str::matches` counts over the whole output.
+        let whole = [b"a".as_slice(), prompt, prompt, b"b"].concat();
+        let expected = String::from_utf8_lossy(&whole).matches(PROMPT).count();
+        assert_eq!(count(&[&whole[..5], &whole[5..30], &whole[30..]]), expected);
+        assert_eq!(count(&[b"no prompt here"]), 0);
+    }
 }
