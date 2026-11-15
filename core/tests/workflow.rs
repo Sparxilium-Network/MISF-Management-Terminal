@@ -1,5 +1,6 @@
 use misf_core::{
     batch::{self, Decision},
+    console::{Console, Echo},
     dispatch, dispatch_with,
     model::{CheckResult, Host},
     package_manager::{self, Manager, Mode, apt, dnf},
@@ -515,14 +516,18 @@ async fn reboot_runs_one_fixed_command_and_only_on_apt_hosts() {
 
     let mut root = fixture.host.clone();
     root.username = "root".into();
-    reboot::reboot(&root, &|_| {}).await.unwrap();
+    reboot::reboot(&root, &|_| {}, &Echo::silent())
+        .await
+        .unwrap();
     assert_eq!(
         fixture.state.commands.lock().unwrap().last().unwrap(),
         reboot::ROOT
     );
 
     let rocky = fixture_on(DNF_HOST, false, false).await;
-    let error = reboot::reboot(&rocky.host, &|_| {}).await.unwrap_err();
+    let error = reboot::reboot(&rocky.host, &|_| {}, &Echo::silent())
+        .await
+        .unwrap_err();
     assert!(error.to_string().contains("APT"), "{error}");
     assert!(rocky.state.commands.lock().unwrap().is_empty());
 }
@@ -767,6 +772,27 @@ impl batch::Observer for Recorder {
     }
 }
 
+/// What each host's commands showed live, as `(host ID, text)`; commands start with `$ `.
+#[derive(Default)]
+struct Screen(Mutex<Vec<(String, String)>>);
+impl Console for Screen {
+    fn command(&self, host: &str, command: &str) {
+        let line = format!("$ {command}\n");
+        self.0.lock().unwrap().push((host.into(), line));
+    }
+    fn output(&self, host: &str, text: &str) {
+        self.0.lock().unwrap().push((host.into(), text.into()));
+    }
+}
+impl Screen {
+    fn of(&self, host: &str) -> String {
+        (self.0.lock().unwrap().iter())
+            .filter(|(id, _)| id == host)
+            .map(|(_, text)| text.as_str())
+            .collect()
+    }
+}
+
 #[tokio::test]
 async fn batch_reports_each_host_and_an_abort_skips_hosts_not_started() {
     let fixture = fixture(false, false).await;
@@ -789,11 +815,14 @@ async fn batch_reports_each_host_and_an_abort_skips_hosts_not_started() {
         finished: Mutex::new(vec![]),
         failed: Mutex::new(vec![]),
     };
+    let screen = Arc::new(Screen::default());
+    let console: Arc<dyn Console> = screen.clone();
     let response = dispatch_with(
         json!({"action":"batch","operation":"check","ids":ids}),
         &store,
         &|_| {},
         &recorder,
+        &console,
     )
     .await
     .unwrap();
@@ -807,6 +836,28 @@ async fn batch_reports_each_host_and_an_abort_skips_hosts_not_started() {
     assert_eq!(finished.len(), results.len());
     for (id, status) in finished.iter() {
         assert_eq!(store.host(id).unwrap().last_check.unwrap().status, *status);
+    }
+    // Each checked host showed its own commands and output live, cleaned and redacted.
+    for (id, status) in finished.iter().filter(|(_, status)| status == "success") {
+        let shown = screen.of(id);
+        assert!(
+            shown.contains(&format!("$ {}\n", apt::LIST)),
+            "{status}: {shown}"
+        );
+        assert!(
+            shown.contains("Listing...\nopenssl/stable-security"),
+            "{shown}"
+        );
+        assert!(!shown.contains("sudo-secret"));
+        // The prompt marker appears only in the commands that set it, never in output.
+        let output: String = (shown.lines())
+            .filter(|line| !line.starts_with("$ "))
+            .collect();
+        assert!(!output.contains("__MISF_SUDO_PROMPT__"), "{shown}");
+        assert!(!shown.contains(['\r', '\x1b']));
+    }
+    for id in skipped {
+        assert!(screen.of(id.as_str().unwrap()).is_empty());
     }
     for id in skipped {
         assert!(

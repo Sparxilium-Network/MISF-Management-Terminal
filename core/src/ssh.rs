@@ -1,6 +1,7 @@
 //! The SSH transport: host-key checks, sign-in and running one command.
 //! What runs over it for package management lives in `package_manager`.
 
+use crate::console::Echo;
 use crate::model::{ConnectionTest, Host, decode_private_key};
 use crate::package_manager::{DETECT, Platform, SUDO_PROMPT as PROMPT, parse_platform};
 use anyhow::{Context, Result, bail, ensure};
@@ -217,13 +218,17 @@ pub(crate) async fn disconnect(session: &Session) {
 }
 
 /// Runs one command; answers a sudo prompt once with `secret`. Returns exit code and output.
+/// `echo` shows the command and its output as they arrive.
 pub(crate) async fn execute(
     session: &Session,
     command: &str,
     pty: bool,
     secret: &str,
     seconds: u64,
+    echo: &Echo,
 ) -> Result<(u32, String)> {
+    echo.command(command);
+    let mut lines = echo.lines();
     timeout(Duration::from_secs(seconds), async {
         let mut channel = session.channel_open_session().await?;
         if pty {
@@ -251,6 +256,7 @@ pub(crate) async fn execute(
                         "遠端輸出超過 32 MiB 限制"
                     );
                     output.extend_from_slice(&data);
+                    lines.push(&data);
                     let prompts = String::from_utf8_lossy(&output).matches(PROMPT).count();
                     if prompts > 0 && !sent {
                         ensure!(
@@ -287,7 +293,7 @@ pub async fn test_connection(host: &Host) -> ConnectionTest {
     let details = Details::default();
     let result: Result<Platform> = async {
         let session = authenticate(host, &details).await?;
-        let result = execute(&session, DETECT, false, "", 20).await;
+        let result = execute(&session, DETECT, false, "", 20, &Echo::silent()).await;
         disconnect(&session).await;
         let (code, output) = result?;
         ensure!(code == 0, "無法辨識遠端作業系統");

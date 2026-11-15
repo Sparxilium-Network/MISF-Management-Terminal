@@ -34,6 +34,10 @@ impl Session {
     pub fn set_batch_observer(&mut self, observer: Box<dyn crate::batch::Observer + Send>) {
         self.storage.set_batch_observer(observer);
     }
+    /// Where remote commands and their output go as they run; the default shows nothing.
+    pub fn set_console(&mut self, console: std::sync::Arc<dyn crate::console::Console>) {
+        self.storage.set_console(console);
+    }
     /// Saves results outside a request: used after a request panicked, to mark the
     /// upgrades it left unknown.
     pub fn save_results(&self, results: Vec<(String, crate::model::CheckResult)>) -> Result<()> {

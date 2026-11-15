@@ -2,6 +2,7 @@
 //! and scheduled one minute ahead: the SSH command returns cleanly, and `shutdown -c` on
 //! the host can still cancel it.
 
+use crate::console::Echo;
 use crate::model::Host;
 use crate::ssh;
 use anyhow::{Result, ensure};
@@ -17,7 +18,7 @@ pub fn command(host: &Host) -> &'static str {
 }
 
 /// Schedules the reboot and returns the host's redacted reply.
-pub async fn reboot(host: &Host, progress: &dyn Fn(&str)) -> Result<String> {
+pub async fn reboot(host: &Host, progress: &dyn Fn(&str), echo: &Echo) -> Result<String> {
     ensure!(host.manager() == "apt", "重新開機只支援 APT 主機");
     progress("正在連線並驗證 SSH 主機指紋…");
     let session = ssh::authenticate(host, &Default::default()).await?;
@@ -29,6 +30,7 @@ pub async fn reboot(host: &Host, progress: &dyn Fn(&str)) -> Result<String> {
         !root && host.use_pty,
         if root { "" } else { host.sudo_secret() },
         SECONDS,
+        echo,
     )
     .await;
     ssh::disconnect(&session).await;

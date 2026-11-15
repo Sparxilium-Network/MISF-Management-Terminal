@@ -1,6 +1,7 @@
 //! Batch check or upgrade: each host is saved and reported the moment it finishes, and
 //! a failed host pauses new starts until the caller decides to continue or stop.
 
+use crate::console::{Console, Echo};
 use crate::model::{CheckResult, Host};
 use crate::package_manager::{self, Mode};
 use crate::store::Store;
@@ -10,6 +11,7 @@ use serde_json::{Value, json};
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 
 /// Hosts contacted at once by a batch; the rest wait for a free slot.
 pub(crate) const PARALLEL: usize = 8;
@@ -61,6 +63,7 @@ pub(crate) async fn run(
     store: &Store,
     progress: &dyn Fn(&str),
     observer: &dyn Observer,
+    console: &Arc<dyn Console>,
 ) -> Result<Value> {
     let Some(mode) = request["operation"].as_str().and_then(Mode::from_id) else {
         anyhow::bail!("不支援的批次操作");
@@ -99,8 +102,9 @@ pub(crate) async fn run(
                 break;
             };
             let id = host.id.clone();
-            let handle =
-                tasks.spawn(async move { package_manager::run(&host, mode, &|_: &str| {}).await });
+            let echo = Echo::new(console.clone(), &host);
+            let handle = tasks
+                .spawn(async move { package_manager::run(&host, mode, &|_: &str| {}, echo).await });
             running.insert(handle.id(), id);
         }
         if tasks.is_empty() && asking.is_none() {

@@ -16,8 +16,9 @@ import { VaultDialog, VaultState, SlotView } from "dialogs/vault.slint";
 import { UpgradeDialog, UpgradeState, KeptBackDialog, KeptBackState, RebootDialog, RebootState, BatchFailureDialog, BatchFailureState } from "dialogs/confirm.slint";
 import { TrustDialog, TrustState, DeleteDialog, DeleteState, GroupDialog, GroupState, PlaintextDialog, PlaintextState, SchemaDialog, SchemaState, CloseDialog, CloseState, ErrorDialog, ErrorState } from "dialogs/simple.slint";
 import { SettingsWindow, SettingsState, TreeRow, ColumnToggle } from "settings.slint";
+import { TerminalPanel, TerminalState, TerminalTab, TerminalLine } from "terminal.slint";
 
-export { HintData, Theme, T, Tip, Clip, MenuLine, PopMenu, Shell, HistoryLine, SidebarState, SidebarRow, HostState, ResultState, InfoLine, BatchState, ManagerChoice, BatchColumnView, BatchCell, BatchRowView, EditorState, KeysState, KeyView, VaultState, SlotView, UpgradeState, KeptBackState, RebootState, BatchFailureState, TrustState, DeleteState, GroupState, PlaintextState, SchemaState, CloseState, ErrorState, SettingsWindow, SettingsState, TreeRow, ColumnToggle }
+export { HintData, Theme, T, Tip, Clip, MenuLine, PopMenu, Shell, HistoryLine, SidebarState, SidebarRow, HostState, ResultState, InfoLine, BatchState, ManagerChoice, BatchColumnView, BatchCell, BatchRowView, EditorState, KeysState, KeyView, VaultState, SlotView, UpgradeState, KeptBackState, RebootState, BatchFailureState, TrustState, DeleteState, GroupState, PlaintextState, SchemaState, CloseState, ErrorState, SettingsWindow, SettingsState, TreeRow, ColumnToggle, TerminalState, TerminalTab, TerminalLine }
 
 // This run's past results and errors, newest first, shown over the bottom of the page
 // above the status line, so the pages keep their size.
@@ -278,6 +279,13 @@ export component AppWindow inherits Window {
     default-font-size: 14px;
     default-font-family: Theme.font-family;
     default-font-weight: Theme.font-weight;
+    // The terminal body's tallest height, leaving the pages at least 420px. Applied when
+    // the window changes size, not bound, since the window's height follows its layout.
+    property <length> terminal-limit: max(80px, self.height - 420px);
+    function fit-terminal() {
+        TerminalState.body-height = min(TerminalState.body-height, self.terminal-limit);
+    }
+    changed height => { self.fit-terminal(); }
     AppearanceSync { }
     ClipboardSink { }
     // Runs a chosen right-click menu line.
@@ -296,15 +304,26 @@ export component AppWindow inherits Window {
     }
     VerticalLayout {
         TopBar { }
-        HorizontalLayout {
+        // The terminal takes its height from here: the pages may be shorter than they
+        // would like, and are clipped at the bottom rather than pushing the status line
+        // out of the window.
+        Rectangle {
             vertical-stretch: 1;
-            Sidebar {
-                width: 280px;
-                busy: Shell.busy;
+            min-height: 200px;
+            clip: true;
+            HorizontalLayout {
+                Sidebar {
+                    width: 280px;
+                    busy: Shell.busy;
+                }
+                Workspace {
+                    horizontal-stretch: 1;
+                }
             }
-            Workspace {
-                horizontal-stretch: 1;
-            }
+        }
+        // Under the pages and sidebar, like an IDE's terminal.
+        if TerminalState.shown: TerminalPanel {
+            max-body-height: root.terminal-limit;
         }
         status-bar := StatusBar { }
     }

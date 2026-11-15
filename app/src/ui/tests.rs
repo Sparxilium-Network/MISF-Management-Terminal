@@ -45,6 +45,7 @@ fn test_app(allow_passkey: bool) -> (App, Receiver<Value>, Sender<Event>, tempfi
             requests,
             events: results,
             decisions: tokio::sync::mpsc::unbounded_channel().0,
+            terminal: Default::default(),
         },
     );
     assert_eq!(commands.recv().unwrap()["action"], "storage_status");
@@ -1262,4 +1263,152 @@ fn pages_respond_to_clicks() {
     assert!(in_settings(t.get("settings.nav_batch")).is_some());
     assert!(commands.try_recv().is_err());
     let _: &SettingsWindow = &settings;
+}
+
+#[test]
+fn the_terminal_shows_each_hosts_output_live_in_its_own_tab() {
+    i_slint_backend_testing::init_no_event_loop();
+    let (mut app, _commands, events, _directory) = test_app(false);
+    unlocked(&mut app);
+    app.hosts = vec![
+        host("a", "apt", "SHA256:a"),
+        host("b", "apt", "SHA256:b"),
+        host("c", "apt", "SHA256:c"),
+    ];
+    for host in &mut app.hosts {
+        host.name = format!("server-{}", host.id);
+    }
+    let t = app.t();
+    let (ctx, main, _settings) = build(app, true).unwrap();
+    let state = main.global::<super::TerminalState>();
+    let lines = || -> Vec<(String, bool)> {
+        (state.get_lines().iter())
+            .map(|line| (line.text.to_string(), line.command))
+            .collect()
+    };
+    let states = || -> Vec<i32> { state.get_tabs().iter().map(|tab| tab.state).collect() };
+    let terminal = |host: &str, text: &str, command: bool| {
+        events
+            .send(Event::Terminal {
+                host: host.into(),
+                text: text.into(),
+                command,
+            })
+            .unwrap();
+    };
+    // Nothing has run yet: no panel.
+    assert!(!state.get_shown());
+
+    // A batch opens one tab per host, in order, all waiting.
+    ctx.update(|app| {
+        app.send(json!({"action":"batch","operation":"upgrade","ids":["a","b","c","a"]}))
+    });
+    assert!(state.get_shown() && state.get_open());
+    let names: Vec<String> = state
+        .get_tabs()
+        .iter()
+        .map(|tab| tab.name.to_string())
+        .collect();
+    assert_eq!(names, ["server-a", "server-b", "server-c"]);
+    assert_eq!(states(), [0, 0, 0]);
+
+    // Output lands in its host's tab as it arrives; the shown tab grows line by line.
+    terminal("a", "apt-get update", true);
+    terminal("a", "Get:1 first\nGet:2 second\n", false);
+    terminal("b", "apt-get update", true);
+    ctx.update(App::process_events);
+    assert_eq!(states(), [1, 1, 0]);
+    assert_eq!(
+        lines(),
+        [
+            ("$ apt-get update".into(), true),
+            ("Get:1 first".into(), false),
+            ("Get:2 second".into(), false),
+        ]
+    );
+    // A later wake-up appends to the same model instead of replacing it.
+    let model = state.get_lines();
+    terminal("a", "Get:3 third\n", false);
+    ctx.update(App::process_events);
+    assert_eq!(lines().len(), 4);
+    assert_eq!(model.row_count(), 4);
+
+    // Each host settles as the batch reports it; a stop leaves the rest skipped.
+    events
+        .send(Event::BatchHost {
+            id: "a".into(),
+            result: CheckResult {
+                operation: "upgrade".into(),
+                status: "success".into(),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    events
+        .send(Event::BatchHost {
+            id: "b".into(),
+            result: CheckResult {
+                operation: "upgrade".into(),
+                status: "failed".into(),
+                error: "boom\nmore detail".into(),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    events
+        .send(Event::Done {
+            action: "batch".into(),
+            result: Ok(json!({"results": [], "skipped": ["c"]})),
+        })
+        .unwrap();
+    ctx.update(App::process_events);
+    assert_eq!(states(), [2, 3, 4]);
+    assert_eq!(
+        lines().last().unwrap().0,
+        format!("[{}]", t.get("terminal.succeeded"))
+    );
+
+    // Another tab shows that host's lines; copying takes the shown tab.
+    state.invoke_select(1);
+    assert_eq!(
+        lines(),
+        [
+            ("$ apt-get update".into(), true),
+            (format!("[{}] boom", t.get("terminal.failed")), false),
+        ]
+    );
+    state.invoke_copy();
+    assert_eq!(
+        main.global::<super::Clip>().get_text(),
+        format!("$ apt-get update\n[{}] boom\n", t.get("terminal.failed"))
+    );
+
+    // Work that reaches no host leaves the last run in place; the panel folds away.
+    ctx.update(|app| app.send(json!({"action":"list"})));
+    assert_eq!(states(), [2, 3, 4]);
+    state.invoke_toggle();
+    assert!(!state.get_open() && state.get_shown());
+
+    // A single-host run replaces it and settles from its result; old lines are dropped
+    // in steps so a long run stays bounded.
+    ctx.update(|app| app.send(json!({"action":"check","id":"c"})));
+    assert!(state.get_open());
+    let long: String = (0..super::terminal::MAX_LINES + 10)
+        .map(|n| format!("line {n}\n"))
+        .collect();
+    terminal("c", &long, false);
+    events
+        .send(Event::Done {
+            action: "check".into(),
+            result: Ok(json!({"status": "success"})),
+        })
+        .unwrap();
+    ctx.update(App::process_events);
+    assert_eq!(states(), [2]);
+    let shown = lines();
+    assert!(shown.len() <= super::terminal::MAX_LINES);
+    assert_eq!(
+        shown[shown.len() - 2].0,
+        format!("line {}", super::terminal::MAX_LINES + 9)
+    );
 }

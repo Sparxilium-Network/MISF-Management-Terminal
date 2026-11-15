@@ -269,11 +269,16 @@ pub struct StorageSession {
     warning: String,
     /// Sees each batch host as it finishes and decides whether a failure stops the batch.
     observer: Box<dyn batch::Observer + Send>,
+    /// Shows remote commands and their output as they run.
+    console: std::sync::Arc<dyn crate::console::Console>,
 }
 
 impl StorageSession {
     pub fn set_batch_observer(&mut self, observer: Box<dyn batch::Observer + Send>) {
         self.observer = observer;
+    }
+    pub fn set_console(&mut self, console: std::sync::Arc<dyn crate::console::Console>) {
+        self.console = console;
     }
     pub(crate) fn host_for_audit(&self, id: &str) -> Result<crate::model::Host> {
         self.store.as_ref().context("Vault locked")?.host(id)
@@ -302,6 +307,7 @@ impl StorageSession {
             encrypted,
             warning: String::new(),
             observer: Box::new(batch::Unattended),
+            console: std::sync::Arc::new(crate::console::Silent),
         }
     }
 
@@ -485,7 +491,14 @@ impl StorageSession {
                     .store
                     .as_ref()
                     .context("主機庫已鎖定，請先輸入解鎖密碼")?;
-                dispatch_with(request, store, progress, self.observer.as_ref()).await
+                dispatch_with(
+                    request,
+                    store,
+                    progress,
+                    self.observer.as_ref(),
+                    &self.console,
+                )
+                .await
             }
         }
     }

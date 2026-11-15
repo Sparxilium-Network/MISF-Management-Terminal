@@ -1,6 +1,7 @@
 use misf_core::{
     audit::AuditLog,
     batch::{self, Decision},
+    console::Console,
     model::CheckResult,
     runtime::RuntimePaths,
     session::Session,
@@ -9,6 +10,7 @@ use serde_json::Value;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{
     Arc,
+    atomic::{AtomicBool, Ordering},
     mpsc::{self, Receiver, Sender},
 };
 use tokio::sync::{
@@ -18,6 +20,13 @@ use tokio::sync::{
 
 pub enum Event {
     Progress(String),
+    /// A remote command about to run on a host, or complete lines of its output; already
+    /// redacted. These come in bursts, so they share one wake-up: see [`Worker::terminal`].
+    Terminal {
+        host: String,
+        text: String,
+        command: bool,
+    },
     /// One batch host finished; its result is already saved.
     BatchHost {
         id: String,
@@ -103,6 +112,38 @@ pub struct Worker {
     pub events: Receiver<Event>,
     /// Answers to [`Event::BatchFailed`], one per question.
     pub decisions: UnboundedSender<Decision>,
+    /// Set when terminal output woke the UI; cleared by the UI before it reads
+    /// [`Self::events`], so lines arriving later wake it again.
+    pub terminal: Arc<AtomicBool>,
+}
+
+/// Forwards live remote output to the UI, waking it at most once per read.
+struct Screen {
+    events: Sender<Event>,
+    wake: Wake,
+    woken: Arc<AtomicBool>,
+}
+
+impl Screen {
+    fn send(&self, host: &str, text: &str, command: bool) {
+        let _ = self.events.send(Event::Terminal {
+            host: host.into(),
+            text: text.into(),
+            command,
+        });
+        if !self.woken.swap(true, Ordering::AcqRel) {
+            (self.wake)();
+        }
+    }
+}
+
+impl Console for Screen {
+    fn command(&self, host: &str, command: &str) {
+        self.send(host, command, true);
+    }
+    fn output(&self, host: &str, text: &str) {
+        self.send(host, text, false);
+    }
 }
 
 /// Forwards batch progress to the UI and waits for its answer to a failure.
@@ -158,6 +199,8 @@ impl Worker {
         let (requests, jobs) = mpsc::channel::<Value>();
         let (events, results) = mpsc::channel();
         let (decisions, answers) = unbounded_channel();
+        let terminal = Arc::new(AtomicBool::new(false));
+        let woken = terminal.clone();
         std::thread::spawn(move || {
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
@@ -169,6 +212,11 @@ impl Worker {
                 wake: wake.clone(),
                 decisions: Mutex::new(answers),
                 reported: done.clone(),
+            }));
+            session.set_console(Arc::new(Screen {
+                events: events.clone(),
+                wake: wake.clone(),
+                woken,
             }));
             while let Ok(request) = jobs.recv() {
                 let action = request["action"].as_str().unwrap_or_default().to_string();
@@ -208,6 +256,7 @@ impl Worker {
             requests,
             events: results,
             decisions,
+            terminal,
         }
     }
 }

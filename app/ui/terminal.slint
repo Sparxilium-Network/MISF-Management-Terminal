@@ -1,0 +1,211 @@
+// The terminal panel under the pages, like an IDE's: each host's remote commands and
+// output as they run, one tab per host. Read-only.
+import { ListView, ScrollView } from "std-widgets.slint";
+import { Theme, T } from "theme.slint";
+import { TextButton } from "widgets.slint";
+
+export struct TerminalTab {
+    name: string,
+    // 0 waiting, 1 running, 2 succeeded, 3 failed, 4 skipped.
+    state: int,
+}
+
+export struct TerminalLine {
+    text: string,
+    command: bool,
+}
+
+export global TerminalState {
+    // There is a run to show.
+    in property <bool> shown;
+    in property <bool> open;
+    in property <[TerminalTab]> tabs;
+    in property <int> current;
+    in property <[TerminalLine]> lines;
+    // Set from the saved preference once, then by dragging; `resized` saves it.
+    in-out property <length> body-height: 240px;
+    callback toggle();
+    callback select(index: int);
+    callback copy();
+    callback resized(height: length);
+}
+
+component StateDot inherits Rectangle {
+    in property <int> state;
+    width: 8px;
+    height: 8px;
+    border-radius: 4px;
+    background: root.state == 1 ? Theme.blue
+        : root.state == 2 ? Theme.success
+        : root.state == 3 ? Theme.error : Theme.muted.with-alpha(0.45);
+}
+
+component HostTab inherits Rectangle {
+    in property <TerminalTab> tab;
+    in property <bool> selected;
+    callback clicked();
+    height: 28px;
+    width: row.preferred-width;
+    border-radius: 4px;
+    background: root.selected ? Theme.selection
+        : touch.has-hover ? Theme.selection.with-alpha(0.55) : transparent;
+    accessible-role: AccessibleRole.tab;
+    accessible-label: root.tab.name;
+    accessible-action-default => { root.clicked(); }
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+    row := HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 6px;
+        alignment: start;
+        VerticalLayout {
+            alignment: center;
+            StateDot {
+                state: root.tab.state;
+            }
+        }
+        Text {
+            text: root.tab.name;
+            font-size: 12px;
+            color: root.tab.state == 4 ? Theme.muted : Theme.ink;
+            vertical-alignment: center;
+            max-width: 180px;
+            overflow: elide;
+        }
+    }
+}
+
+export component TerminalPanel inherits Rectangle {
+    // The tallest a drag may make the body, so the pages above keep their room. Read only
+    // while dragging: a binding on the window's height would loop through its layout.
+    in property <length> max-body-height;
+    property <length> row-height: 18px;
+    property <length> body: max(80px, TerminalState.body-height);
+    // Follows new output while scrolled to the end.
+    property <bool> follow: true;
+    property <int> count: TerminalState.lines.length;
+    property <length> bottom: min(0px, list.visible-height - root.count * root.row-height);
+    background: Theme.surface;
+    changed count => {
+        if (root.follow) {
+            list.content-y = root.bottom;
+        }
+    }
+    VerticalLayout {
+        // The drag handle: the top edge while open.
+        Rectangle {
+            height: TerminalState.open ? 5px : 1px;
+            background: handle.has-hover || handle.pressed ? Theme.blue.with-alpha(0.6) : Theme.border;
+            handle := TouchArea {
+                enabled: TerminalState.open;
+                mouse-cursor: ns-resize;
+                moved => {
+                    if (self.pressed) {
+                        TerminalState.body-height = max(80px, min(root.max-body-height, root.body - (self.mouse-y - self.pressed-y)));
+                    }
+                }
+                pointer-event(event) => {
+                    if (event.kind == PointerEventKind.up) {
+                        TerminalState.resized(root.body);
+                    }
+                }
+            }
+        }
+        HorizontalLayout {
+            height: 36px;
+            padding-left: 8px;
+            padding-right: 8px;
+            spacing: 6px;
+            toggle := TouchArea {
+                width: title.preferred-width + 26px;
+                mouse-cursor: pointer;
+                accessible-role: button;
+                accessible-label: T.get("terminal.title");
+                accessible-expandable: true;
+                accessible-expanded: TerminalState.open;
+                accessible-action-default => { TerminalState.toggle(); }
+                clicked => { TerminalState.toggle(); }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Rectangle {
+                        width: 10px;
+                        Path {
+                            width: 10px;
+                            height: 8px;
+                            y: (parent.height - self.height) / 2;
+                            viewbox-width: 10;
+                            viewbox-height: 8;
+                            fill: toggle.has-hover ? Theme.ink : Theme.muted;
+                            // Points down, toward the panel, when open; right when closed.
+                            commands: TerminalState.open ? "M 1 1.5 L 9 1.5 L 5 6.5 Z" : "M 3 0 L 8 4 L 3 8 Z";
+                        }
+                    }
+                    title := Text {
+                        text: T.get("terminal.title");
+                        font-size: 12px;
+                        font-weight: 700;
+                        color: Theme.ink;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+            Rectangle {
+                width: 1px;
+                background: Theme.border;
+            }
+            // Many hosts scroll sideways.
+            ScrollView {
+                horizontal-stretch: 1;
+                content-width: tabs.preferred-width;
+                content-height: self.visible-height;
+                tabs := HorizontalLayout {
+                    spacing: 2px;
+                    alignment: start;
+                    padding-top: 4px;
+                    padding-bottom: 4px;
+                    for tab[i] in TerminalState.tabs: HostTab {
+                        tab: tab;
+                        selected: i == TerminalState.current;
+                        clicked => { TerminalState.select(i); }
+                    }
+                }
+            }
+            TextButton {
+                horizontal-stretch: 0;
+                text: T.get("terminal.copy");
+                font-size: 12px;
+                enabled: TerminalState.lines.length > 0;
+                clicked => { TerminalState.copy(); }
+            }
+        }
+        // Kept while closed, only flattened, so the list keeps its place.
+        Rectangle {
+            height: TerminalState.open ? root.body : 0px;
+            visible: TerminalState.open;
+            background: Theme.background;
+            border-color: Theme.border;
+            border-width: 1px;
+            list := ListView {
+                // Scrolled away from the end: stop following until back at it.
+                changed content-y => {
+                    root.follow = self.content-y <= root.bottom + 2px;
+                }
+                for line in TerminalState.lines: Text {
+                    height: root.row-height;
+                    x: 8px;
+                    width: parent.width - 16px;
+                    text: line.text;
+                    font-family: Theme.mono-font;
+                    font-size: Theme.mono-size;
+                    font-weight: line.command ? 700 : 400;
+                    color: line.command ? Theme.blue : Theme.ink;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+            }
+        }
+    }
+}

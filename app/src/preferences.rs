@@ -480,7 +480,15 @@ pub struct Preferences {
     pub unlock_method: UnlockMethod,
     /// Minutes without input before an unlocked vault locks itself; `None` never locks.
     pub auto_lock_minutes: Option<u16>,
+    /// The terminal panel's height in logical pixels, as last dragged; `None` is
+    /// [`TERMINAL_HEIGHT`].
+    pub terminal_height: Option<f32>,
 }
+
+/// The terminal panel's first height.
+pub const TERMINAL_HEIGHT: f32 = 240.0;
+/// The terminal heights a saved file may hold.
+const TERMINAL_HEIGHTS: std::ops::RangeInclusive<f64> = 80.0..=4000.0;
 
 /// The longest idle time the auto-lock setting accepts, one day.
 pub const AUTO_LOCK_MAX: u16 = 24 * 60;
@@ -556,6 +564,10 @@ impl Preferences {
                 .as_u64()
                 .and_then(|minutes| u16::try_from(minutes).ok())
                 .filter(|minutes| (1..=AUTO_LOCK_MAX).contains(minutes)),
+            terminal_height: value["terminal_height"]
+                .as_f64()
+                .filter(|height| TERMINAL_HEIGHTS.contains(height))
+                .map(|height| height as f32),
         })
     }
 
@@ -584,6 +596,7 @@ impl Preferences {
             "batch_detail": self.batch_detail.code(),
             "unlock_method": self.unlock_method.code(),
             "auto_lock_minutes": self.auto_lock_minutes,
+            "terminal_height": self.terminal_height,
         });
         if let Some(window) = self.window {
             value["window"] = json!({
@@ -692,6 +705,7 @@ mod tests {
             batch_columns: columns,
             batch_detail: BatchDetail::Popup,
             auto_lock_minutes: Some(30),
+            terminal_height: Some(320.0),
             font: InterfaceFont::NotoBold,
             ..Default::default()
         };
@@ -707,6 +721,7 @@ mod tests {
         assert_eq!(loaded.batch_columns, columns);
         assert_eq!(loaded.batch_detail, BatchDetail::Popup);
         assert_eq!(loaded.auto_lock_minutes, Some(30));
+        assert_eq!(loaded.terminal_height, Some(320.0));
         assert_eq!(loaded.font, InterfaceFont::NotoBold);
         let shown: Vec<_> = columns.visible().into_iter().map(|(_, c)| c).collect();
         assert_eq!(

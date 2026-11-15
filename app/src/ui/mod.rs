@@ -11,6 +11,7 @@ mod logging;
 mod settings;
 mod shell;
 mod sidebar;
+mod terminal;
 mod vault;
 
 #[cfg(test)]
@@ -85,6 +86,7 @@ pub fn refresh(app: &mut App, main: &AppWindow, settings: &SettingsWindow) {
     vault::push(app, main);
     dialogs::push(app, main);
     settings::push(app, settings);
+    terminal::push(app, main);
 }
 
 /// Creates both windows for `app`, connects their callbacks and shows the state.
@@ -157,6 +159,7 @@ fn wire(ctx: &Ctx, main: &AppWindow, settings: &SettingsWindow) {
     editor::wire(ctx, main);
     vault::wire(ctx, main);
     dialogs::wire(ctx, main);
+    terminal::wire(ctx, main);
     settings::wire(ctx, settings);
     watch_input(ctx, main, settings);
 }
@@ -288,6 +291,9 @@ fn capture(ctx: &Ctx) {
                     if std::env::var("MISF_OPEN_HISTORY").as_deref() == Ok("1") {
                         sample_history(app);
                     }
+                    if std::env::var("MISF_OPEN_TERMINAL").as_deref() == Ok("1") {
+                        sample_terminal(app);
+                    }
                     let reboot = std::env::var("MISF_OPEN_REBOOT");
                     if matches!(reboot.as_deref(), Ok("1" | "final")) {
                         app.choose_advanced(host_page::Advanced::Reboot);
@@ -328,6 +334,46 @@ fn capture(ctx: &Ctx) {
         },
     );
     std::mem::forget(timer);
+}
+
+/// A batch upgrade caught midway: one host done, one failed, one still printing.
+#[cfg(feature = "capture")]
+fn sample_terminal(app: &mut App) {
+    let t = app.t();
+    let hosts = ["web", "db", "misc"].map(|id| (id.to_owned(), app.host_name(id)));
+    app.terminal.start("batch", hosts.to_vec());
+    let update =
+        "sudo -S -p '__MISF_SUDO_PROMPT__' -- env DEBIAN_FRONTEND=noninteractive apt-get update";
+    for (id, _) in &hosts {
+        app.terminal.write(id, update, true);
+        app.terminal.write(
+            id,
+            concat!(
+                "Hit:1 http://archive.ubuntu.com/ubuntu resolute InRelease\n",
+                "Get:2 http://security.ubuntu.com/ubuntu resolute-security InRelease [126 kB]\n",
+                "Fetched 126 kB in 1s (148 kB/s)\n",
+                "Reading package lists...\n",
+            ),
+            false,
+        );
+    }
+    app.terminal.finish(
+        "db",
+        false,
+        format!("[{}] SSH 認證失敗", t.get("terminal.failed")),
+    );
+    app.terminal.write("web", "apt list --upgradable", true);
+    app.terminal.write(
+        "web",
+        concat!(
+            "Listing...\n",
+            "openssl/resolute-security 3.5.3-1ubuntu2 amd64 [upgradable from: 3.5.3-1ubuntu1]\n",
+        ),
+        false,
+    );
+    app.terminal
+        .finish("misc", true, format!("[{}]", t.get("terminal.succeeded")));
+    app.busy = false;
 }
 
 /// A few past results and an error, with the status line expanded to show them.

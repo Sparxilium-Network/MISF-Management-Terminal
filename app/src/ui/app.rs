@@ -283,6 +283,8 @@ pub struct App {
     pub plaintext_delete_prompt: bool,
     /// The window's close button was pressed while an operation was running.
     pub close_prompt: bool,
+    /// Live remote output of the last check, upgrade or reboot, one tab per host.
+    pub terminal: super::terminal::Terminal,
     /// The older schema version of a just-decrypted vault, waiting for upgrade consent.
     pub schema_upgrade_prompt: Option<u64>,
     pub slots: Vec<SlotRow>,
@@ -353,6 +355,7 @@ impl App {
             plaintext_path: String::new(),
             plaintext_delete_prompt: false,
             close_prompt: false,
+            terminal: Default::default(),
             schema_upgrade_prompt: None,
             slots: vec![],
             storage_warning: String::new(),
@@ -422,6 +425,17 @@ impl App {
         let t = self.t();
         self.busy = true;
         self.status = t.get("status.working").into();
+        let hosts = super::terminal::hosts(&request);
+        if !hosts.is_empty() {
+            let hosts = (hosts.into_iter())
+                .map(|id| {
+                    let name = self.host_name(&id);
+                    (id, name)
+                })
+                .collect();
+            let action = request["action"].as_str().unwrap_or_default();
+            self.terminal.start(action, hosts);
+        }
         if self.worker.requests.send(request).is_err() {
             self.busy = false;
             self.error = Some(t.get("status.worker_ended").into());
@@ -436,6 +450,8 @@ impl App {
         self.busy = false;
         self.batch_failure = None;
         self.status = t.get("status.failed").into();
+        self.terminal
+            .end(false, &format!("[{}]", t.get("terminal.interrupted")));
         let detail = if detail.is_empty() {
             "-".to_owned()
         } else {
@@ -528,6 +544,8 @@ impl App {
 
     pub fn process_events(&mut self) {
         let t = self.t();
+        // Before reading: terminal lines sent after this wake the UI again.
+        (self.worker.terminal).store(false, std::sync::atomic::Ordering::Release);
         loop {
             let event = match self.worker.events.try_recv() {
                 Ok(event) => event,
@@ -549,7 +567,14 @@ impl App {
                     self.session_log.add("PROGRESS", &message, "");
                     self.status = t.progress(&message);
                 }
+                Event::Terminal {
+                    host,
+                    text,
+                    command,
+                } => self.terminal.write(&host, &text, command),
                 Event::BatchHost { id, result } => {
+                    let (succeeded, note) = terminal_note(t, &result.status, &result.error);
+                    self.terminal.finish(&id, succeeded, note);
                     let name = self.host_name(&id);
                     let host = self.hosts.iter().find(|h| h.id == id);
                     self.session_log.host(t, &name, host, &result);
@@ -577,6 +602,19 @@ impl App {
                 Event::Done { action, result } => {
                     self.busy = false;
                     self.batch_failure = None;
+                    if action == self.terminal.action {
+                        let (succeeded, note) = match &result {
+                            // A check or upgrade answers with its result, a reboot with
+                            // the host's reply.
+                            Ok(data) => terminal_note(
+                                t,
+                                data["status"].as_str().unwrap_or("success"),
+                                data["error"].as_str().unwrap_or_default(),
+                            ),
+                            Err(error) => terminal_note(t, "failed", error),
+                        };
+                        self.terminal.end(succeeded, &note);
+                    }
                     self.log_done(&action, &result);
                     match result {
                         Ok(data) => self.received(&action, data),
@@ -1013,5 +1051,21 @@ pub fn wipe_host(host: &mut Host) {
     if let Some(result) = &mut host.last_check {
         result.output.zeroize();
         result.error.zeroize();
+    }
+}
+
+/// Whether a host's run succeeded, and the line closing its terminal tab.
+fn terminal_note(t: Translator, status: &str, error: &str) -> (bool, String) {
+    match status {
+        "success" => (true, format!("[{}]", t.get("terminal.succeeded"))),
+        _ if error.is_empty() => (false, format!("[{}]", t.get("terminal.failed"))),
+        _ => (
+            false,
+            format!(
+                "[{}] {}",
+                t.get("terminal.failed"),
+                error.lines().next().unwrap_or("")
+            ),
+        ),
     }
 }

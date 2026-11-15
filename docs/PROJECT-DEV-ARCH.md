@@ -1,6 +1,6 @@
 # 原始碼檔案說明
 
-> 最後修改：2026-11-14 ｜ 基於 commit：`0b3bb89`
+> 最後修改：2026-11-15 ｜ 基於 commit：`47a9b18`
 
 每個 `.rs` 檔案負責什麼。整體設計與資料流見 [架構](architecture.md)，建置與慣例見 [開發說明](PROJECT-DEV.md)。新增、改名或刪除 `.rs` 檔案時，請一併更新本文件。
 
@@ -47,7 +47,8 @@ Workspace 有三個 crate：`core`（`misf-core`，核心函式庫與 JSON CLI�
 
 | 檔案 | 作用 |
 | --- | --- |
-| `core/src/ssh.rs` | SSH 傳輸：`probe`（只取主機指紋，不送帳密）、`connect`（核對指紋）、`authenticate`（密碼或私鑰）、`execute`（執行一條命令、偵測 sudo 提示並最多回答一次、32 MiB 輸出上限）、`test_connection`（產生 `ConnectionTest`）。不含任何套件命令。 |
+| `core/src/ssh.rs` | SSH 傳輸：`probe`（只取主機指紋，不送帳密）、`connect`（核對指紋）、`authenticate`（密碼或私鑰）、`execute`（執行一條命令、偵測 sudo 提示並最多回答一次、32 MiB 輸出上限；同時經 `Echo` 把命令與逐行輸出即時送給終端機）、`test_connection`（產生 `ConnectionTest`）。不含任何套件命令。 |
+| `core/src/console.rs` | 即時遠端輸出：`Console` trait（`command`／`output`，以主機 ID 區分）、不顯示的 `Silent`，以及每台主機一份的 `Echo`（帶著該主機的密碼、sudo 密碼、私鑰密語與私鑰各行，逐行遮蔽）。`Lines` 收到換行才送出整行，所以 ANSI 序列、UTF-8 字元與密碼不會被切開；清理方式與 `transcript::readable_output` 相同，並移除 sudo 提示標記。`StorageSession`／`Session::set_console` 設定接收端，`dispatch_with` 傳給單台檢查／升級／dist-upgrade／重新開機與批次的每台主機；測試連線不顯示。 |
 | `core/src/transcript.rs` | 把遠端輸出轉成可讀紀錄：統一換行、移除 ANSI 與終端控制字串；`heading` 產生依顯示寬度對齊的星號框標題，供執行輸出與 LOG 分段。 |
 | `core/src/package_manager/mod.rs` | `Mode`（check／upgrade／dist_upgrade）、`Manager` 列舉與 `Commands { update, list, upgrade, dist_upgrade, simulate, preview, status }`，依管理器分派到各檔案；`manager_commands`／`package_commands` 列出確認視窗要顯示的命令；`SUDO_PROMPT` 標記。 |
 | `core/src/package_manager/detect.rs` | `DETECT` 偵測命令與 `parse_platform`：核心、發行版顯示名稱、可用的套件管理器與優先順序。 |
@@ -73,6 +74,7 @@ Workspace 有三個 crate：`core`（`misf-core`，核心函式庫與 JSON CLI�
 | `app/src/ui/mod.rs` | 建立主視窗與設定視窗（`build`）、執行事件迴圈（`run`）、`Ctx::update` 修改狀態後以 `refresh` 把狀態推到兩個視窗；監看 winit 輸入事件供閒置自動鎖定、記錄視窗大小，並在右鍵按住時設定 `PopMenu.right-down`（`track_right_button`）；`sync_rows`／`keep_inner` 就地更新清單，避免拖曳或雙擊中的元件被重建；`capture` 功能下的截圖、`MISF_FIXTURE` 假資料與 `MISF_OPEN_MENU` 範例選單。 |
 | `app/src/ui/app.rs` | 視窗狀態 `App`（原 `ManagementApp`）與對話框資料結構：送出請求、處理背景事件與回應（`received`）、稽核與工作階段記錄、清除主機快取、閒置自動鎖定（`auto_lock`，作業中不鎖）、關閉時儲存視窗大小（`shutdown`）。只送出請求並保存結果，不直接連線或讀寫主機資料。 |
 | `app/src/ui/format.rs` | 由主機與結果產生的文字：套件管理器與系統標籤、狀態、重啟摘要、連線資訊列、可複製的命令（`copied_commands`），以及連線與重啟分頁的行資料 `Line`。 |
+| `app/src/ui/terminal.rs` | 底部終端機面板：`Terminal` 保存最近一次檢查、升級或重新開機的每台主機分頁（`TabState`：等待、執行中、完成、失敗、略過）與各自的行（每台最多 `MAX_LINES` 行，超過時一次捨棄最舊的 2000 行）。`App::send` 依請求開新的一輪；`Event::Terminal` 加入行，`BatchHost`／`Done`／worker 崩潰收尾。`push` 對同一個 `VecModel` 只追加新行，換分頁或捨棄舊行時才重建；高度存在偏好設定的 `terminal_height`。 |
 | `app/src/ui/shell.rs` | 上方工具列、狀態列與其「過往操作」清單（`App::history`，經 `set_status`／`set_host_status`／`note_error` 記錄，進度訊息不記），主機／批次分頁切換；關閉主視窗時一併結束程式，操作進行中先以 `CloseDialog` 詢問。 |
 | `app/src/ui/sidebar.rs` | 側欄主機清單：分類與收合、搜尋、卡片內容與高度、拖曳排序（`Layout` 計算放置位置，`arrange` 送出新順序）、分類名稱對話框。 |
 | `app/src/ui/host_page.rs` | 主機頁與結果分頁：測試連線、指紋、檢查、「進階操作」選單（升級、dist-upgrade、重新開機，依主機能力停用）、升級提示、「需要 dist-upgrade」報告。 |
@@ -83,13 +85,14 @@ Workspace 有三個 crate：`core`（`misf-core`，核心函式庫與 JSON CLI�
 | `app/src/ui/settings.rs` | 獨立的設定視窗：分類樹（`SettingsPage::PREFERENCES` 為「偏好設定」底下的外觀與主機清單／安全性／批次作業）、各偏好的套用與儲存、LOG 頁、關於頁。 |
 | `app/src/ui/logging.rs` | 工作階段記錄：請求標題、結果寫入與匯出。 |
 | `app/src/ui/tests.rs` | 狀態邏輯測試，以及用 Slint 測試後端送出實際指標與鍵盤事件的畫面測試（進階選單、批次表格雙擊、欄寬拖曳、Esc 關閉明細、懸停提示時機與位置、側欄拖曳排序、右鍵複製命令、設定樹）。 |
-| `app/ui/main.slint` | 主視窗 `AppWindow`：工具列、側欄、工作區、狀態列（`StatusBar`，展開時 `HistoryPanel` 浮在其上方），以及疊在上方的對話框、進階選單、右鍵選單 `MenuOverlay` 與提示框；`run-menu` 依選單行的 `action` 執行對應操作；匯出所有 global 給 Rust。 |
+| `app/ui/main.slint` | 主視窗 `AppWindow`：工具列、側欄、工作區、狀態列（`StatusBar`，展開時 `HistoryPanel` 浮在其上方），側欄與工作區下方的終端機面板（`TerminalPanel`；側欄與工作區包在 `clip` 的 Rectangle 內，面板展開時它們被壓縮並裁切底部，而不是把狀態列推出視窗；面板高度只在拖曳與視窗縮放時夾住，不綁定視窗高度以免佈局迴圈），以及疊在上方的對話框、進階選單、右鍵選單 `MenuOverlay` 與提示框；`run-menu` 依選單行的 `action` 執行對應操作；匯出所有 global 給 Rust。 |
 | `app/ui/theme.slint` | 配色 `Theme`、介面字型（Noto Sans TC／粗體／系統字型）、翻譯查詢 `T`（向 Rust 的語言目錄查字串）、外觀同步。 |
 | `app/ui/widgets.slint` | 共用元件：懸停提示 `HintArea`（1.5 秒後顯示命令、效果與風險；右鍵開啟 `menu` 或複製命令）、自繪右鍵選單（`MenuLine`、`PopMenu`、`MenuArea`、`MenuOverlay`：外觀與進階選單一致，不用 Slint 內建的 `ContextMenuArea`，因其外觀無法套用 Theme；`MenuArea` 疊在控制項上方，只在 `right-down` 為真時啟用，因為控制項的 `TouchArea` 會抓住所有按下事件，停用的 `TouchArea` 才會讓事件穿過）、提示框、剪貼簿、彩色按鈕、三態勾選框、對話框外框等。 |
+| `app/ui/terminal.slint` | 終端機面板 `TerminalPanel` 與 `TerminalState`：可拖曳的上緣、收合鈕、每台主機一個分頁（狀態圓點）、「複製」，以及固定行高的 `ListView`（不換行、過長省略）；捲到底時跟著新輸出捲動，往上捲就停止跟隨。 |
 | `app/ui/sidebar.slint`、`host_page.slint`、`result_panel.slint`、`batch_page.slint`、`settings.slint`、`shell.slint` | 各頁畫面與其 global。 |
 | `app/ui/dialogs/*.slint` | 主機編輯、SSH 金鑰、主機庫、確認類與簡短對話框。 |
 | `app/src/session_log.rs` | 只存在記憶體的完整工作階段 LOG：操作標題（`banner`）、完整請求與回應（`mask` 只遮蔽密碼、私鑰、密語、PIN 欄位）、進度、錯誤，以及每台主機的區塊（`host`：ID、帳號@位址、指紋、套件、重啟狀態、遠端原始輸出，以 `END OF` 結束）；超過 16 MiB 捨棄最舊的；`export` 寫成文字檔。以 `Zeroizing` 保存，關閉程式即消失。 |
-| `app/src/worker.rs` | 背景執行緒與 Tokio runtime：從佇列取出請求交給 `Session`，以 `Event` 回傳進度與結果，再以 `Wake` 喚醒 UI 執行緒；`Relay` 是批次觀察者，轉送每台結果與失敗詢問，並等待 UI 經 `decisions` 送回的決定。請求 panic 時，若該請求是升級，先把尚未回報結果的主機（單台升級的那台，或批次中 `Relay` 尚未回報的主機）以 `batch::interrupted` 存入主機庫，再送出帶有這些主機與儲存結果的 `Event::Crashed`，然後結束執行緒；`Running` 只記錄請求的 action／operation／id／ids，不保留含密碼的原始請求。UI（`App::worker_crashed`）解除忙碌、把這些主機標示為結果未知，並在錯誤中逐行列出主機名稱，存檔失敗時另外說明重啟後會遺失標示；執行緒無聲結束時只解除忙碌並顯示錯誤。 |
+| `app/src/worker.rs` | 背景執行緒與 Tokio runtime：從佇列取出請求交給 `Session`，以 `Event` 回傳進度與結果，再以 `Wake` 喚醒 UI 執行緒；`Relay` 是批次觀察者，轉送每台結果與失敗詢問，並等待 UI 經 `decisions` 送回的決定；`Screen` 是終端機接收端，把命令與輸出轉成 `Event::Terminal`，大量輸出只在 `Worker::terminal` 旗標未設時喚醒一次 UI（UI 讀取前清除旗標）。請求 panic 時，若該請求是升級，先把尚未回報結果的主機（單台升級的那台，或批次中 `Relay` 尚未回報的主機）以 `batch::interrupted` 存入主機庫，再送出帶有這些主機與儲存結果的 `Event::Crashed`，然後結束執行緒；`Running` 只記錄請求的 action／operation／id／ids，不保留含密碼的原始請求。UI（`App::worker_crashed`）解除忙碌、把這些主機標示為結果未知，並在錯誤中逐行列出主機名稱，存檔失敗時另外說明重啟後會遺失標示；執行緒無聲結束時只解除忙碌並顯示錯誤。 |
 | `app/src/preferences.rs` | 未加密的 `ui-settings.json`：語言、外觀、介面字型、視窗大小、主機清單顯示、批次排序／欄位／明細位置、預設解鎖方式、自動鎖定分鐘數（`AUTO_LOCK_MAX`、`AUTO_LOCK_DEFAULT`）；以暫存檔原子替換寫入。 |
 | `app/src/i18n.rs` | 語系：內嵌 `app/locales/*.json`，以 key 與 `{name}` 參數取字，缺字時回退繁體中文；測試檢查 UI 用到的 key 在兩種語言都存在且參數一致。 |
 | `app/src/theme.rs` | 外觀選項（跟隨系統／淺色／深色）與其儲存代碼。 |

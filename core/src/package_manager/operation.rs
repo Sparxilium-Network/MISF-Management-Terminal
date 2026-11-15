@@ -2,6 +2,7 @@
 //! maybe upgrade.
 
 use super::{DETECT, Manager, Mode, Platform, parse_platform};
+use crate::console::Echo;
 use crate::model::{CheckResult, Host, Package, RestartStatus, UpgradePlan};
 use crate::ssh::{self, Session};
 use crate::transcript::heading;
@@ -15,15 +16,15 @@ const UPGRADE_SECONDS: u64 = 30 * 60;
 const STATUS_SECONDS: u64 = 2 * 60;
 
 pub async fn check(host: &Host, progress: &dyn Fn(&str)) -> CheckResult {
-    run(host, Mode::Check, progress).await
+    run(host, Mode::Check, progress, Echo::silent()).await
 }
 
 pub async fn upgrade(host: &Host, progress: &dyn Fn(&str)) -> CheckResult {
-    run(host, Mode::Upgrade, progress).await
+    run(host, Mode::Upgrade, progress, Echo::silent()).await
 }
 
 pub async fn dist_upgrade(host: &Host, progress: &dyn Fn(&str)) -> CheckResult {
-    run(host, Mode::DistUpgrade, progress).await
+    run(host, Mode::DistUpgrade, progress, Echo::silent()).await
 }
 
 /// What a finished operation found; the remote transcript is kept even when it fails.
@@ -43,6 +44,7 @@ struct Run<'a> {
     session: &'a Session,
     transcript: String,
     platform: Option<Platform>,
+    echo: Echo,
 }
 
 // Generic so a batch task's no-op progress keeps the future `Send`.
@@ -50,6 +52,7 @@ pub(crate) async fn run<P: Fn(&str) + ?Sized>(
     host: &Host,
     mode: Mode,
     progress: &P,
+    echo: Echo,
 ) -> CheckResult {
     let checked_at = Utc::now().to_rfc3339();
     let mut transcript = String::new();
@@ -62,6 +65,7 @@ pub(crate) async fn run<P: Fn(&str) + ?Sized>(
             session: &session,
             transcript: String::new(),
             platform: None,
+            echo,
         };
         let outcome = run.operate(mode, progress).await;
         (transcript, platform) = (run.transcript, run.platform);
@@ -147,7 +151,7 @@ impl Run<'_> {
         let read = if command.contains("sudo -S") {
             self.privileged(command, STATUS_SECONDS).await
         } else {
-            ssh::execute(self.session, command, false, "", STATUS_SECONDS).await
+            ssh::execute(self.session, command, false, "", STATUS_SECONDS, &self.echo).await
         };
         self.transcript.push_str(&heading(title));
         match read {
@@ -192,7 +196,8 @@ impl Run<'_> {
 
     /// Runs DETECT and settles which manager may run; never a different one than confirmed.
     async fn detect(&mut self) -> Result<Manager> {
-        let (code, output) = ssh::execute(self.session, DETECT, false, "", DETECT_SECONDS).await?;
+        let (code, output) =
+            ssh::execute(self.session, DETECT, false, "", DETECT_SECONDS, &self.echo).await?;
         ensure!(code == 0, "無法辨識遠端作業系統");
         let platform = parse_platform(&output)?;
         let manager = choose(self.host, &platform);
@@ -218,7 +223,7 @@ impl Run<'_> {
         let (code, output) = if command.contains("sudo -S") {
             self.privileged(command, LIST_SECONDS).await?
         } else {
-            ssh::execute(self.session, command, false, "", LIST_SECONDS).await?
+            ssh::execute(self.session, command, false, "", LIST_SECONDS, &self.echo).await?
         };
         self.transcript.push_str(&heading("待更新套件"));
         self.transcript.push_str(&output);
@@ -247,6 +252,7 @@ impl Run<'_> {
             self.host.use_pty,
             self.host.sudo_secret(),
             seconds,
+            &self.echo,
         )
         .await
     }

@@ -1,5 +1,15 @@
 # 全工作區檢查結果
 
+## 2026-11-15（底部即時終端機面板，分支 `feat/WYSIWYG-Terminal`，基於 `47a9b18`）
+
+- 使用者要求：執行過程在下方顯示模擬終端機，參考 JetBrains IDE 的佈局。使用者選擇：即時遠端輸出（唯讀）、批次每台一個分頁、操作開始自動展開且結束後保留（可收合、可拖曳高度並記住）、顯示實際下的遠端命令。
+- 核心：新增 `console.rs`（`Console`／`Echo`／`Lines`）。`ssh::execute` 收到資料時逐行送出，收到換行才送整行，避免切開 ANSI 序列、UTF-8 字元與密碼；每行以與 transcript 相同方式清理並移除 sudo 提示標記，再遮蔽該主機的密碼、sudo 密碼、私鑰密語與私鑰各行。單台檢查／升級／dist-upgrade／重新開機與批次的每台主機都會顯示；測試連線與 CLI 不顯示（`Silent`）。
+- app：worker 的 `Screen` 把命令與輸出轉成 `Event::Terminal`，大量輸出以 `Worker::terminal` 旗標合併成一次喚醒。`ui/terminal.rs` 保存每台主機的分頁與行（上限 10,000 行，超過時一次捨棄最舊 2000 行），只對同一個 `VecModel` 追加新行；`terminal.slint` 是面板（固定行高 `ListView`、不換行、捲到底時跟隨）。
+- 佈局：面板放在側欄與工作區下方、狀態列上方。第一次截圖時頁面最小高度把面板與狀態列擠出視窗，改為把側欄與工作區包進 `clip` 的 Rectangle（`min-height: 200px`），面板展開時頁面被裁切底部。面板高度若綁定視窗高度會造成 Slint 佈局綁定迴圈警告，改為只在拖曳與視窗縮放時夾住（頁面至少保留 420px）。
+- 測試：`console::tests`（跨區塊的密碼、UTF-8、ANSI、sudo 標記與最後未換行的一行）；整合測試 `batch_reports_each_host_and_an_abort_skips_hosts_not_started` 加上假 SSH 伺服器的即時輸出檢查（每台有自己的命令與輸出、無 sudo 密碼、輸出中無提示標記、無 `\r`／ESC，未開始的主機沒有輸出）；UI 測試 `the_terminal_shows_each_hosts_output_live_in_its_own_tab`（分頁順序與去重、狀態、追加不重建、略過、複製、收合、上限）。`cargo test --workspace`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo clippy -p misf --features capture -- -D warnings`、`cargo fmt` 通過。
+- 截圖：`--features capture` 搭配新的 `MISF_OPEN_TERMINAL=1`，主機頁與批次頁在 1280×820 下面板、分頁與狀態列都正常顯示。
+- 未驗證：真實主機上的即時輸出（apt 的進度行、PTY 下的換行）、長時間大量輸出時的介面流暢度、拖曳調整高度的手感。
+
 ## 2026-11-14（worker 崩潰時把結果未知寫入主機庫並列出主機，分支 `main`，基於 `0b3bb89`）
 
 - 使用者指出前一版的「結果未知」只存在記憶體，而錯誤要求重新啟動，重啟後標示就消失；對話框也沒列出主機。依使用者指示兩項都做。
