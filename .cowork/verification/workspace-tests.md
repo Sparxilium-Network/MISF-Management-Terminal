@@ -1,5 +1,17 @@
 # 全工作區檢查結果
 
+## 2026-11-16（處理 MYTHOS-r2 的問題，分支 `feat/WYSIWYG-Terminal`，基於 `0ac559b`）
+
+- 依 `.daybrake/dangerzone/MYTHOS-r2.md`。使用者決定：自動鎖定時 shell 有輸出算活動；開 shell 不另外確認；自動鎖定預設啟用 15 分鐘（只影響沒設定過的人）；多行貼上不確認。
+- 中風險 1：鎖定（含自動鎖定）時 `end_shells` 結束 shell 並記 `shell_close`，再清空終端機的操作分頁與 shell。
+- 中風險 2：core 每個 shell 未畫出的輸出超過 1 MiB 就停止讀取 channel（SSH 流量控制擋住遠端），UI 以 `Shells::drawn` 回報；`process_events` 每輪最多 512 個事件（shell 輸出每 4 KiB 算一個），其餘以 1 ms 計時器接續。
+- 中風險 3：有 shell 開著時關閉視窗會詢問（`CloseState.shells-only` 用不同文字）；shell 輸出重設閒置時間；關閉時 `end_shells` 記稽核。
+- 中風險 4：`vt100` 的 `process` 與畫面轉換以 `catch_unwind` 包住，出錯時清空該 shell 的模擬器、標為失敗並關閉。
+- 低風險：開啟結果改用 shell 編號比對；worker 崩潰時 shell 標為失敗；開啟中且已不忙碌的分頁可按 × 移除；只有連上過的 shell 才記 `shell_close`；AltGr（Ctrl+Alt）輸入的符號照字元送出；寫入卡住時仍可關閉 shell。
+- 文件：`architecture.md` 的限制段落與自動鎖定說明、使用指南、PROJECT-DEV-ARCH。
+- 未處理：即時輸出的單行長度上限（`console::Lines` 最長 32 MiB，拆行有遮蔽密碼的風險，需另外討論）、短密碼遮蔽（第一輪已知）。
+- 測試：core 單元測試（`drawn`）、整合測試（3 MiB 輸出在畫面未回報時停在視窗附近，回報後全部送達）、app 單元測試（AltGr）、UI 測試（大量輸出分段處理並重設閒置時間、有 shell 時關閉會詢問、鎖定時結束 shell、記稽核並清空終端機）、偏好設定測試（沒有鍵時預設 15 分鐘、null 維持關閉、沒有設定檔時 15 分鐘）。`cargo test --workspace` 通過。
+
 ## 2026-11-15（終端機互動 shell，分支 `feat/WYSIWYG-Terminal`，基於 `be447e4`）
 
 - 使用者要求：終端機可以互動輸入，需能使用 nano（完整終端機模擬，方案 B）；操作進行中使用者不能輸入。使用者同意嘗試，困難時再討論。

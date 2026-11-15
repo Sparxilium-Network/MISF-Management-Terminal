@@ -1,6 +1,6 @@
 # MISF Management Terminal 架構
 
-> 最後修改：2026-11-10 ｜ 基於 commit：`e492be8`
+> 最後修改：2026-11-16 ｜ 基於 commit：`0ac559b`
 
 > [!WARNING]
 > **本專案仍處於開發階段，請勿用於正式環境。** 相關安全保護機制尚未完善。
@@ -166,11 +166,11 @@ Passkey 只使用 `Fido2HmacSecret` 包裝槽。Windows 透過 `windows_passkey.
 
 ## 介面與背景工作
 
-UI 把請求放入工作佇列，由背景執行緒與 Tokio runtime 執行 SSH 與磁碟操作，期間停用衝突操作。關閉程式會結束本機連線，但不能保證中止遠端已開始的套件程序。「設定」視窗以左側分類樹集中語言、外觀、偏好（再分為外觀與主機清單、安全性、批次作業）與 LUKSbox 管理，並顯示程式版本（Cargo 套件版本）、主機庫格式與結構版本；容器內仍為 JSON 時提供「轉換為 SQLite 資料庫」（`convert_storage`）。偏好存在 `ui-settings.json`，以暫存檔原子替換，主機庫鎖定時也能讀寫。自動鎖定（`auto_lock_minutes`，1～1440，預設不啟用）由 UI 計算閒置時間：只有滑鼠、鍵盤、捲動、貼上等使用者輸入會重新計時，worker 忙碌時也重新計時以免中斷作業；時間到時 UI 先清除主機快取與相關視窗，再送出 `vault_lock`，稽核記為 `vault_auto_lock`。
+UI 把請求放入工作佇列，由背景執行緒與 Tokio runtime 執行 SSH 與磁碟操作，期間停用衝突操作。關閉程式會結束本機連線，但不能保證中止遠端已開始的套件程序。「設定」視窗以左側分類樹集中語言、外觀、偏好（再分為外觀與主機清單、安全性、批次作業）與 LUKSbox 管理，並顯示程式版本（Cargo 套件版本）、主機庫格式與結構版本；容器內仍為 JSON 時提供「轉換為 SQLite 資料庫」（`convert_storage`）。偏好存在 `ui-settings.json`，以暫存檔原子替換，主機庫鎖定時也能讀寫。自動鎖定（`auto_lock_minutes`，1～1440；設定檔沒有這個鍵時預設 15 分鐘，選「永不」存為 null）由 UI 計算閒置時間：滑鼠、鍵盤、捲動、貼上等使用者輸入與互動 shell 的輸出會重新計時，worker 忙碌時也重新計時以免中斷作業；時間到時 UI 先結束互動 shell（記 `shell_close`）、清除主機快取、終端機與相關視窗，再送出 `vault_lock`（core 也會關閉所有 shell），稽核記為 `vault_auto_lock`。互動 shell 的輸出有流量控制：每個 shell 未畫出的輸出超過 1 MiB 時 core 停止讀取 channel，讓 SSH 視窗擋住遠端；UI 每輪最多處理固定數量的事件，其餘以計時器接續。
 
 ## 測試與限制
 
 - 整合測試在 loopback 啟動測試 SSH 伺服器，涵蓋密碼／私鑰、指紋、連線資訊、PTY、拆包的 sudo 提示、系統偵測、APT 與 DNF 檢查／升級、套件管理器不符、混合批次、失敗處理與儲存流程；不接觸真實主機。
 - 儲存測試涵蓋未建立容器時拒絕、轉入保留原檔、鎖定與錯誤密碼、多金鑰槽、備份、密文篡改、並行開啟、WAL 與結構竄改拒絕。Passkey 以模擬驗證器測試，實體裝置依 [Passkey 實體測試](passkey-testing.md) 驗證。
 - 實機只測試過 APT；YUM 與 pkg 只有輸出解析的單元測試。
-- 除了需逐次確認的 APT `dist-upgrade` 外，不支援 full-upgrade 類操作；也不支援任意命令、互動終端、排程、滾動升級或 Ansible；沒有原地改密碼、主金鑰輪替或 TPM。
+- 除了需逐次確認的 APT `dist-upgrade` 外，不支援 full-upgrade 類操作；MISF 自己執行的仍只有固定命令，但終端機可對單一主機開互動 shell（使用者自行輸入，不經 MISF 確認，不記錄輸入與輸出，稽核只記開啟與結束）；不支援排程、滾動升級或 Ansible；沒有原地改密碼、主金鑰輪替或 TPM。

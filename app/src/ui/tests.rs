@@ -1511,3 +1511,73 @@ fn a_shell_opens_on_the_chosen_host_takes_keys_only_while_idle_and_ends_in_its_t
     assert_eq!(state.get_tabs().row_count(), 0);
     assert!(!state.get_shown());
 }
+
+#[test]
+fn open_shells_ask_before_closing_end_with_the_vault_and_floods_are_read_in_slices() {
+    use misf_core::shell::Input;
+    i_slint_backend_testing::init_no_event_loop();
+    let (mut app, _commands, events, directory) = test_app(false);
+    unlocked(&mut app);
+    app.hosts = vec![host("a", "apt", "SHA256:a")];
+    app.selected = "a".into();
+    app.busy = false;
+    let (ctx, main, _settings) = build(app, true).unwrap();
+    main.show().unwrap();
+    let state = main.global::<super::TerminalState>();
+    state.invoke_open_shell();
+    let shell = ctx.app.borrow().terminal.shells[0].id;
+    let mut input = ctx.app.borrow().worker.shells.register(shell);
+    events
+        .send(Event::Done {
+            action: "shell_open".into(),
+            result: Ok(json!({"shell":shell})),
+        })
+        .unwrap();
+    ctx.update(App::process_events);
+    assert!(state.get_shell_typing());
+
+    // A flood of output is read a slice at a time, and keeps the vault from locking.
+    let before = ctx.app.borrow().last_activity;
+    for _ in 0..2000 {
+        events
+            .send(Event::ShellOutput {
+                shell,
+                data: b"y\r\n".to_vec(),
+            })
+            .unwrap();
+    }
+    ctx.update(App::process_events);
+    assert!(ctx.app.borrow().events_pending);
+    assert!(ctx.app.borrow().last_activity > before);
+    while ctx.app.borrow().events_pending {
+        ctx.update(App::process_events);
+    }
+    let rows = state.get_screen();
+    let last: Vec<String> = (rows.row_data(rows.row_count() - 2).unwrap().runs.iter())
+        .map(|run| run.text.to_string())
+        .collect();
+    assert_eq!(last, ["y"]);
+
+    // Closing the window with a shell open asks first, though nothing is busy.
+    let close = || {
+        main.window()
+            .dispatch_event(slint::platform::WindowEvent::CloseRequested)
+    };
+    close();
+    let dialog = main.global::<CloseState>();
+    assert!(dialog.get_shown() && dialog.get_shells_only());
+    assert!(main.window().is_visible());
+    dialog.invoke_keep_open();
+    assert!(!dialog.get_shown());
+
+    // Locking ends the shell, logs its end and forgets what the terminal held.
+    ctx.update(App::clear_host_cache);
+    assert!(matches!(input.try_recv(), Ok(Input::Close)));
+    assert!(!state.get_shown());
+    assert!(ctx.app.borrow().terminal.shells.is_empty());
+    let log: String = std::fs::read_dir(directory.path().join("logs"))
+        .unwrap()
+        .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
+        .collect();
+    assert!(log.contains("\"action\":\"shell_close\""), "{log}");
+}

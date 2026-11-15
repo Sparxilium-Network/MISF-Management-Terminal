@@ -45,9 +45,11 @@ export global SchemaState {
     callback cancel();
 }
 
-// Closing the main window while an operation is still running.
+// Closing the main window while an operation is still running or a shell is open.
 export global CloseState {
     in property <bool> shown;
+    // Only shells are open; no operation runs.
+    in property <bool> shells-only;
     callback keep-open();
     callback quit();
 }
@@ -227,10 +229,10 @@ export component SchemaDialog inherits Modal {
 export component CloseDialog inherits Modal {
     panel-width: 540px;
     Heading {
-        text: T.get("close.title");
+        text: CloseState.shells-only ? T.get("close.shells_title") : T.get("close.title");
     }
     Body {
-        text: T.get("close.description");
+        text: CloseState.shells-only ? T.get("close.shells_description") : T.get("close.description");
     }
     Notice {
         error: true;
@@ -240,7 +242,7 @@ export component CloseDialog inherits Modal {
         spacing: 10px;
         alignment: start;
         ColorButton {
-            text: T.get("close.keep_open");
+            text: CloseState.shells-only ? T.get("close.shells_keep") : T.get("close.keep_open");
             clicked => { CloseState.keep-open(); }
         }
         Button {

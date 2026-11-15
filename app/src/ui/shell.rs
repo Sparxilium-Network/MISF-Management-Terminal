@@ -13,10 +13,13 @@ pub fn push(app: &mut App, w: &AppWindow) {
     shell.set_busy(app.busy);
     shell.set_status(app.status.clone().into());
     // Nothing left to interrupt: the question no longer applies.
-    if !app.busy {
+    let shells = app.worker.shells.count() > 0;
+    if !app.busy && !shells {
         app.close_prompt = false;
     }
-    w.global::<CloseState>().set_shown(app.close_prompt);
+    let close = w.global::<CloseState>();
+    close.set_shown(app.close_prompt);
+    close.set_shells_only(!app.busy);
     // Only rebuilt when it changed, so an open, scrolled list stays where it is.
     let lines: Vec<HistoryLine> = app
         .history
@@ -78,11 +81,11 @@ pub fn wire(ctx: &Ctx, w: &AppWindow) {
         })
     });
     // Closing the main window ends the app, even with the settings window open. While
-    // an operation runs, ask first: quitting drops its SSH connection, which can leave a
-    // remote apt/dpkg half-way.
+    // an operation runs or a shell is open, ask first: quitting drops their SSH
+    // connections, which can leave a remote apt/dpkg half-way.
     let c = ctx.clone();
     w.window().on_close_requested(move || {
-        let busy = c.app.try_borrow().is_ok_and(|app| app.busy);
+        let busy = (c.app.try_borrow()).is_ok_and(|app| app.busy || app.worker.shells.count() > 0);
         if busy {
             c.update(|app| app.close_prompt = true);
             return slint::CloseRequestResponse::KeepWindowShown;
@@ -152,9 +155,9 @@ fn wire_chrome(w: &AppWindow) {
 }
 
 fn quit(ctx: &Ctx) {
-    // Say goodbye to open shells rather than drop their links.
-    if let Ok(app) = ctx.app.try_borrow() {
-        app.worker.shells.close_all();
+    // Say goodbye to open shells rather than drop their links, and log their end.
+    if let Ok(mut app) = ctx.app.try_borrow_mut() {
+        app.end_shells();
     }
     if let Some(settings) = ctx.settings.upgrade() {
         let _ = settings.hide();

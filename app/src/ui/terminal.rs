@@ -13,7 +13,10 @@ use misf_core::{
 };
 use serde_json::json;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
-use std::rc::Rc;
+use std::{
+    panic::{AssertUnwindSafe, catch_unwind},
+    rc::Rc,
+};
 
 /// A shell's size before the panel has reported one.
 const SHELL_SIZE: (u16, u16) = (100, 24);
@@ -69,6 +72,8 @@ pub struct Terminal {
     screen_dirty: bool,
     /// The shell tab the view's screen was drawn from.
     screen_synced: Option<usize>,
+    /// The shell whose `shell_open` request is out.
+    pending_open: Option<u64>,
     /// The request whose hosts the tabs show; its `Done` settles them.
     pub action: String,
     /// Bumped whenever shown lines change other than at the end, so the view rebuilds.
@@ -186,18 +191,53 @@ impl Terminal {
         self.screen_dirty = true;
     }
 
-    /// Output for a shell's screen.
-    pub fn shell_output(&mut self, id: u64, data: &[u8]) {
-        if let Some(shell) = self.shell_by_id(id) {
-            shell.parser.process(data);
-            self.screen_dirty = true;
+    /// Output for a shell's screen; true when the emulator failed on it, which leaves
+    /// the shell failed with a blank screen.
+    pub fn shell_output(&mut self, id: u64, data: &[u8]) -> bool {
+        let Some(shell) = self.shell_by_id(id) else {
+            return false;
+        };
+        if shell.state == ShellState::Failed {
+            return false;
         }
+        let parser = &mut shell.parser;
+        let failed = catch_unwind(AssertUnwindSafe(|| parser.process(data))).is_err();
+        if failed {
+            shell.break_down();
+        }
+        self.screen_dirty = true;
+        failed
+    }
+
+    /// Forgets every run and shell, e.g. when the vault locks.
+    pub fn clear(&mut self) {
+        self.tabs.clear();
+        self.shells.clear();
+        self.action.clear();
+        self.current = 0;
+        self.pending_open = None;
+        self.generation += 1;
+        self.screen_dirty = true;
+    }
+
+    /// Marks every shell not yet ended as failed with `note`, e.g. when the worker that
+    /// ran them is gone.
+    pub fn fail_shells(&mut self, note: &str) {
+        for shell in &mut self.shells {
+            if matches!(shell.state, ShellState::Opening | ShellState::Open) {
+                shell.state = ShellState::Failed;
+                shell.note = note.into();
+            }
+            shell.connected = false;
+        }
+        self.pending_open = None;
+        self.screen_dirty = true;
     }
 
     /// A shell ended; returns its host when it was open, for the audit log.
     pub fn shell_ended(&mut self, id: u64, failed: bool, note: String) -> Option<String> {
         let shell = self.shell_by_id(id)?;
-        let was_open = shell.state == ShellState::Open;
+        let was_open = std::mem::replace(&mut shell.connected, false);
         shell.state = if failed {
             ShellState::Failed
         } else {
@@ -345,6 +385,7 @@ fn push_shell(
             ShellState::Opening => t.get("shell.opening").into(),
             ShellState::Open if !typing_allowed => t.get("shell.paused").into(),
             ShellState::Open => String::new(),
+            ShellState::Failed if shell.note.is_empty() => t.get("shell.emulator_failed").into(),
             ShellState::Closed | ShellState::Failed => shell.note.clone(),
         }
         .into(),
@@ -352,10 +393,25 @@ fn push_shell(
     if terminal.screen_dirty || terminal.screen_synced != Some(current) {
         let screen = shell.parser.screen();
         let (row, col) = screen.cursor_position();
-        state.set_cursor_row(i32::from(row));
-        state.set_cursor_col(i32::from(col));
-        state.set_cursor_shown(open && !screen.hide_cursor() && screen.scrollback() == 0);
-        let rows: Vec<ShellRow> = remote_shell::rows(screen);
+        // The emulator's state came from the remote side; a panic drawing it fails
+        // this shell, not the app.
+        let drawn = catch_unwind(AssertUnwindSafe(|| remote_shell::rows(screen)));
+        let rows: Vec<ShellRow> = match drawn {
+            Ok(rows) => {
+                state.set_cursor_row(i32::from(row));
+                state.set_cursor_col(i32::from(col));
+                state.set_cursor_shown(open && !screen.hide_cursor() && screen.scrollback() == 0);
+                rows
+            }
+            Err(_) => {
+                let id = terminal.shell().map(|shell| shell.id);
+                if let Some(shell) = id.and_then(|id| terminal.shell_by_id(id)) {
+                    shell.break_down();
+                }
+                state.set_cursor_shown(false);
+                Vec::new()
+            }
+        };
         state.set_screen(ModelRc::new(VecModel::from(rows)));
         terminal.screen_dirty = false;
         terminal.screen_synced = Some(current);
@@ -376,6 +432,7 @@ impl App {
         let size = self.terminal.size();
         self.terminal
             .add_shell(ShellTab::new(shell, id.clone(), name, size));
+        self.terminal.pending_open = Some(shell);
         self.tool = Some(Tool::Terminal);
         self.send(json!({
             "action": "shell_open",
@@ -389,12 +446,17 @@ impl App {
     /// The answer to a request to open a shell.
     pub fn shell_opened(&mut self, result: &Result<serde_json::Value, String>) {
         let t = self.t();
-        let opening = (self.terminal.shells.iter_mut())
-            .filter(|shell| shell.state == ShellState::Opening)
-            .last();
-        if let Some(shell) = opening {
+        let Some(id) = self.terminal.pending_open.take() else {
+            return;
+        };
+        if let Some(shell) = self.terminal.shell_by_id(id)
+            && shell.state == ShellState::Opening
+        {
             match result {
-                Ok(_) => shell.state = ShellState::Open,
+                Ok(_) => {
+                    shell.state = ShellState::Open;
+                    shell.connected = true;
+                }
                 Err(error) => {
                     shell.state = ShellState::Failed;
                     shell.note = t.format("shell.failed", &[("error", error.clone())]);
@@ -424,6 +486,33 @@ impl App {
                 .is_err()
             {
                 self.error = Some(self.t().get("audit.failed").into());
+            }
+        }
+    }
+
+    /// Ends every open shell and logs each end now: the vault is locking or the app is
+    /// closing, and their own end may never be heard.
+    pub fn end_shells(&mut self) {
+        let t = self.t();
+        let ended: Vec<String> = (self.terminal.shells.iter_mut())
+            .filter(|shell| shell.connected)
+            .map(|shell| {
+                shell.connected = false;
+                if shell.state == ShellState::Open {
+                    shell.state = ShellState::Closed;
+                    shell.note = t.get("shell.ended").into();
+                }
+                shell.host.clone()
+            })
+            .collect();
+        self.worker.shells.close_all();
+        for id in ended {
+            let host = self.hosts.iter().find(|h| h.id == id);
+            if (self.audit)
+                .record(Action::ShellClose, Outcome::Succeeded, host, None)
+                .is_err()
+            {
+                self.error = Some(t.get("audit.failed").into());
             }
         }
     }
@@ -482,6 +571,8 @@ pub fn wire(ctx: &Ctx, w: &AppWindow) {
                 ShellState::Open => {
                     app.worker.shells.send(shell.id, Input::Close);
                 }
+                // Still waiting for the worker; once nothing runs, the tab is stale.
+                ShellState::Opening if !app.busy => app.terminal.remove_shell(index),
                 ShellState::Opening => {}
             }
         })

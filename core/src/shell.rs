@@ -8,15 +8,22 @@ use crate::ssh::{self, Details};
 use anyhow::{Context, Result, bail};
 use russh::ChannelMsg;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     time::Duration,
 };
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
+use tokio::sync::{
+    Notify,
+    mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
+};
 use tokio::time::timeout;
+
+/// Output handed to the screen but not yet drawn, per shell. Past this the shell stops
+/// reading its channel, so SSH flow control makes the remote side wait.
+pub const WINDOW: usize = 1024 * 1024;
 
 /// What the app sends an open shell.
 pub enum Input {
@@ -30,17 +37,30 @@ pub enum Input {
 
 /// Where a shell's output goes.
 pub trait Screen: Send + Sync {
-    /// Raw output, escape sequences included, for a terminal emulator to draw.
+    /// Raw output, escape sequences included, for a terminal emulator to draw. Each
+    /// call must be answered with [`Shells::drawn`] once it is drawn or dropped.
     fn output(&self, shell: u64, data: &[u8]);
     /// The shell is gone: the remote side ended it, it was closed, or the link broke.
     fn ended(&self, shell: u64, error: Option<String>);
+}
+
+/// How far a shell's output is ahead of the screen.
+#[derive(Clone, Default)]
+struct Flow {
+    pending: Arc<AtomicUsize>,
+    drained: Arc<Notify>,
+}
+
+struct Entry {
+    input: UnboundedSender<Input>,
+    flow: Flow,
 }
 
 /// The open shells, shared by the worker that opens them and the app that types into
 /// them.
 #[derive(Clone, Default)]
 pub struct Shells {
-    open: Arc<Mutex<HashMap<u64, UnboundedSender<Input>>>>,
+    open: Arc<Mutex<HashMap<u64, Entry>>>,
     next: Arc<AtomicU64>,
 }
 
@@ -52,23 +72,44 @@ impl Shells {
 
     /// Lists a shell as open and returns where its input arrives.
     pub fn register(&self, shell: u64) -> UnboundedReceiver<Input> {
-        let (sender, receiver) = unbounded_channel();
-        self.list().insert(shell, sender);
-        receiver
+        self.enter(shell).0
+    }
+
+    fn enter(&self, shell: u64) -> (UnboundedReceiver<Input>, Flow) {
+        let (input, receiver) = unbounded_channel();
+        let flow = Flow::default();
+        self.list().insert(
+            shell,
+            Entry {
+                input,
+                flow: flow.clone(),
+            },
+        );
+        (receiver, flow)
     }
 
     /// Sends input to an open shell; false when it is no longer open.
     pub fn send(&self, shell: u64, input: Input) -> bool {
         self.list()
             .get(&shell)
-            .is_some_and(|sender| sender.send(input).is_ok())
+            .is_some_and(|entry| entry.input.send(input).is_ok())
+    }
+
+    /// The screen has drawn (or dropped) `bytes` of a shell's output, so it may read on.
+    pub fn drawn(&self, shell: u64, bytes: usize) {
+        if let Some(entry) = self.list().get(&shell) {
+            let _ = (entry.flow.pending).try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+                Some(n.saturating_sub(bytes))
+            });
+            entry.flow.drained.notify_one();
+        }
     }
 
     /// Ends every open shell, e.g. when the vault locks: the credentials they signed in
     /// with must not outlive it.
     pub fn close_all(&self) {
-        for sender in self.list().values() {
-            let _ = sender.send(Input::Close);
+        for entry in self.list().values() {
+            let _ = entry.input.send(Input::Close);
         }
     }
 
@@ -76,7 +117,7 @@ impl Shells {
         self.list().len()
     }
 
-    fn list(&self) -> std::sync::MutexGuard<'_, HashMap<u64, UnboundedSender<Input>>> {
+    fn list(&self) -> std::sync::MutexGuard<'_, HashMap<u64, Entry>> {
         self.open
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -130,13 +171,16 @@ pub async fn open(
             return Err(error);
         }
     };
-    let receiver = shells.register(shell);
+    let (receiver, flow) = shells.enter(shell);
     let shells = shells.clone();
     tokio::spawn(async move {
         if !early.is_empty() {
+            flow.pending.fetch_add(early.len(), Ordering::AcqRel);
             screen.output(shell, &early);
         }
-        let error = pump(channel, receiver, shell, screen.as_ref()).await.err();
+        let error = pump(channel, receiver, shell, screen.as_ref(), &flow)
+            .await
+            .err();
         ssh::disconnect(&session).await;
         shells.list().remove(&shell);
         screen.ended(shell, error.map(|error| format!("{error:#}")));
@@ -144,33 +188,81 @@ pub async fn open(
     Ok(())
 }
 
+type Channel = russh::Channel<russh::client::Msg>;
+
 /// Moves bytes both ways until either side ends the shell.
 async fn pump(
-    mut channel: russh::Channel<russh::client::Msg>,
+    mut channel: Channel,
     mut input: UnboundedReceiver<Input>,
     shell: u64,
     screen: &dyn Screen,
+    flow: &Flow,
 ) -> Result<()> {
+    // Input that arrived while a write waited for the remote side to read.
+    let mut queued = VecDeque::new();
     loop {
+        while let Some(typed) = queued.pop_front() {
+            if !apply(&channel, typed, &mut input, &mut queued).await? {
+                let _ = channel.close().await;
+                return Ok(());
+            }
+        }
+        // The screen is far behind: wait for it before reading more.
+        let paused = flow.pending.load(Ordering::Acquire) >= WINDOW;
         tokio::select! {
-            message = channel.wait() => match message {
+            message = channel.wait(), if !paused => match message {
                 Some(ChannelMsg::Data { data } | ChannelMsg::ExtendedData { data, .. }) => {
+                    flow.pending.fetch_add(data.len(), Ordering::AcqRel);
                     screen.output(shell, &data);
                 }
                 Some(ChannelMsg::Eof | ChannelMsg::Close) | None => return Ok(()),
                 Some(_) => {}
             },
-            typed = input.recv() => match typed {
-                Some(Input::Data(bytes)) => channel.data(&bytes[..]).await?,
-                Some(Input::Resize { cols, rows }) => {
-                    channel.window_change(cols, rows, 0, 0).await?;
-                }
-                Some(Input::Close) | None => {
+            () = flow.drained.notified(), if paused => {}
+            typed = input.recv() => {
+                let Some(typed) = typed else {
+                    let _ = channel.close().await;
+                    return Ok(());
+                };
+                if !apply(&channel, typed, &mut input, &mut queued).await? {
                     let _ = channel.close().await;
                     return Ok(());
                 }
-            },
+            }
         }
+    }
+}
+
+/// Carries out one input; false when it ends the shell. A write the remote side does
+/// not read can still be interrupted by a close.
+async fn apply(
+    channel: &Channel,
+    typed: Input,
+    input: &mut UnboundedReceiver<Input>,
+    queued: &mut VecDeque<Input>,
+) -> Result<bool> {
+    match typed {
+        Input::Data(bytes) => {
+            let send = channel.data(&bytes[..]);
+            tokio::pin!(send);
+            loop {
+                tokio::select! {
+                    sent = &mut send => {
+                        sent?;
+                        return Ok(true);
+                    }
+                    next = input.recv() => match next {
+                        Some(Input::Close) | None => return Ok(false),
+                        Some(other) => queued.push_back(other),
+                    },
+                }
+            }
+        }
+        Input::Resize { cols, rows } => {
+            channel.window_change(cols, rows, 0, 0).await?;
+            Ok(true)
+        }
+        Input::Close => Ok(false),
     }
 }
 
@@ -192,5 +284,19 @@ mod tests {
         assert!(matches!(first_rx.try_recv(), Ok(Input::Data(_))));
         assert!(matches!(first_rx.try_recv(), Ok(Input::Close)));
         assert!(matches!(second_rx.try_recv(), Ok(Input::Close)));
+    }
+
+    #[test]
+    fn drawn_output_is_taken_off_the_shells_backlog() {
+        let shells = Shells::default();
+        let (_input, flow) = shells.enter(1);
+        flow.pending.store(WINDOW + 10, Ordering::Release);
+        shells.drawn(1, 10);
+        assert_eq!(flow.pending.load(Ordering::Acquire), WINDOW);
+        // More than is pending never wraps around.
+        shells.drawn(1, 2 * WINDOW);
+        assert_eq!(flow.pending.load(Ordering::Acquire), 0);
+        // An unknown shell is ignored.
+        shells.drawn(9, 1);
     }
 }

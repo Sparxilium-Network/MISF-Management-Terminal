@@ -239,6 +239,11 @@ pub struct Reload {
     pub package_search: bool,
 }
 
+/// Events [`App::process_events`] handles before letting the window draw.
+const EVENT_BUDGET: usize = 512;
+/// Shell output counted as one more event against [`EVENT_BUDGET`].
+const SHELL_BYTES_PER_EVENT: usize = 4096;
+
 pub struct App {
     pub audit: AuditLog,
     pub settings_path: PathBuf,
@@ -308,8 +313,12 @@ pub struct App {
     pub plaintext_exists: bool,
     pub plaintext_path: String,
     pub plaintext_delete_prompt: bool,
-    /// The window's close button was pressed while an operation was running.
+    /// The window's close button was pressed while an operation was running or a shell
+    /// was open.
     pub close_prompt: bool,
+    /// [`Self::process_events`] stopped with events still waiting, to let the window
+    /// draw and take input; the caller runs it again soon.
+    pub events_pending: bool,
     /// Live remote output of the last check, upgrade or reboot, one tab per host.
     pub terminal: super::terminal::Terminal,
     /// The older schema version of a just-decrypted vault, waiting for upgrade consent.
@@ -382,6 +391,7 @@ impl App {
             plaintext_path: String::new(),
             plaintext_delete_prompt: false,
             close_prompt: false,
+            events_pending: false,
             terminal: Default::default(),
             schema_upgrade_prompt: None,
             slots: vec![],
@@ -489,6 +499,8 @@ impl App {
         self.status = t.get("status.failed").into();
         self.terminal
             .end(false, &format!("[{}]", t.get("terminal.interrupted")));
+        // The worker's runtime ran the shells; they went with it.
+        self.terminal.fail_shells(t.get("terminal.interrupted"));
         let detail = if detail.is_empty() {
             "-".to_owned()
         } else {
@@ -583,7 +595,16 @@ impl App {
         let t = self.t();
         // Before reading: terminal lines sent after this wake the UI again.
         (self.worker.terminal).store(false, std::sync::atomic::Ordering::Release);
+        // A flood of output (e.g. `yes` in a shell) is read a slice at a time, so the
+        // window still draws and Ctrl+C still reaches the shell.
+        let mut budget = EVENT_BUDGET;
+        self.events_pending = false;
         loop {
+            if budget == 0 {
+                self.events_pending = true;
+                break;
+            }
+            budget -= 1;
             let event = match self.worker.events.try_recv() {
                 Ok(event) => event,
                 Err(std::sync::mpsc::TryRecvError::Empty) => break,
@@ -609,7 +630,18 @@ impl App {
                     text,
                     command,
                 } => self.terminal.write(&host, &text, command),
-                Event::ShellOutput { shell, data } => self.terminal.shell_output(shell, &data),
+                Event::ShellOutput { shell, data } => {
+                    budget = budget.saturating_sub(data.len() / SHELL_BYTES_PER_EVENT);
+                    // Output keeps the vault from locking under a running program.
+                    self.last_activity = Instant::now();
+                    if self.terminal.shell_output(shell, &data) {
+                        // The emulator failed on this output: stop the shell.
+                        self.worker
+                            .shells
+                            .send(shell, misf_core::shell::Input::Close);
+                    }
+                    self.worker.shells.drawn(shell, data.len());
+                }
                 Event::ShellEnded { shell, error } => self.shell_ended(shell, error),
                 Event::BatchHost { id, result } => {
                     let (succeeded, note) = terminal_note(t, &result.status, &result.error);
@@ -994,6 +1026,9 @@ impl App {
     }
 
     pub fn clear_host_cache(&mut self) {
+        // The terminal names hosts and holds what they printed, shells included.
+        self.end_shells();
+        self.terminal.clear();
         for host in &mut self.hosts {
             wipe_host(host);
         }

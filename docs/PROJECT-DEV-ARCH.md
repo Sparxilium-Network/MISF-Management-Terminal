@@ -1,6 +1,6 @@
 # 原始碼檔案說明
 
-> 最後修改：2026-11-15 ｜ 基於 commit：`be447e4`
+> 最後修改：2026-11-15 ｜ 基於 commit：`0ac559b`
 
 每個 `.rs` 檔案負責什麼。整體設計與資料流見 [架構](architecture.md)，建置與慣例見 [開發說明](PROJECT-DEV.md)。新增、改名或刪除 `.rs` 檔案時，請一併更新本文件。
 
@@ -48,7 +48,7 @@ Workspace 有三個 crate：`core`（`misf-core`，核心函式庫與 JSON CLI�
 | 檔案 | 作用 |
 | --- | --- |
 | `core/src/ssh.rs` | SSH 傳輸：`probe`（只取主機指紋，不送帳密）、`connect`（核對指紋）、`authenticate`（密碼或私鑰）、`execute`（執行一條命令、偵測 sudo 提示並最多回答一次、32 MiB 輸出上限；同時經 `Echo` 把命令與逐行輸出即時送給終端機）、`test_connection`（產生 `ConnectionTest`）。不含任何套件命令。 |
-| `core/src/shell.rs` | 互動 shell：`open` 登入主機、開 `xterm-256color` PTY 與 login shell，等到 PTY 與 shell 兩個回覆後才返回，再以 `tokio::spawn` 讓 `pump` 在背景雙向搬運位元組（輸出交給 `Screen`，結束時呼叫 `Screen::ended`）。`Shells` 是 worker 與 UI 共用的開啟中 shell 表（編號只增不重用）；`Input` 為按鍵位元組、視窗大小或關閉。輸入與輸出不經請求佇列，也不寫入稽核紀錄或工作階段記錄。`StorageSession` 的 `shell_open` 請求開啟 shell，`vault_lock` 先 `close_all`；debug 模式與其他遠端操作一樣只允許 loopback。 |
+| `core/src/shell.rs` | 互動 shell：`open` 登入主機、開 `xterm-256color` PTY 與 login shell，等到 PTY 與 shell 兩個回覆後才返回，再以 `tokio::spawn` 讓 `pump` 在背景雙向搬運位元組（輸出交給 `Screen`，結束時呼叫 `Screen::ended`）。`Shells` 是 worker 與 UI 共用的開啟中 shell 表（編號只增不重用），每個 shell 記錄尚未畫出的輸出量，超過 `WINDOW`（1 MiB）時 `pump` 停止讀取 channel，UI 以 `Shells::drawn` 回報後再繼續；寫入時遠端不讀，仍可被關閉要求中斷；`Input` 為按鍵位元組、視窗大小或關閉。輸入與輸出不經請求佇列，也不寫入稽核紀錄或工作階段記錄。`StorageSession` 的 `shell_open` 請求開啟 shell，`vault_lock` 先 `close_all`；debug 模式與其他遠端操作一樣只允許 loopback。 |
 | `core/src/console.rs` | 即時遠端輸出：`Console` trait（`command`／`output`，以主機 ID 區分）、不顯示的 `Silent`，以及每台主機一份的 `Echo`（帶著該主機的密碼、sudo 密碼、私鑰密語與私鑰各行，逐行遮蔽）。`Lines` 收到換行才送出整行，所以 ANSI 序列、UTF-8 字元與密碼不會被切開；清理方式與 `transcript::readable_output` 相同，並移除 sudo 提示標記。`StorageSession`／`Session::set_console` 設定接收端，`dispatch_with` 傳給單台檢查／升級／dist-upgrade／重新開機與批次的每台主機；測試連線不顯示。 |
 | `core/src/transcript.rs` | 把遠端輸出轉成可讀紀錄：統一換行、移除 ANSI 與終端控制字串；`heading` 產生依顯示寬度對齊的星號框標題，供執行輸出與 LOG 分段。 |
 | `core/src/package_manager/mod.rs` | `Mode`（check／upgrade／dist_upgrade）、`Manager` 列舉與 `Commands { update, list, upgrade, dist_upgrade, simulate, preview, status }`，依管理器分派到各檔案；`manager_commands`／`package_commands` 列出確認視窗要顯示的命令；`SUDO_PROMPT` 標記。 |
@@ -75,7 +75,7 @@ Workspace 有三個 crate：`core`（`misf-core`，核心函式庫與 JSON CLI�
 | `app/src/ui/mod.rs` | 建立主視窗與設定視窗（`build`）、執行事件迴圈（`run`）、`Ctx::update` 修改狀態後以 `refresh` 把狀態推到兩個視窗；監看 winit 輸入事件供閒置自動鎖定、記錄視窗大小，並在右鍵按住時設定 `PopMenu.right-down`（`track_right_button`）；`sync_rows`／`keep_inner` 就地更新清單，避免拖曳或雙擊中的元件被重建；`capture` 功能下的截圖、`MISF_FIXTURE` 假資料與 `MISF_OPEN_MENU` 範例選單。 |
 | `app/src/ui/app.rs` | 視窗狀態 `App`（原 `ManagementApp`）與對話框資料結構：送出請求、處理背景事件與回應（`received`）、稽核與工作階段記錄、清除主機快取、閒置自動鎖定（`auto_lock`，作業中不鎖）、關閉時儲存視窗大小（`shutdown`）。只送出請求並保存結果，不直接連線或讀寫主機資料。 |
 | `app/src/ui/format.rs` | 由主機與結果產生的文字：套件管理器與系統標籤、狀態、重啟摘要、連線資訊列、可複製的命令（`copied_commands`），以及連線與重啟分頁的行資料 `Line`。 |
-| `app/src/ui/terminal.rs` | 底部終端機面板（互動 shell 分頁接在操作分頁之後，`Terminal::shells`，`current` 跨兩者計算；`App::open_shell`／`shell_opened`／`shell_ended`，結束時以 `Action::ShellClose` 記稽核；`type_into_shell` 在忙碌或鎖定時拒絕輸入；視窗大小變更送給所有開啟中的 shell）：`Terminal` 保存最近一次檢查、升級或重新開機的每台主機分頁（`TabState`：等待、執行中、完成、失敗、略過）與各自的行（每台最多 `MAX_LINES` 行，超過時一次捨棄最舊的 2000 行）。`App::send` 依請求開新的一輪並把 `App::tool` 切到終端機；`Event::Terminal` 加入行，`BatchHost`／`Done`／worker 崩潰收尾。`push` 對同一個 `VecModel` 只追加新行，換分頁或捨棄舊行時才重建；`wire` 也處理 `ToolWindow`（`App::toggle_tool`；共用高度存在偏好設定的 `tool_height`）。 |
+| `app/src/ui/terminal.rs` | 底部終端機面板（互動 shell 分頁接在操作分頁之後，`Terminal::shells`，`current` 跨兩者計算；`App::open_shell`／`shell_opened`／`shell_ended`，結束時以 `Action::ShellClose` 記稽核；`type_into_shell` 在忙碌或鎖定時拒絕輸入；視窗大小變更送給所有開啟中的 shell；模擬器解析與繪製以 `catch_unwind` 包住，出錯只讓該 shell 失敗；`clear_host_cache` 以 `end_shells` 結束 shell、記稽核並清空終端機；worker 崩潰時 `fail_shells`）：`Terminal` 保存最近一次檢查、升級或重新開機的每台主機分頁（`TabState`：等待、執行中、完成、失敗、略過）與各自的行（每台最多 `MAX_LINES` 行，超過時一次捨棄最舊的 2000 行）。`App::send` 依請求開新的一輪並把 `App::tool` 切到終端機；`App::process_events` 每輪最多處理 `EVENT_BUDGET` 個事件（shell 輸出依位元組計），剩下的由 `drain_events` 以計時器接續；`Event::Terminal` 加入行，`BatchHost`／`Done`／worker 崩潰收尾。`push` 對同一個 `VecModel` 只追加新行，換分頁或捨棄舊行時才重建；`wire` 也處理 `ToolWindow`（`App::toggle_tool`；共用高度存在偏好設定的 `tool_height`）。 |
 | `app/src/ui/shell.rs` | 自繪標題列（`WindowChrome`：拖曳移動與邊緣縮放交給 winit 的 `drag_window`／`drag_resize_window`，關閉按鈕送出與系統關閉相同的 `CloseRequested`）、狀態列與其「過往操作」清單（`App::history`，經 `set_status`／`set_host_status`／`note_error` 記錄，進度訊息不記），主機／批次分頁切換；關閉主視窗時一併結束程式，操作進行中先以 `CloseDialog` 詢問。 |
 | `app/src/ui/sidebar.rs` | 側欄主機清單：分類與收合、搜尋、卡片內容與高度、拖曳排序（`Layout` 計算放置位置，`arrange` 送出新順序）、分類名稱對話框。 |
 | `app/src/ui/host_page.rs` | 主機頁與結果分頁：測試連線、指紋、檢查、「進階操作」選單（升級、dist-upgrade、重新開機，依主機能力停用）、升級提示、「需要 dist-upgrade」報告。 |

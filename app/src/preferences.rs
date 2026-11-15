@@ -479,6 +479,7 @@ pub struct Preferences {
     pub ungrouped_collapsed: bool,
     pub unlock_method: UnlockMethod,
     /// Minutes without input before an unlocked vault locks itself; `None` never locks.
+    /// A settings file without the key, or none at all, gets [`AUTO_LOCK_DEFAULT`].
     pub auto_lock_minutes: Option<u16>,
     /// The height of the tool window under the pages (terminal or history) in logical
     /// pixels, as last dragged; `None` is [`TOOL_HEIGHT`].
@@ -509,7 +510,10 @@ impl Preferences {
         let bytes = match std::fs::read(path) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(Self::default());
+                return Ok(Self {
+                    auto_lock_minutes: Some(AUTO_LOCK_DEFAULT),
+                    ..Self::default()
+                });
             }
             Err(error) => return Err(error.to_string()),
         };
@@ -560,10 +564,14 @@ impl Preferences {
                 .as_str()
                 .and_then(|code| UnlockMethod::ALL.iter().copied().find(|m| m.code() == code))
                 .unwrap_or_default(),
-            auto_lock_minutes: value["auto_lock_minutes"]
-                .as_u64()
-                .and_then(|minutes| u16::try_from(minutes).ok())
-                .filter(|minutes| (1..=AUTO_LOCK_MAX).contains(minutes)),
+            // Never chosen: locks after the default time. Turned off is saved as null.
+            auto_lock_minutes: match value.get("auto_lock_minutes") {
+                None => Some(AUTO_LOCK_DEFAULT),
+                Some(minutes) => minutes
+                    .as_u64()
+                    .and_then(|minutes| u16::try_from(minutes).ok())
+                    .filter(|minutes| (1..=AUTO_LOCK_MAX).contains(minutes)),
+            },
             tool_height: value["tool_height"]
                 .as_f64()
                 .filter(|height| TOOL_HEIGHTS.contains(height))
@@ -751,7 +759,19 @@ mod tests {
         assert_eq!(loaded.unlock_method, UnlockMethod::Password);
         assert_eq!(loaded.batch_columns, BatchColumns::default());
         assert_eq!(loaded.batch_detail, BatchDetail::Inline);
-        assert_eq!(loaded.auto_lock_minutes, None);
+        // Never chosen: the default idle time. Turned off stays off.
+        assert_eq!(loaded.auto_lock_minutes, Some(AUTO_LOCK_DEFAULT));
+        std::fs::write(
+            &path,
+            json!({"version": 1, "auto_lock_minutes": null}).to_string(),
+        )
+        .unwrap();
+        assert_eq!(Preferences::load(&path).unwrap().auto_lock_minutes, None);
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(
+            Preferences::load(&path).unwrap().auto_lock_minutes,
+            Some(AUTO_LOCK_DEFAULT)
+        );
         assert_eq!(loaded.font, InterfaceFont::Noto);
         // An idle time outside 1 minute to 1 day never locks rather than guessing.
         for minutes in [json!(0), json!(1441), json!(-5), json!("15")] {

@@ -24,8 +24,11 @@ pub struct ShellTab {
     pub host: String,
     pub name: String,
     pub state: ShellState,
-    /// Shown under the screen once the shell has ended.
+    /// Shown under the screen once the shell has ended; empty after an emulator failure.
     pub note: String,
+    /// Its SSH session is up: from the worker's answer until its end is heard. Its end
+    /// is audited only then.
+    pub connected: bool,
     pub parser: vt100::Parser,
 }
 
@@ -37,6 +40,7 @@ impl ShellTab {
             name,
             state: ShellState::Opening,
             note: String::new(),
+            connected: false,
             parser: vt100::Parser::new(nonzero(rows), nonzero(cols), SCROLLBACK),
         }
     }
@@ -59,6 +63,15 @@ impl ShellTab {
     /// The screen's text, for copying.
     pub fn text(&self) -> String {
         self.parser.screen().contents()
+    }
+
+    /// The emulator panicked on this shell's output: its state can no longer be
+    /// trusted, so the screen starts blank and the shell is marked failed.
+    pub fn break_down(&mut self) {
+        let (rows, cols) = self.parser.screen().size();
+        self.parser = vt100::Parser::new(rows, cols, SCROLLBACK);
+        self.state = ShellState::Failed;
+        self.note.clear();
     }
 }
 
@@ -306,6 +319,12 @@ pub fn key_bytes(
     if text.chars().any(|c| ('\u{f700}'..='\u{f8ff}').contains(&c)) {
         return None;
     }
+    // AltGr arrives as Ctrl+Alt: a character it typed (e.g. @ or { on European layouts)
+    // is sent as typed, not as a control code.
+    let alt_gr = control && alt && !first.is_ascii_alphabetic() && !first.is_control();
+    if alt_gr {
+        return Some(text.as_bytes().to_vec());
+    }
     if control && rest.is_none() {
         // Ctrl+letter and its neighbours: the C0 control codes.
         let code = match first.to_ascii_lowercase() {
@@ -390,6 +409,15 @@ mod tests {
         assert_eq!(
             key_bytes("x", false, true, false, false),
             Some(b"\x1bx".to_vec())
+        );
+        // AltGr (Ctrl+Alt) on a European layout types the character itself.
+        assert_eq!(
+            key_bytes("@", true, true, false, false),
+            Some(b"@".to_vec())
+        );
+        assert_eq!(
+            key_bytes("{", true, true, false, false),
+            Some(b"{".to_vec())
         );
         // A modifier pressed alone sends nothing.
         assert_eq!(key_bytes(&key(Key::Shift), false, false, true, false), None);

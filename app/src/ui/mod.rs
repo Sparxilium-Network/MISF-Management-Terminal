@@ -116,13 +116,7 @@ pub fn run(paths: RuntimePaths, audit: AuditLog) -> Result<(), slint::PlatformEr
         .renderer_name("skia".into())
         .select()?;
     let wake: crate::worker::Wake = Arc::new(|| {
-        let _ = slint::invoke_from_event_loop(|| {
-            CTX.with(|ctx| {
-                if let Some(ctx) = ctx.borrow().as_ref() {
-                    ctx.update(App::process_events);
-                }
-            })
-        });
+        let _ = slint::invoke_from_event_loop(drain_events);
     });
     let worker = Worker::new(wake, paths.clone(), audit.clone());
     let debug = paths.debug;
@@ -143,6 +137,21 @@ pub fn run(paths: RuntimePaths, audit: AuditLog) -> Result<(), slint::PlatformEr
     CTX.with(|cell| cell.borrow_mut().take());
     ctx.app.borrow_mut().shutdown();
     Ok(())
+}
+
+/// Reads the worker's events; when a slice of a flood was read, the rest follows after
+/// the window had a chance to draw and take input.
+fn drain_events() {
+    let more = CTX.with(|ctx| {
+        let Some(ctx) = ctx.borrow().clone() else {
+            return false;
+        };
+        ctx.update(App::process_events);
+        ctx.app.try_borrow().is_ok_and(|app| app.events_pending)
+    });
+    if more {
+        slint::Timer::single_shot(std::time::Duration::from_millis(1), drain_events);
+    }
 }
 
 fn wire(ctx: &Ctx, main: &AppWindow, settings: &SettingsWindow) {

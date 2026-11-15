@@ -285,6 +285,13 @@ impl server::Handler for Mock {
                 session.eof(channel)?;
                 return session.close(channel);
             }
+            // Far more output than the client lets through unread.
+            if data == b"flood\r" {
+                for _ in 0..48 {
+                    session.data(channel, vec![b'y'; 64 * 1024])?;
+                }
+                return Ok(());
+            }
             return session.data(channel, data.to_vec());
         }
         if let Some(command) = self.waiting.remove(&channel) {
@@ -1413,4 +1420,38 @@ async fn an_interactive_shell_echoes_keys_follows_resizes_and_ends() {
     shells.close_all();
     until(|| screen.ended.lock().unwrap().is_some()).await;
     assert_eq!(shells.count(), 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_shell_stops_reading_while_the_screen_is_behind() {
+    let fixture = fixture(false, false).await;
+    let shells = shell::Shells::default();
+    let screen = Arc::new(ShellScreen::default());
+    let id = shells.reserve();
+    shell::open(&fixture.host, id, 100, 30, &shells, screen.clone())
+        .await
+        .unwrap();
+    let received = || screen.output.lock().unwrap().len();
+    until(|| received() > 0).await;
+    let welcome = received();
+    screen.output.lock().unwrap().clear();
+    // 3 MiB is sent; the screen draws nothing, so reading stops near the window.
+    assert!(shells.send(id, shell::Input::Data(b"flood\r".to_vec())));
+    until(|| received() >= shell::WINDOW).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let stalled = received();
+    assert!(stalled < 3 * 1024 * 1024, "{stalled}");
+    // Once it is drawn, the rest comes through.
+    let mut acknowledged = 0;
+    for _ in 0..500 {
+        let now = welcome + received();
+        shells.drawn(id, now - acknowledged);
+        acknowledged = now;
+        if received() >= 3 * 1024 * 1024 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(received(), 3 * 1024 * 1024);
+    shells.close_all();
 }
