@@ -1,5 +1,10 @@
 # 全工作區檢查結果
 
+## 2026-11-16（文件補上「執行所有測試」，分支 `feat/WYSIWYG-Terminal`，基於 `752ab8d`）
+
+- 使用者要求把如何執行所有測試寫進文件。`docs/PROJECT-DEV.md` 的「測試」新增「執行所有測試」小節與指令對照表，`sshtest/README.md` 補上同一條指令。只改文件。
+- 實測：`cargo test --locked --workspace -- --include-ignored` 全過（22、37、70、29 項，加上容器測試 18 項），執行後沒有殘留容器。加上 `MISF_SSHTEST_SLOW=1` 的組合沒有在這次重跑（慢速項先前單獨通過）。
+
 ## 2026-11-16（sshtest 依套件管理器分資料夾，分支 `feat/WYSIWYG-Terminal`，基於 `416718d`）
 
 - 使用者要求：之後會增加其他套件管理器，測試要像 `apt/…`、`yum/…` 這樣分開，不能擠在一起。

@@ -1,6 +1,6 @@
 # MISF Management Terminal 開發說明
 
-> 最後修改：2026-11-16 ｜ 基於 commit：`416718d`
+> 最後修改：2026-11-16 ｜ 基於 commit：`752ab8d`
 
 一般使用方式見 [README](../README.md) 與 [使用指南](user-guide.md)。本文件是開發文件的入口，給開發者與維護者，記錄建置、儲存格式、安全設計細節與測試方式。
 
@@ -156,11 +156,42 @@ cargo run --locked -p misf -- --debug.dir="C:\temp\misf-test"
 
 ## 測試
 
+提交前的檢查（不需要 Docker，約 2 分鐘）：
+
 ```powershell
 cargo test --locked --workspace
 cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 ```
+
+### 執行所有測試
+
+`cargo test --workspace` 會略過標為 `#[ignore]` 的測試；目前只有 `sshtest/` 的真實容器測試是這一類。要連它們一起跑，先啟動 Docker，再加上 `--include-ignored`（約 3 分鐘）：
+
+```powershell
+cargo test --locked --workspace -- --include-ignored
+```
+
+還有少數要等幾分鐘的測試（目前是 APT 的「網路無聲中斷」，約 4 分鐘），設了 `MISF_SSHTEST_SLOW=1` 才真的執行，否則直接通過並印出略過的說明。真正一項不漏：
+
+```powershell
+$env:MISF_SSHTEST_SLOW = '1'
+cargo test --locked --workspace -- --include-ignored
+Remove-Item Env:MISF_SSHTEST_SLOW
+```
+
+Linux／macOS 的 shell：`MISF_SSHTEST_SLOW=1 cargo test --locked --workspace -- --include-ignored`。
+
+| 想跑什麼 | 指令 |
+| --- | --- |
+| 一般測試（不含容器） | `cargo test --locked --workspace` |
+| 全部（含容器） | `cargo test --locked --workspace -- --include-ignored` |
+| 只跑容器測試 | `cargo test --locked -p misf-sshtest -- --ignored` |
+| 只跑某個套件管理器的容器測試 | `cargo test --locked -p misf-sshtest --test apt -- --ignored` |
+| 只跑某一個 crate | `cargo test --locked -p misf-core`（或 `-p misf`） |
+| 只跑名稱符合的測試 | 在指令最後加上名稱的一部分，例如 `cargo test --locked --workspace sudo` |
+
+沒有啟動 Docker 時，容器測試會在建置映像那一步失敗，其餘測試不受影響。GitHub Actions 目前只跑一般測試。
 
 UI 測試在 `app/src/ui/tests.rs`：狀態邏輯測試，加上以 `i-slint-backend-testing` 送出實際指標與鍵盤事件的畫面測試（需要 debug 建置保留元件名稱，`app/build.rs` 已設定）。這個測試後端由整個程序共用，所以畫面測試集中在同一個測試函式 `pages_respond_to_clicks`。
 

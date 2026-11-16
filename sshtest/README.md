@@ -1,6 +1,6 @@
 # sshtest：套件管理器故障情境測試
 
-> 最後修改：2026-11-16 ｜ 基於 commit：`416718d`
+> 最後修改：2026-11-16 ｜ 基於 commit：`752ab8d`
 
 用真的容器測試 MISF 經 SSH 做的套件檢查與升級：升級到一半失敗、斷線、不正常的輸出、套件腳本跳出畫面或等人回答。`core/tests/workflow.rs` 的模擬 SSH 伺服器只會回傳寫好的文字；這裡跑的是真的 sshd、sudo 與套件管理器。
 
@@ -38,6 +38,12 @@ sshtest/
 
 ```powershell
 cargo test -p misf-sshtest -- --ignored
+```
+
+連同專案其他測試一次跑完（在儲存庫根目錄）：
+
+```powershell
+cargo test --locked --workspace -- --include-ignored
 ```
 
 只跑一個套件管理器：`cargo test -p misf-sshtest --test apt -- --ignored`。只跑一類或一項：在最後加上模組或測試名稱的一部分，例如 `connection` 或 `a_cut_connection`。
