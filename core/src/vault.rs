@@ -271,6 +271,8 @@ pub struct StorageSession {
     observer: Box<dyn batch::Observer + Send>,
     /// Shows remote commands and their output as they run.
     console: std::sync::Arc<dyn crate::console::Console>,
+    /// Stops a running batch at the user's request.
+    cancel: crate::cancel::Cancel,
     /// Interactive shells and where they draw; none until the app sets them.
     shells: Option<(
         crate::shell::Shells,
@@ -284,6 +286,9 @@ impl StorageSession {
     }
     pub fn set_console(&mut self, console: std::sync::Arc<dyn crate::console::Console>) {
         self.console = console;
+    }
+    pub fn set_cancel(&mut self, cancel: crate::cancel::Cancel) {
+        self.cancel = cancel;
     }
     pub fn set_shells(
         &mut self,
@@ -320,6 +325,7 @@ impl StorageSession {
             warning: String::new(),
             observer: Box::new(batch::Unattended),
             console: std::sync::Arc::new(crate::console::Silent),
+            cancel: crate::cancel::Cancel::default(),
             shells: None,
         }
     }
@@ -542,6 +548,7 @@ impl StorageSession {
                     progress,
                     self.observer.as_ref(),
                     &self.console,
+                    &self.cancel,
                 )
                 .await
             }

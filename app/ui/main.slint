@@ -14,13 +14,13 @@ import { EditorDialog, EditorState } from "dialogs/editor.slint";
 import { KeysDialog, KeysState, KeyView } from "dialogs/keys.slint";
 import { VaultDialog, VaultState, SlotView } from "dialogs/vault.slint";
 import { UpgradeDialog, UpgradeState, KeptBackDialog, KeptBackState, RebootDialog, RebootState, BatchFailureDialog, BatchFailureState } from "dialogs/confirm.slint";
-import { TrustDialog, TrustState, DeleteDialog, DeleteState, GroupDialog, GroupState, PlaintextDialog, PlaintextState, SchemaDialog, SchemaState, CloseDialog, CloseState, ErrorDialog, ErrorState } from "dialogs/simple.slint";
+import { TrustDialog, TrustState, DeleteDialog, DeleteState, GroupDialog, GroupState, PlaintextDialog, PlaintextState, SchemaDialog, SchemaState, CloseDialog, CloseState, StopDialog, StopState, ErrorDialog, ErrorState } from "dialogs/simple.slint";
 import { SettingsWindow, SettingsState, TreeRow, ColumnToggle } from "settings.slint";
 import { TerminalPanel, TerminalState, TerminalTab, TerminalLine, ShellRow, ShellRun } from "terminal.slint";
 import { ToolWindow, ToolStripe, DockHandle, DockTitle } from "tool_window.slint";
 import { WindowChrome, DragArea, MenuItem, CaptionButtons, WindowEdges } from "title_bar.slint";
 
-export { HintData, Theme, T, Tip, Clip, MenuLine, PopMenu, Shell, HistoryLine, SidebarState, SidebarRow, HostState, ResultState, InfoLine, BatchState, ManagerChoice, BatchColumnView, BatchCell, BatchRowView, EditorState, KeysState, KeyView, VaultState, SlotView, UpgradeState, KeptBackState, RebootState, BatchFailureState, TrustState, DeleteState, GroupState, PlaintextState, SchemaState, CloseState, ErrorState, SettingsWindow, SettingsState, TreeRow, ColumnToggle, TerminalState, TerminalTab, TerminalLine, ShellRow, ShellRun, ToolWindow, WindowChrome }
+export { HintData, Theme, T, Tip, Clip, MenuLine, PopMenu, Shell, HistoryLine, SidebarState, SidebarRow, HostState, ResultState, InfoLine, BatchState, ManagerChoice, BatchColumnView, BatchCell, BatchRowView, EditorState, KeysState, KeyView, VaultState, SlotView, UpgradeState, KeptBackState, RebootState, BatchFailureState, TrustState, DeleteState, GroupState, PlaintextState, SchemaState, CloseState, StopState, ErrorState, SettingsWindow, SettingsState, TreeRow, ColumnToggle, TerminalState, TerminalTab, TerminalLine, ShellRow, ShellRun, ToolWindow, WindowChrome }
 
 // This run's past results and errors, newest first: the history tool window.
 component HistoryPanel inherits Rectangle {
@@ -96,6 +96,14 @@ component StatusBar inherits Rectangle {
             overflow: elide;
             horizontal-stretch: 1;
         }
+        // Kept to the text's height, so the line does not grow while it shows.
+        if Shell.stoppable: TextButton {
+            text: T.get("stop.button");
+            color: Theme.error;
+            font-size: 12px;
+            height: 16px;
+            clicked => { Shell.stop(); }
+        }
     }
 }
 
@@ -135,9 +143,9 @@ component TopBar inherits Rectangle {
                         enabled: !Shell.busy;
                         clicked => { Shell.unlock(); }
                     }
+                    // Also while busy: it asks whether to stop the running operation first.
                     if Shell.encrypted && !Shell.locked: MenuItem {
                         text: T.get("vault.lock");
-                        enabled: !Shell.busy;
                         clicked => { Shell.lock(); }
                     }
                     if !Shell.encrypted: MenuItem {
@@ -418,6 +426,10 @@ export component AppWindow inherits Window {
         height: root.height;
     }
     if GroupState.shown: GroupDialog {
+        width: root.width;
+        height: root.height;
+    }
+    if StopState.shown: StopDialog {
         width: root.width;
         height: root.height;
     }

@@ -110,6 +110,11 @@ impl App {
 /// Saves the session log where the user picks, outside [`Ctx::update`] because the native
 /// dialog blocks.
 pub fn export_log(ctx: &Ctx) {
+    // Locking leaves the log in memory, but nobody may save it until the vault is unlocked.
+    let locked = |app: &App| app.encrypted && app.locked;
+    if ctx.app.try_borrow().is_ok_and(|app| locked(&app)) {
+        return ctx.update(|app| app.log(Action::LogExport, Outcome::Blocked));
+    }
     ctx.update(|app| app.log(Action::LogExport, Outcome::Started));
     let t = ctx.t();
     let file_name = format!("misf-log-{}.txt", Local::now().format("%Y%m%d-%H%M%S"));
@@ -122,6 +127,11 @@ pub fn export_log(ctx: &Ctx) {
         let Some(path) = path else {
             return app.log(Action::LogExport, Outcome::Cancelled);
         };
+        // Locked while the file dialog was open.
+        if locked(app) {
+            app.log(Action::LogExport, Outcome::Blocked);
+            return app.set_status(t.get("log.locked"));
+        }
         match app.session_log.export(&path) {
             Ok(()) => {
                 app.log(Action::LogExport, Outcome::Succeeded);

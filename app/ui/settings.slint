@@ -266,11 +266,16 @@ component LogPage inherits VerticalLayout {
     Notice {
         text: T.get("log.warning");
     }
+    // The log names hosts and holds their output: not to be saved while the vault is locked.
+    if SettingsState.encrypted && SettingsState.locked: Body {
+        text: T.get("log.locked");
+    }
     HorizontalLayout {
         alignment: start;
         padding-top: 6px;
         ColorButton {
             text: T.get("log.export");
+            enabled: !(SettingsState.encrypted && SettingsState.locked);
             clicked => { SettingsState.export-log(); }
         }
     }

@@ -248,6 +248,10 @@ pub(crate) async fn execute(
         let mut output = Vec::new();
         let mut exit = None;
         let mut sent = false;
+        // Only a command that runs sudo with the marker as its prompt is answered: for
+        // root's commands, the marker in output is just text (a package script printing
+        // it, say) and gets neither the password nor an abort.
+        let asks = command.contains(PROMPT);
         // sudo prompts seen so far, counted over new output only.
         let mut prompts = 0;
         let mut searched = 0;
@@ -262,7 +266,8 @@ pub(crate) async fn execute(
                     output.extend_from_slice(&data);
                     lines.push(&data);
                     prompts += count_prompts(&output, before, &mut searched);
-                    if prompts > 0 && !sent {
+                    if !asks {
+                    } else if prompts > 0 && !sent {
                         ensure!(
                             !secret.is_empty(),
                             "sudo 要求密碼；請在主機設定填寫 sudo 密碼"

@@ -1,6 +1,8 @@
 //! Batch check or upgrade: each host is saved and reported the moment it finishes, and
-//! a failed host pauses new starts until the caller decides to continue or stop.
+//! a failed host pauses new starts until the caller decides to continue or stop. A stop
+//! request ends the batch at once, cutting off the hosts still running.
 
+use crate::cancel::Cancel;
 use crate::console::{Console, Echo};
 use crate::model::{CheckResult, Host};
 use crate::package_manager::{self, Mode};
@@ -64,6 +66,7 @@ pub(crate) async fn run(
     progress: &dyn Fn(&str),
     observer: &dyn Observer,
     console: &Arc<dyn Console>,
+    cancel: &Cancel,
 ) -> Result<Value> {
     let Some(mode) = request["operation"].as_str().and_then(Mode::from_id) else {
         anyhow::bail!("不支援的批次操作");
@@ -80,6 +83,7 @@ pub(crate) async fn run(
         "批次作業只能包含同一種已偵測套件管理器的主機；請先測試連線偵測各主機"
     );
     let total = hosts.len();
+    let order: Vec<String> = hosts.iter().map(|host| host.id.clone()).collect();
     progress(&format!("批次作業進度 0/{total}"));
     let mut waiting: VecDeque<Host> = hosts.into();
     let mut tasks = tokio::task::JoinSet::new();
@@ -88,6 +92,7 @@ pub(crate) async fn run(
     let mut failures: VecDeque<(String, CheckResult)> = VecDeque::new();
     let mut asking: Option<Asking> = None;
     let mut aborted = false;
+    let mut cancelled = false;
     let mut save_error = None;
     loop {
         if asking.is_none()
@@ -111,6 +116,10 @@ pub(crate) async fn run(
             break;
         }
         tokio::select! {
+            () = cancel.requested() => {
+                cancelled = true;
+                break;
+            }
             decision = async { asking.as_mut().unwrap().await }, if asking.is_some() => {
                 asking = None;
                 if decision == Decision::Abort {
@@ -127,13 +136,10 @@ pub(crate) async fn run(
                     }
                 };
                 // Saved one by one, so closing the app mid-batch keeps every finished host.
-                if let Err(error) = crate::save_results(store, vec![(id.clone(), result.clone())]) {
+                if !keep(store, observer, &id, &result, &mut save_error) {
                     aborted = true;
                     failures.clear();
                     asking = None;
-                    save_error.get_or_insert(error);
-                } else {
-                    observer.finished(&id, &result);
                 }
                 if result.status != "success" && !aborted {
                     failures.push_back((id.clone(), result.clone()));
@@ -142,6 +148,31 @@ pub(crate) async fn run(
                 progress(&format!("批次作業進度 {}/{total}", results.len()));
             }
         }
+    }
+    // Stopped: cut off the hosts still running. One that finished meanwhile keeps its
+    // result; an upgrade cut off is saved as unknown, a check keeps its last result.
+    let mut stopped = Vec::new();
+    if cancelled {
+        tasks.abort_all();
+        while let Some(finished) = tasks.join_next_with_id().await {
+            match finished {
+                Ok((task, result)) => {
+                    let id = running.remove(&task).unwrap_or_default();
+                    keep(store, observer, &id, &result, &mut save_error);
+                    results.push((id, result));
+                }
+                Err(error) => {
+                    let id = running.remove(&error.id()).unwrap_or_default();
+                    if mode != Mode::Check {
+                        let result = stopped_upgrade(mode.id());
+                        keep(store, observer, &id, &result, &mut save_error);
+                        results.push((id.clone(), result));
+                    }
+                    stopped.push(id);
+                }
+            }
+        }
+        stopped.sort_by_key(|id| order.iter().position(|known| known == id));
     }
     if let Some(error) = save_error {
         return Err(error.context(
@@ -155,7 +186,41 @@ pub(crate) async fn run(
             .map(|(id, result)| json!({"id": id, "result": result}))
             .collect::<Vec<_>>(),
         "skipped": skipped,
+        // Cut off by a stop request while running.
+        "cancelled": stopped,
     }))
+}
+
+/// Saves a host's result and reports it; a failure to save is kept in `error` and
+/// returns false, and the host is not reported.
+fn keep(
+    store: &Store,
+    observer: &dyn Observer,
+    id: &str,
+    result: &CheckResult,
+    error: &mut Option<anyhow::Error>,
+) -> bool {
+    match crate::save_results(store, vec![(id.to_owned(), result.clone())]) {
+        Ok(()) => {
+            observer.finished(id, result);
+            true
+        }
+        Err(failure) => {
+            error.get_or_insert(failure);
+            false
+        }
+    }
+}
+
+/// An upgrade the user stopped while it ran: the remote may be half upgraded.
+pub fn stopped_upgrade(operation: &str) -> CheckResult {
+    CheckResult {
+        checked_at: Utc::now().to_rfc3339(),
+        operation: operation.into(),
+        status: "failed".into(),
+        error: "升級已由使用者中斷，結果未知；遠端可能已部分執行。請登入主機確認，必要時執行 sudo dpkg --configure -a，再重新檢查。".into(),
+        ..Default::default()
+    }
 }
 
 /// A host whose upgrade the worker lost track of: it stopped before reporting the outcome,

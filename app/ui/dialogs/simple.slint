@@ -54,6 +54,18 @@ export global CloseState {
     callback quit();
 }
 
+// Stopping the running operation, from the status line or from locking while it runs.
+export global StopState {
+    in property <bool> shown;
+    // Asked by the lock: stop and lock now, or lock once the operation ends.
+    in property <bool> lock;
+    // The operation upgrades packages.
+    in property <bool> upgrade;
+    callback stop();
+    callback wait();
+    callback back();
+}
+
 export global ErrorState {
     in property <bool> shown;
     in property <string> text;
@@ -248,6 +260,49 @@ export component CloseDialog inherits Modal {
         Button {
             text: T.get("close.quit");
             clicked => { CloseState.quit(); }
+        }
+    }
+}
+
+// The buttons stay enabled while busy: the question is asked exactly then.
+export component StopDialog inherits Modal {
+    panel-width: 540px;
+    dismissed => { StopState.back(); }
+    Heading {
+        text: StopState.lock ? T.get("stop.lock_title") : T.get("stop.title");
+    }
+    if StopState.lock: Body {
+        text: T.get("stop.lock_description");
+    }
+    Body {
+        text: T.get("stop.description");
+    }
+    if StopState.upgrade: Notice {
+        error: true;
+        text: T.get("stop.upgrade_warning");
+    }
+    if !StopState.upgrade: Body {
+        text: T.get("stop.check_notice");
+    }
+    HorizontalLayout {
+        spacing: 10px;
+        alignment: start;
+        if StopState.lock: ColorButton {
+            text: T.get("stop.lock_wait");
+            clicked => { StopState.wait(); }
+        }
+        if !StopState.lock: ColorButton {
+            text: T.get("stop.keep");
+            clicked => { StopState.back(); }
+        }
+        TextButton {
+            text: StopState.lock ? T.get("stop.lock_now") : T.get("stop.confirm");
+            color: Theme.error;
+            clicked => { StopState.stop(); }
+        }
+        if StopState.lock: Button {
+            text: T.get("common.cancel");
+            clicked => { StopState.back(); }
         }
     }
 }

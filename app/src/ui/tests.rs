@@ -47,6 +47,7 @@ fn test_app(allow_passkey: bool) -> (App, Receiver<Value>, Sender<Event>, tempfi
             decisions: tokio::sync::mpsc::unbounded_channel().0,
             terminal: Default::default(),
             shells: Default::default(),
+            cancel: Default::default(),
         },
     );
     assert_eq!(commands.recv().unwrap()["action"], "storage_status");
@@ -1632,4 +1633,169 @@ fn a_failed_shell_still_connected_is_closed_before_its_tab_goes() {
     state.invoke_close_shell(0);
     assert_eq!(state.get_tabs().row_count(), 0);
     assert!(input.try_recv().is_err());
+}
+
+#[test]
+fn stopping_a_check_needs_no_question_and_is_not_an_error() {
+    i_slint_backend_testing::init_no_event_loop();
+    let (mut app, commands, events, _directory) = test_app(false);
+    unlocked(&mut app);
+    app.hosts = vec![host("a", "apt", "SHA256:a")];
+    app.selected = "a".into();
+    app.busy = false;
+    let t = app.t();
+    let (ctx, main, _settings) = build(app, true).unwrap();
+    let shell = main.global::<super::Shell>();
+    ctx.update(|app| app.send(json!({"action":"check","id":"a"})));
+    assert_eq!(commands.recv().unwrap()["action"], "check");
+    assert!(shell.get_stoppable());
+    shell.invoke_stop();
+    assert!(ctx.app.borrow().worker.cancel.is_requested());
+    assert!(!main.global::<super::StopState>().get_shown());
+    // Asked once: the button goes until the answer arrives.
+    assert!(!shell.get_stoppable());
+    let message = "已中斷檢查；主機上的套件沒有變更，保留上次的檢查結果。";
+    events
+        .send(Event::Done {
+            action: "check".into(),
+            result: Err(message.into()),
+        })
+        .unwrap();
+    ctx.update(App::process_events);
+    let app = ctx.app.borrow();
+    assert!(app.error.is_none());
+    assert_eq!(app.status, message);
+    assert!(!app.busy && app.stoppable.is_none());
+    let tab = &app.terminal.tabs[0];
+    assert!(
+        tab.lines
+            .last()
+            .unwrap()
+            .text
+            .contains(t.get("stop.terminal"))
+    );
+}
+
+#[test]
+fn stopping_an_upgrade_asks_first_and_lock_can_wait_or_stop() {
+    use super::app::StopPrompt;
+    i_slint_backend_testing::init_no_event_loop();
+    let (mut app, commands, events, _directory) = test_app(false);
+    unlocked(&mut app);
+    app.hosts = vec![host("a", "apt", "SHA256:a")];
+    app.selected = "a".into();
+    app.busy = false;
+    let (ctx, main, _settings) = build(app, true).unwrap();
+    let shell = main.global::<super::Shell>();
+    let stop = main.global::<super::StopState>();
+    ctx.update(|app| app.send(json!({"action":"upgrade","id":"a"})));
+    assert_eq!(commands.recv().unwrap()["action"], "upgrade");
+
+    // The status line's button asks, with the dpkg warning; going back changes nothing.
+    shell.invoke_stop();
+    assert!(stop.get_shown() && stop.get_upgrade() && !stop.get_lock());
+    stop.invoke_back();
+    assert!(!stop.get_shown());
+    assert!(!ctx.app.borrow().worker.cancel.is_requested());
+
+    // Locking while it runs asks too; waiting locks once it ends.
+    shell.invoke_lock();
+    assert!(stop.get_shown() && stop.get_lock());
+    stop.invoke_wait();
+    assert!(!stop.get_shown());
+    assert!(!ctx.app.borrow().worker.cancel.is_requested());
+    assert!(commands.try_recv().is_err());
+    events
+        .send(Event::Done {
+            action: "upgrade".into(),
+            result: Ok(json!(CheckResult {
+                status: "success".into(),
+                operation: "upgrade".into(),
+                ..Default::default()
+            })),
+        })
+        .unwrap();
+    ctx.update(App::process_events);
+    assert_eq!(commands.recv().unwrap()["action"], "vault_lock");
+
+    // Stop and lock: the stop goes now, the lock after the stopped upgrade answers.
+    ctx.update(|app| {
+        app.busy = false;
+        app.locked = false;
+        app.send(json!({"action":"upgrade","id":"a"}));
+    });
+    assert_eq!(commands.recv().unwrap()["action"], "upgrade");
+    shell.invoke_lock();
+    assert_eq!(ctx.app.borrow().stop_prompt, Some(StopPrompt::Lock));
+    stop.invoke_stop();
+    assert!(ctx.app.borrow().worker.cancel.is_requested());
+    assert!(commands.try_recv().is_err());
+    events
+        .send(Event::Done {
+            action: "upgrade".into(),
+            result: Ok(json!(misf_core::batch::stopped_upgrade("upgrade"))),
+        })
+        .unwrap();
+    ctx.update(App::process_events);
+    assert_eq!(commands.recv().unwrap()["action"], "vault_lock");
+    let app = ctx.app.borrow();
+    assert!(app.error.is_none());
+    let saved = app.hosts[0].last_check.as_ref().unwrap();
+    assert!(saved.error.contains("dpkg --configure -a"));
+}
+
+#[test]
+fn a_stopped_batch_counts_the_hosts_it_cut_off() {
+    i_slint_backend_testing::init_no_event_loop();
+    let (mut app, _commands, _events, _directory) = test_app(false);
+    unlocked(&mut app);
+    app.hosts = vec![host("a", "apt", "SHA256:a"), host("b", "apt", "SHA256:b")];
+    let t = app.t();
+    let stopped = misf_core::batch::stopped_upgrade("upgrade");
+    let done = CheckResult {
+        status: "success".into(),
+        operation: "upgrade".into(),
+        ..Default::default()
+    };
+    app.received(
+        "batch",
+        json!({
+            "results": [{"id":"a","result":done}, {"id":"b","result":stopped}],
+            "skipped": ["c"],
+            "cancelled": ["b"],
+        }),
+    );
+    assert_eq!(
+        app.status,
+        t.format(
+            "status.batch_stopped",
+            &[
+                ("succeeded", "1".into()),
+                ("failed", "0".into()),
+                ("skipped", "1".into()),
+                ("cancelled", "1".into()),
+            ],
+        )
+    );
+}
+
+#[test]
+fn the_log_cannot_be_exported_while_the_vault_is_locked() {
+    i_slint_backend_testing::init_no_event_loop();
+    let (mut app, _commands, _events, directory) = test_app(false);
+    app.encrypted = true;
+    app.locked = true;
+    let (ctx, _main, settings) = build(app, true).unwrap();
+    assert!(settings.global::<super::SettingsState>().get_locked());
+    // Returns before any file dialog opens.
+    super::logging::export_log(&ctx);
+    let log: String = std::fs::read_dir(directory.path().join("logs"))
+        .unwrap()
+        .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
+        .collect();
+    assert!(
+        log.lines()
+            .any(|line| line.contains("\"action\":\"log_export\"") && line.contains("blocked")),
+        "{log}"
+    );
 }

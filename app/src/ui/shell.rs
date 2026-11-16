@@ -1,10 +1,9 @@
 //! The title bar, the status line and the host/batch tabs.
 
 use super::{
-    App, AppWindow, CloseState, Ctx, HistoryLine, Shell, WindowChrome,
-    app::{VaultMode, View},
+    App, AppWindow, CloseState, Ctx, HistoryLine, Shell, StopState, WindowChrome,
+    app::{StopPrompt, VaultMode, View},
 };
-use serde_json::json;
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 pub fn push(app: &mut App, w: &AppWindow) {
@@ -20,6 +19,15 @@ pub fn push(app: &mut App, w: &AppWindow) {
     let close = w.global::<CloseState>();
     close.set_shown(app.close_prompt);
     close.set_shells_only(!app.busy);
+    shell.set_stoppable(app.stoppable.is_some() && !app.stopping);
+    let stop = w.global::<StopState>();
+    stop.set_shown(app.stop_prompt.is_some());
+    stop.set_lock(app.stop_prompt == Some(StopPrompt::Lock));
+    stop.set_upgrade(
+        app.stoppable
+            .as_ref()
+            .is_some_and(|running| running.upgrade),
+    );
     // Only rebuilt when it changed, so an open, scrolled list stays where it is.
     let lines: Vec<HistoryLine> = app
         .history
@@ -65,7 +73,24 @@ pub fn wire(ctx: &Ctx, w: &AppWindow) {
     let c = ctx.clone();
     shell.on_settings(move || c.update(App::toggle_settings));
     let c = ctx.clone();
-    shell.on_lock(move || c.update(|app| app.send(json!({"action":"vault_lock"}))));
+    shell.on_lock(move || c.update(App::lock));
+    let c = ctx.clone();
+    shell.on_stop(move || c.update(App::ask_stop));
+    let stop = w.global::<StopState>();
+    let c = ctx.clone();
+    stop.on_stop(move || {
+        c.update(|app| {
+            // Asked by the lock: lock as soon as the stopped request answers.
+            if app.stop_prompt == Some(StopPrompt::Lock) {
+                app.lock_after = true;
+            }
+            app.stop();
+        })
+    });
+    let c = ctx.clone();
+    stop.on_wait(move || c.update(App::lock_after));
+    let c = ctx.clone();
+    stop.on_back(move || c.update(|app| app.stop_prompt = None));
     let c = ctx.clone();
     shell.on_unlock(move || c.update(|app| app.open_vault_dialog(VaultMode::Unlock)));
     let c = ctx.clone();

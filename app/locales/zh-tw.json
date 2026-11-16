@@ -521,5 +521,22 @@
   "conn.auth_password": "密碼",
   "conn.auth_key": "公鑰（{algorithm}）",
   "conn.system": "作業系統",
-  "conn.managers": "套件管理器"
+  "conn.managers": "套件管理器",
+  "stop.button": "中斷",
+  "stop.title": "要中斷正在執行的升級嗎？",
+  "stop.lock_title": "操作進行中，要現在鎖定嗎？",
+  "stop.lock_description": "鎖定會等目前的操作結束；也可以先中斷操作，再立即鎖定。",
+  "stop.description": "中斷會立即斷開這個操作的 SSH 連線，遠端正在執行的命令也會跟著被終止。",
+  "stop.upgrade_warning": "正在升級套件：遠端的 apt／dpkg 可能停在半途，之後需要登入主機執行 sudo dpkg --configure -a 修復。被中斷的主機會標示為「結果未知」並存檔；批次中已完成的主機結果已經存好。",
+  "stop.check_notice": "檢查與測試連線不會變更主機上的套件；中斷後保留上次的結果。",
+  "stop.keep": "繼續執行",
+  "stop.confirm": "中斷升級",
+  "stop.lock_wait": "操作結束後鎖定",
+  "stop.lock_now": "中斷並鎖定",
+  "stop.stopping": "正在中斷…",
+  "stop.lock_after": "操作結束後會鎖定主機庫",
+  "stop.terminal": "已中斷",
+  "stop.upgrade_stopped": "升級已中斷，結果未知；請登入主機確認，必要時執行 sudo dpkg --configure -a",
+  "status.batch_stopped": "批次作業已中斷：成功 {succeeded} 台，失敗 {failed} 台，執行中被中斷 {cancelled} 台，未執行 {skipped} 台",
+  "log.locked": "主機庫鎖定時無法匯出 LOG，請先解鎖。"
 }

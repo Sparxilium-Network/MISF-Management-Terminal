@@ -521,5 +521,22 @@
   "conn.auth_password": "Password",
   "conn.auth_key": "Public key ({algorithm})",
   "conn.system": "Operating system",
-  "conn.managers": "Package managers"
+  "conn.managers": "Package managers",
+  "stop.button": "Stop",
+  "stop.title": "Stop the running upgrade?",
+  "stop.lock_title": "An operation is running. Lock now?",
+  "stop.lock_description": "Locking waits for the operation to end; you can also stop it and lock at once.",
+  "stop.description": "Stopping drops this operation's SSH connections at once; commands still running on the remote host are ended with them.",
+  "stop.upgrade_warning": "Packages are being upgraded: the remote apt/dpkg may be left half-way and need sudo dpkg --configure -a on the host. Stopped hosts are saved as \"result unknown\"; batch hosts that already finished are saved.",
+  "stop.check_notice": "Checks and connection tests change no packages on the host; the last results are kept.",
+  "stop.keep": "Keep running",
+  "stop.confirm": "Stop upgrade",
+  "stop.lock_wait": "Lock when it ends",
+  "stop.lock_now": "Stop and lock",
+  "stop.stopping": "Stopping…",
+  "stop.lock_after": "The vault will lock when the operation ends",
+  "stop.terminal": "Stopped",
+  "stop.upgrade_stopped": "Upgrade stopped; result unknown. Check the host and run sudo dpkg --configure -a if needed",
+  "status.batch_stopped": "Batch stopped: {succeeded} succeeded, {failed} failed, {cancelled} stopped while running, {skipped} not run",
+  "log.locked": "The LOG cannot be exported while the vault is locked. Unlock it first."
 }

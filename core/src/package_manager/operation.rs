@@ -245,12 +245,18 @@ impl Run<'_> {
     }
 
     /// A command that may hit a sudo prompt: uses the host's PTY setting and sudo password.
+    /// root's commands have no sudo, so no password goes with them: output that merely
+    /// prints the prompt marker (a package script, say) gets nothing.
     async fn privileged(&self, command: &str, seconds: u64) -> Result<(u32, String)> {
         ssh::execute(
             self.session,
             command,
             self.host.use_pty,
-            self.host.sudo_secret(),
+            if self.host.username == "root" {
+                ""
+            } else {
+                self.host.sudo_secret()
+            },
             seconds,
             &self.echo,
         )

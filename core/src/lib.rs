@@ -3,6 +3,7 @@
 
 pub mod audit;
 pub mod batch;
+pub mod cancel;
 pub mod console;
 mod db_upgrade;
 pub mod model;
@@ -90,17 +91,28 @@ fn arrange(db: &mut store::Database, request: &Value) -> Result<()> {
 
 pub async fn dispatch(request: Value, store: &Store, progress: &dyn Fn(&str)) -> Result<Value> {
     let silent: std::sync::Arc<dyn console::Console> = std::sync::Arc::new(console::Silent);
-    dispatch_with(request, store, progress, &batch::Unattended, &silent).await
+    let cancel = cancel::Cancel::default();
+    dispatch_with(
+        request,
+        store,
+        progress,
+        &batch::Unattended,
+        &silent,
+        &cancel,
+    )
+    .await
 }
 
-/// [`dispatch`] with a batch observer that sees each host as it finishes, and a console
-/// that shows remote commands and their output as they run.
+/// [`dispatch`] with a batch observer that sees each host as it finishes, a console that
+/// shows remote commands and their output as they run, and a stop request a batch
+/// watches (a single host's operation is stopped by the [`session::Session`]).
 pub async fn dispatch_with(
     request: Value,
     store: &Store,
     progress: &dyn Fn(&str),
     observer: &dyn batch::Observer,
     console: &std::sync::Arc<dyn console::Console>,
+    cancel: &cancel::Cancel,
 ) -> Result<Value> {
     let action = request["action"].as_str().context("缺少 action")?;
     let id = request["id"].as_str().unwrap_or_default();
@@ -316,7 +328,7 @@ pub async fn dispatch_with(
             save_results(store, vec![(id.to_owned(), result.clone())])?;
             Ok(json!(result))
         }
-        "batch" => batch::run(&request, store, progress, observer, console).await,
+        "batch" => batch::run(&request, store, progress, observer, console, cancel).await,
         "reboot" => {
             let host = store.host(id)?;
             let echo = console::Echo::new(console.clone(), &host);

@@ -41,9 +41,33 @@ struct State {
     shell_ptys: Mutex<Vec<(String, u32, u32)>>,
     /// Window size changes, as (columns, rows).
     resizes: Mutex<Vec<(u32, u32)>>,
+    /// Upgrades never finish once `free_upgrades` have: a host stuck mid-upgrade.
+    hang_upgrades: AtomicBool,
+    free_upgrades: AtomicUsize,
+    /// Index updates never finish: a check stuck on a slow mirror.
+    hang_updates: AtomicBool,
+    /// Upgrade output prints the sudo prompt marker, as a package script could.
+    print_marker: AtomicBool,
+    /// Input a command channel got that no sudo prompt asked for.
+    stray_input: Mutex<Vec<u8>>,
 }
 
 impl State {
+    /// Whether this command is left running forever.
+    fn hangs(&self, command: &str) -> bool {
+        if self.hang_updates.load(Ordering::SeqCst)
+            && [apt::UPDATE, apt::SUDO_UPDATE].contains(&command)
+        {
+            return true;
+        }
+        self.hang_upgrades.load(Ordering::SeqCst)
+            && [apt::UPGRADE, apt::SUDO_UPGRADE].contains(&command)
+            && self
+                .free_upgrades
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                .is_err()
+    }
+
     fn reply(&self, command: &str) -> (String, u32) {
         let upgraded = self.upgraded.load(Ordering::SeqCst);
         if command == package_manager::DETECT {
@@ -76,9 +100,16 @@ impl State {
             )
         } else if [apt::UPGRADE, apt::SUDO_UPGRADE].contains(&command) {
             self.upgraded.store(true, Ordering::SeqCst);
+            let marker = if self.print_marker.load(Ordering::SeqCst) {
+                "postinst says __MISF_SUDO_PROMPT__\r\n"
+            } else {
+                ""
+            };
             // libc6 needs a new package, so a plain upgrade keeps it back.
             (
-                "Setting up openssl (3.0.17) ...\r\nThe following packages have been kept back:\r\n  libc6\r\n1 upgraded, 0 newly installed, 0 to remove and 1 not upgraded.\r\n".into(),
+                format!(
+                    "{marker}Setting up openssl (3.0.17) ...\r\nThe following packages have been kept back:\r\n  libc6\r\n1 upgraded, 0 newly installed, 0 to remove and 1 not upgraded.\r\n"
+                ),
                 0,
             )
         } else if command == apt::PREVIEW {
@@ -268,6 +299,8 @@ impl server::Handler for Mock {
             // Deliberately split the sudo marker across SSH packets.
             session.data(channel, b"__MISF_SUDO_".to_vec())?;
             session.data(channel, b"PROMPT__".to_vec())
+        } else if self.state.hangs(&command) {
+            Ok(())
         } else {
             let (text, code) = self.state.reply(&command);
             finish(session, channel, &text, code)
@@ -298,11 +331,18 @@ impl server::Handler for Mock {
             assert_eq!(data, b"sudo-secret\n");
             if self.state.wrong_sudo {
                 session.data(channel, b"Sorry, try again.\n__MISF_SUDO_PROMPT__".to_vec())
+            } else if self.state.hangs(&command) {
+                Ok(())
             } else {
                 let (text, code) = self.state.reply(&command);
                 finish(session, channel, &text, code)
             }
         } else {
+            self.state
+                .stray_input
+                .lock()
+                .unwrap()
+                .extend_from_slice(data);
             Ok(())
         }
     }
@@ -872,6 +912,7 @@ async fn batch_reports_each_host_and_an_abort_skips_hosts_not_started() {
         &|_| {},
         &recorder,
         &console,
+        &misf_core::cancel::Cancel::default(),
     )
     .await
     .unwrap();
@@ -1454,4 +1495,212 @@ async fn a_shell_stops_reading_while_the_screen_is_behind() {
     }
     assert_eq!(received(), 3 * 1024 * 1024);
     shells.close_all();
+}
+
+#[tokio::test]
+async fn root_output_printing_the_sudo_marker_gets_no_password_and_no_abort() {
+    let mut fixture = fixture(false, false).await;
+    fixture.host.username = "root".into();
+    fixture.state.print_marker.store(true, Ordering::SeqCst);
+    let result = package_manager::upgrade(&fixture.host, &|_| {}).await;
+    assert_eq!(result.status, "success", "{}", result.error);
+    assert!(fixture.state.stray_input.lock().unwrap().is_empty());
+}
+
+/// An unlocked session over a vault holding `hosts`, whose audit log is in `dir/logs`.
+async fn session_with(
+    dir: &std::path::Path,
+    hosts: Vec<Host>,
+    cancel: &misf_core::cancel::Cancel,
+) -> misf_core::session::Session {
+    use luksbox_core::{Argon2idParams, CipherSuite};
+    use luksbox_format::Container;
+    use luksbox_vfs::Vfs;
+    use misf_core::store::Database;
+    let password = "integration-test-passphrase";
+    {
+        let _size =
+            luksbox_format::metadata::set_create_metadata_region_size_override(Some(64 * 1024));
+        let params = Argon2idParams {
+            m_cost_kib: 8,
+            t_cost: 1,
+            p_cost: 1,
+        };
+        let mut vfs = Vfs::open(
+            Container::create_with_passphrase(
+                &dir.join("hosts.lbx"),
+                None,
+                CipherSuite::Aes256GcmSiv,
+                params,
+                password.as_bytes(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let file = vfs.create(vfs.root_id(), "hosts.json").unwrap();
+        let bytes = serde_json::to_vec(&Database {
+            version: 1,
+            hosts,
+            ..Default::default()
+        })
+        .unwrap();
+        vfs.write(file, 0, &bytes).unwrap();
+        vfs.finish().unwrap();
+    }
+    let paths = misf_core::runtime::RuntimePaths {
+        store: dir.join("hosts.db"),
+        debug: false,
+        debug_allow_passkey: false,
+    };
+    let mut session =
+        misf_core::session::Session::new(&paths, misf_core::audit::AuditLog::new(dir).unwrap());
+    session.set_cancel(cancel.clone());
+    session
+        .handle(
+            json!({"action":"vault_unlock","passphrase":password}),
+            &|_| {},
+        )
+        .await
+        .unwrap();
+    session
+}
+
+fn audit_log(dir: &std::path::Path) -> String {
+    std::fs::read_dir(dir.join("logs"))
+        .unwrap()
+        .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
+        .collect()
+}
+
+/// Requests a stop once `ready` holds.
+fn stop_when(
+    cancel: &misf_core::cancel::Cancel,
+    ready: impl Fn() -> bool + Send + 'static,
+) -> tokio::task::JoinHandle<()> {
+    let cancel = cancel.clone();
+    tokio::spawn(async move {
+        until(ready).await;
+        cancel.request();
+    })
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stopped_upgrade_is_saved_as_unknown_and_audited_as_cancelled() {
+    let fixture = fixture(false, false).await;
+    fixture.state.hang_upgrades.store(true, Ordering::SeqCst);
+    let dir = tempfile::tempdir().unwrap();
+    let cancel = misf_core::cancel::Cancel::default();
+    let mut session = session_with(dir.path(), vec![fixture.host.clone()], &cancel).await;
+    let state = fixture.state.clone();
+    let stopper = stop_when(&cancel, move || {
+        (state.commands.lock().unwrap().iter()).any(|c| c == apt::SUDO_UPGRADE)
+    });
+    let result = tokio::time::timeout(
+        Duration::from_secs(20),
+        session.handle(json!({"action":"upgrade","id":"fixture"}), &|_| {}),
+    )
+    .await
+    .expect("the stop ends the upgrade")
+    .unwrap();
+    stopper.await.unwrap();
+    assert_eq!(result["status"], "failed");
+    assert!(
+        result["error"]
+            .as_str()
+            .unwrap()
+            .contains("dpkg --configure -a")
+    );
+    // Saved, so the host shows the unknown result after a restart too.
+    let listed = session
+        .handle(json!({"action":"list"}), &|_| {})
+        .await
+        .unwrap();
+    assert_eq!(listed["hosts"][0]["last_check"]["error"], result["error"]);
+    let log = audit_log(dir.path());
+    assert!(
+        log.lines()
+            .any(|line| line.contains("\"action\":\"upgrade\"") && line.contains("cancelled")),
+        "{log}"
+    );
+
+    // A stopped check changes nothing and keeps the last result.
+    cancel.reset();
+    let state = fixture.state.clone();
+    let before = state.commands.lock().unwrap().len();
+    fixture.state.hang_updates.store(true, Ordering::SeqCst);
+    let stopper = stop_when(&cancel, move || {
+        state.commands.lock().unwrap()[before..]
+            .iter()
+            .any(|c| c == apt::SUDO_UPDATE)
+    });
+    let error = session
+        .handle(json!({"action":"check","id":"fixture"}), &|_| {})
+        .await
+        .unwrap_err();
+    stopper.await.unwrap();
+    assert!(format!("{error:#}").contains("已中斷檢查"), "{error:#}");
+    let listed = session
+        .handle(json!({"action":"list"}), &|_| {})
+        .await
+        .unwrap();
+    assert_eq!(listed["hosts"][0]["last_check"]["error"], result["error"]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stopped_batch_keeps_finished_hosts_and_marks_running_upgrades_unknown() {
+    let fixture = fixture(false, false).await;
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::new(dir.path().join("hosts.db"));
+    let mut ids = vec![];
+    for index in 0..3 {
+        ids.push(register(&store, &fixture, &format!("host-{index}")).await);
+    }
+    // One upgrade finishes; the other two stay stuck until stopped.
+    fixture.state.hang_upgrades.store(true, Ordering::SeqCst);
+    fixture.state.free_upgrades.store(1, Ordering::SeqCst);
+    let recorder = Arc::new(Recorder {
+        decision: Decision::Continue,
+        finished: Mutex::new(vec![]),
+        failed: Mutex::new(vec![]),
+    });
+    let cancel = misf_core::cancel::Cancel::default();
+    let (state, seen) = (fixture.state.clone(), recorder.clone());
+    let stopper = stop_when(&cancel, move || {
+        let started = (state.commands.lock().unwrap().iter())
+            .filter(|c| *c == apt::SUDO_UPGRADE)
+            .count();
+        started == 3 && seen.finished.lock().unwrap().len() == 1
+    });
+    let console: Arc<dyn Console> = Arc::new(Screen::default());
+    let response = tokio::time::timeout(
+        Duration::from_secs(20),
+        dispatch_with(
+            json!({"action":"batch","operation":"upgrade","ids":ids}),
+            &store,
+            &|_| {},
+            recorder.as_ref(),
+            &console,
+            &cancel,
+        ),
+    )
+    .await
+    .expect("the stop ends the batch")
+    .unwrap();
+    stopper.await.unwrap();
+    let cancelled: Vec<String> = serde_json::from_value(response["cancelled"].clone()).unwrap();
+    assert_eq!(cancelled.len(), 2);
+    assert!(response["skipped"].as_array().unwrap().is_empty());
+    assert_eq!(response["results"].as_array().unwrap().len(), 3);
+    // Every host was reported once, and the reports match what was saved.
+    let finished = recorder.finished.lock().unwrap();
+    assert_eq!(finished.len(), 3);
+    for id in &ids {
+        let saved = store.host(id).unwrap().last_check.unwrap();
+        if cancelled.contains(id) {
+            assert_eq!(saved.status, "failed");
+            assert!(saved.error.contains("dpkg --configure -a"));
+        } else {
+            assert_eq!(saved.status, "success", "{}", saved.error);
+        }
+    }
 }

@@ -151,6 +151,21 @@ pub struct RebootConfirm {
     pub final_step: bool,
 }
 
+/// A running request the user may stop.
+pub struct Stoppable {
+    /// It upgrades: stopping may leave the remote apt/dpkg half-way, so ask first.
+    pub upgrade: bool,
+}
+
+/// What the stop dialog asks.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum StopPrompt {
+    /// Stop the running upgrade?
+    Stop,
+    /// Lock now by stopping the running request, or once it ends?
+    Lock,
+}
+
 /// A failed batch host the worker is waiting on: stop the batch or start the rest.
 pub struct BatchFailure {
     pub name: String,
@@ -316,6 +331,14 @@ pub struct App {
     /// The window's close button was pressed while an operation was running or a shell
     /// was open.
     pub close_prompt: bool,
+    /// The running request, when the user may stop it.
+    pub stoppable: Option<Stoppable>,
+    /// A stop was asked for and the worker has not answered yet.
+    pub stopping: bool,
+    /// The stop question being asked, if any.
+    pub stop_prompt: Option<StopPrompt>,
+    /// Lock the vault as soon as the running request ends.
+    pub lock_after: bool,
     /// [`Self::process_events`] stopped with events still waiting, to let the window
     /// draw and take input; the caller runs it again soon.
     pub events_pending: bool,
@@ -391,6 +414,10 @@ impl App {
             plaintext_path: String::new(),
             plaintext_delete_prompt: false,
             close_prompt: false,
+            stoppable: None,
+            stopping: false,
+            stop_prompt: None,
+            lock_after: false,
             events_pending: false,
             terminal: Default::default(),
             schema_upgrade_prompt: None,
@@ -462,6 +489,18 @@ impl App {
         let t = self.t();
         self.busy = true;
         self.status = t.get("status.working").into();
+        let action = request["action"].as_str().unwrap_or_default();
+        self.stoppable = misf_core::cancel::CANCELLABLE
+            .contains(&action)
+            .then(|| Stoppable {
+                upgrade: matches!(action, "upgrade" | "dist_upgrade")
+                    || (action == "batch"
+                        && matches!(
+                            request["operation"].as_str(),
+                            Some("upgrade" | "dist_upgrade")
+                        )),
+            });
+        self.stopping = false;
         let hosts = super::terminal::hosts(&request);
         if !hosts.is_empty() {
             let hosts = (hosts.into_iter())
@@ -480,6 +519,49 @@ impl App {
         }
     }
 
+    /// The status line's stop button: an upgrade asks first, since stopping it may leave
+    /// the remote apt/dpkg half-way.
+    pub fn ask_stop(&mut self) {
+        match &self.stoppable {
+            Some(running) if running.upgrade => self.stop_prompt = Some(StopPrompt::Stop),
+            Some(_) => self.stop(),
+            None => {}
+        }
+    }
+
+    /// Asks the worker to stop the running request. It drops the request's SSH
+    /// connections; the answer arrives as the request's usual `Done`.
+    pub fn stop(&mut self) {
+        self.stop_prompt = None;
+        if self.stoppable.is_none() || self.stopping {
+            return;
+        }
+        self.stopping = true;
+        self.worker.cancel.request();
+        self.session_log.add("STOP", "stop requested", "");
+        self.status = self.t().get("stop.stopping").into();
+    }
+
+    /// The title bar's lock. Idle, it locks at once. While a request the user may stop
+    /// runs, ask whether to stop it first; any other request is short, so the lock
+    /// waits for it.
+    pub fn lock(&mut self) {
+        if !self.busy {
+            self.send(json!({"action":"vault_lock"}));
+        } else if self.stoppable.is_some() && !self.stopping {
+            self.stop_prompt = Some(StopPrompt::Lock);
+        } else {
+            self.lock_after();
+        }
+    }
+
+    /// Locks once the running request ends.
+    pub fn lock_after(&mut self) {
+        self.stop_prompt = None;
+        self.lock_after = true;
+        self.status = self.t().get("stop.lock_after").into();
+    }
+
     /// Opens `tool`, or closes it when it is already open.
     pub fn toggle_tool(&mut self, tool: Tool) {
         self.tool = if self.tool == Some(tool) {
@@ -496,6 +578,10 @@ impl App {
         let t = self.t();
         self.busy = false;
         self.batch_failure = None;
+        self.stoppable = None;
+        self.stopping = false;
+        self.stop_prompt = None;
+        self.lock_after = false;
         self.status = t.get("status.failed").into();
         self.terminal
             .end(false, &format!("[{}]", t.get("terminal.interrupted")));
@@ -673,8 +759,13 @@ impl App {
                 Event::Done { action, result } => {
                     self.busy = false;
                     self.batch_failure = None;
+                    let stopped = std::mem::take(&mut self.stopping);
+                    self.stoppable = None;
+                    self.stop_prompt = None;
                     if action == self.terminal.action {
                         let (succeeded, note) = match &result {
+                            // Hosts still running when stopped; finished ones keep theirs.
+                            _ if stopped => (false, format!("[{}]", t.get("stop.terminal"))),
                             // A check or upgrade answers with its result, a reboot with
                             // the host's reply.
                             Ok(data) => terminal_note(
@@ -691,7 +782,14 @@ impl App {
                         self.shell_opened(&result);
                     }
                     match result {
-                        Ok(data) => self.received(&action, data),
+                        Ok(data) => {
+                            self.received(&action, data);
+                            if stopped && matches!(action.as_str(), "upgrade" | "dist_upgrade") {
+                                self.set_host_status(t.get("stop.upgrade_stopped"));
+                            }
+                        }
+                        // The user stopped it: say so on the status line, not as an error.
+                        Err(error) if stopped => self.set_host_status(error),
                         Err(error) => {
                             self.status = t.get("status.failed").into();
                             self.error = Some(error);
@@ -704,6 +802,13 @@ impl App {
                                 self.vault_dialog = None;
                                 self.send(json!({"action":"storage_status"}));
                             }
+                        }
+                    }
+                    // Waits for any request the answer itself sent, such as a reload.
+                    if self.lock_after && !self.busy {
+                        self.lock_after = false;
+                        if self.encrypted && !self.locked {
+                            self.send(json!({"action":"vault_lock"}));
                         }
                     }
                 }
@@ -973,14 +1078,26 @@ impl App {
                 }
                 self.prune_batch();
                 let skipped = data["skipped"].as_array().map_or(0, Vec::len);
+                let cancelled = data["cancelled"].as_array().map_or(0, Vec::len);
+                // A stopped upgrade is also among the results, saved as unknown.
+                let stopped_upgrades = (data["results"].as_array().into_iter().flatten())
+                    .filter(|entry| {
+                        (data["cancelled"].as_array().into_iter().flatten())
+                            .any(|id| *id == entry["id"])
+                    })
+                    .count();
+                failed -= stopped_upgrades;
                 let mut counts = vec![
                     ("succeeded", succeeded.to_string()),
                     ("failed", failed.to_string()),
                 ];
-                self.set_status(if skipped == 0 {
+                counts.push(("skipped", skipped.to_string()));
+                self.set_status(if cancelled > 0 {
+                    counts.push(("cancelled", cancelled.to_string()));
+                    t.format("status.batch_stopped", &counts)
+                } else if skipped == 0 {
                     t.format("status.batch_done", &counts)
                 } else {
-                    counts.push(("skipped", skipped.to_string()));
                     t.format("status.batch_aborted", &counts)
                 });
                 self.report_kept_back(finished);

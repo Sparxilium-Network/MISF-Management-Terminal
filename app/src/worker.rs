@@ -1,6 +1,7 @@
 use misf_core::{
     audit::AuditLog,
     batch::{self, Decision},
+    cancel::Cancel,
     console::Console,
     model::CheckResult,
     runtime::RuntimePaths,
@@ -129,6 +130,9 @@ pub struct Worker {
     pub terminal: Arc<AtomicBool>,
     /// Open interactive shells: typing goes straight to them, not through `requests`.
     pub shells: Shells,
+    /// Stops the running request when it is one of [`misf_core::cancel::CANCELLABLE`];
+    /// reset before each request.
+    pub cancel: Cancel,
 }
 
 /// Forwards live remote output to the UI, waking it at most once per read.
@@ -233,6 +237,8 @@ impl Worker {
         let woken = terminal.clone();
         let shells = Shells::default();
         let open = shells.clone();
+        let cancel = Cancel::default();
+        let stop = cancel.clone();
         std::thread::spawn(move || {
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
@@ -252,7 +258,10 @@ impl Worker {
             });
             session.set_console(screen.clone());
             session.set_shells(open, screen);
+            session.set_cancel(stop.clone());
             while let Ok(request) = jobs.recv() {
+                // A stop meant for the request before this one.
+                stop.reset();
                 let action = request["action"].as_str().unwrap_or_default().to_string();
                 let running = Running::of(&request);
                 reported(&done).clear();
@@ -292,6 +301,7 @@ impl Worker {
             decisions,
             terminal,
             shells,
+            cancel,
         }
     }
 }

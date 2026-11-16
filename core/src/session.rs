@@ -10,6 +10,8 @@ use serde_json::Value;
 
 pub struct Session {
     storage: StorageSession,
+    /// Stops a running remote operation at the user's request.
+    cancel: crate::cancel::Cancel,
     pub audit: AuditLog,
     debug: bool,
     allow_passkey: bool,
@@ -19,6 +21,7 @@ impl Session {
     pub fn new(paths: &RuntimePaths, audit: AuditLog) -> Self {
         Self {
             storage: StorageSession::new(paths.store.clone()),
+            cancel: crate::cancel::Cancel::default(),
             audit,
             debug: paths.debug,
             allow_passkey: paths.passkey_allowed(),
@@ -37,6 +40,12 @@ impl Session {
     /// Where remote commands and their output go as they run; the default shows nothing.
     pub fn set_console(&mut self, console: std::sync::Arc<dyn crate::console::Console>) {
         self.storage.set_console(console);
+    }
+    /// The stop request the UI may raise while a request in [`crate::cancel::CANCELLABLE`]
+    /// runs; the caller resets it before each request.
+    pub fn set_cancel(&mut self, cancel: crate::cancel::Cancel) {
+        self.storage.set_cancel(cancel.clone());
+        self.cancel = cancel;
     }
     /// Where interactive shells are kept and where their output goes; without this, a
     /// request to open one fails.
@@ -121,7 +130,28 @@ impl Session {
             }
         }
         self.record_each(action, Outcome::Started, &targets, slot)?;
-        let result = self.storage.handle(request, progress).await;
+        // A batch watches the stop request itself, to keep the hosts it finished.
+        let single = name != "batch" && crate::cancel::CANCELLABLE.contains(&name.as_str());
+        let cancel = self.cancel.clone();
+        let mut stopped = false;
+        let result = if single {
+            tokio::select! {
+                // A request that finished as the stop came keeps its own answer.
+                biased;
+                result = self.storage.handle(request, progress) => result,
+                () = cancel.requested() => {
+                    stopped = true;
+                    Err(anyhow::anyhow!("stopped"))
+                }
+            }
+        } else {
+            self.storage.handle(request, progress).await
+        };
+        let result = if stopped {
+            self.stopped(&name, targets.first())
+        } else {
+            result
+        };
         // Failure to persist the outcome is visible; do not silently claim complete auditing.
         let logged = if batch {
             targets.iter().try_for_each(|host| {
@@ -133,8 +163,11 @@ impl Session {
                     })
                 };
                 let id = host.id.as_str();
-                // Hosts an abort left unstarted were never contacted.
-                let outcome = if listed("skipped", &|entry| entry == id) {
+                // Hosts an abort left unstarted were never contacted; a stop cut off the
+                // ones listed as cancelled.
+                let outcome = if listed("skipped", &|entry| entry == id)
+                    || listed("cancelled", &|entry| entry == id)
+                {
                     Outcome::Cancelled
                 } else {
                     outcome(listed("results", &|entry| {
@@ -150,7 +183,11 @@ impl Session {
             });
             self.audit.record(
                 action,
-                outcome(succeeded),
+                if stopped {
+                    Outcome::Cancelled
+                } else {
+                    outcome(succeeded)
+                },
                 targets.first(),
                 slot.or_else(|| {
                     result
@@ -166,6 +203,27 @@ impl Session {
             "Action finished, but audit outcome could not be saved; inspect state before retrying"
         );
         result
+    }
+
+    /// The answer to a single-host operation the user stopped. Its SSH connection is gone;
+    /// an upgrade cut off is saved as unknown, since the remote may be half upgraded.
+    fn stopped(&self, name: &str, host: Option<&Host>) -> Result<Value> {
+        match name {
+            "upgrade" | "dist_upgrade" => {
+                let host = host.ok_or_else(|| anyhow::anyhow!("缺少主機 ID"))?;
+                let result = crate::batch::stopped_upgrade(name);
+                self.storage
+                    .save_results(vec![(host.id.clone(), result.clone())])
+                    .map_err(|error| {
+                        error.context(
+                            "升級已中斷，但無法把結果標示為未知；遠端可能已部分執行，請登入主機確認",
+                        )
+                    })?;
+                Ok(serde_json::json!(result))
+            }
+            "check" => anyhow::bail!("已中斷檢查；主機上的套件沒有變更，保留上次的檢查結果。"),
+            _ => anyhow::bail!("已中斷測試連線。"),
+        }
     }
 
     fn record_each(

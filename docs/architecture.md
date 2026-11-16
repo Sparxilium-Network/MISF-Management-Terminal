@@ -1,6 +1,6 @@
 # MISF Management Terminal 架構
 
-> 最後修改：2026-11-16 ｜ 基於 commit：`ea4c9a9`
+> 最後修改：2026-11-16 ｜ 基於 commit：`8b1a81f`
 
 > [!WARNING]
 > **本專案仍處於開發階段，請勿用於正式環境。** 相關安全保護機制尚未完善。
@@ -54,6 +54,7 @@ flowchart LR
 | `core/src/store.rs`、`core/src/sqlite.rs`、`core/src/db_upgrade/` | 資料模型的讀寫、SQLite 強化與結構遷移 |
 | `core/src/ssh.rs`、`core/src/transcript.rs` | SSH 傳輸：主機指紋、認證、執行單一命令（含 sudo 提示）、測試連線；輸出清理與 `heading` 區段標題框 |
 | `core/src/console.rs` | 即時遠端輸出：把執行中命令的輸出切成行、遮蔽密碼後交給終端機面板 |
+| `core/src/cancel.rs` | 使用者中斷進行中的遠端操作：UI 與 worker 共用的 `Cancel` 訊號 |
 | `core/src/shell.rs` | 互動 shell：開 PTY 與 login shell，在背景雙向搬運位元組，含流量控制 |
 | `core/src/package_manager/` | 套件管理：`mod.rs`（`Manager` 與分派）、`detect.rs`（系統偵測）、`operation.rs`（檢查／升級／dist-upgrade 流程）、`apt.rs`、`dnf.rs`、`yum.rs`、`pkg.rs`（各自的固定命令、失敗判斷與解析）、`rpm.rs`（DNF／YUM 共用的清單解析） |
 | `core/src/model.rs` | `Host`、`SshKey`、`HostGroup`、`CheckResult`、`UpgradePlan`、`RestartStatus`、`ConnectionTest` |
@@ -80,7 +81,7 @@ UI 與 CLI 都送出 `{"action": …}` JSON 給 `Session::handle`。CLI 從 stdi
 - **主機指紋**：`probe` 只取 SHA-256 指紋，`trust` 由使用者確認後保存。未確認前不送出帳密；指紋不同立即中止，不嘗試認證。
 - **錯誤**：沒有共同主機金鑰演算法時（例如只提供 RSA 主機金鑰），顯示需啟用 Ed25519／ECDSA 的說明。錯誤訊息經 `Host::redact` 遮蔽已知密碼與位址片段。
 - **連線資訊**：`test` 每次產生一筆 `ConnectionTest`（成功、失敗都存，每台只留最後一次），來源為 `check_server_key`、`client::Handler::kex_done` 與認證結果：伺服器版本（移除控制字元、最多 255 字）、金鑰交換、主機金鑰演算法與指紋、加密演算法、雙向 MAC（AEAD 為 `none`）、是否啟用嚴格金鑰交換、登入方式與用戶端公鑰演算法／指紋，以及核心、發行版與可用套件管理器。不含密碼、私鑰或遠端輸出。UI 在結果卡片的「連線資訊」分頁顯示，失敗時重新載入清單以顯示部分結果。
-- **sudo**：一般帳號以 `sudo -S` 執行，密碼經 channel stdin 傳送且每個 channel 最多送一次；PTY 預設開啟。連線每 30 秒送 keepalive。
+- **sudo**：一般帳號以 `sudo -S -p '__MISF_SUDO_PROMPT__'` 執行，輸出出現這個提示字串時才把密碼經 channel stdin 送出，每個 channel 最多送一次，第二次出現即中止。只有命令本身帶有這個提示字串（也就是經過 sudo）時才會回應，root 的命令不帶 sudo，輸出中出現提示字串也不送密碼、不中止，root 也不傳入密碼。免密碼 sudo 的帳號無法用這個方式區分，使用指南建議改用私鑰登入並把 sudo 密碼欄留空。PTY 預設開啟。連線每 30 秒送 keepalive。
 
 ## 系統偵測與套件管理
 
@@ -199,9 +200,19 @@ Passkey 只使用 `Fido2HmacSecret` 包裝槽。Windows 透過 `windows_passkey.
 
 `RuntimePaths` 在啟動時解析 `--debug.dir`，以明確路徑注入偏好、日誌與 worker，不修改程序環境，失敗不回退正式資料。debug 模式只允許 loopback IP 的 SSH、禁止真實 Passkey 操作、備份限於測試目錄，UI 持續顯示 DEBUG。`--debug.allow-passkey` 須與 `--debug.dir` 同時使用，才開放實體驗證器，SSH 與備份限制不變。
 
+## 中斷操作
+
+`check`、`upgrade`、`dist_upgrade`、`batch`、`test`（`cancel::CANCELLABLE`）可以由使用者中斷；`reboot` 不行，命令一送出重新開機就已排定。
+
+- **訊號**：`cancel::Cancel` 是 `AtomicBool` 加 `Notify`，由 worker 建立、交給 `Session::set_cancel`，UI 經 `Worker::cancel` 呼叫 `request`。worker 每處理一個請求前先 `reset`，所以上一個請求剛結束時才到的中斷不會影響下一個請求。
+- **單台操作**：`Session::handle` 以 `select!`（`biased`，同時完成時以操作結果為準）同時等待 `StorageSession::handle` 與中斷訊號。中斷時丟棄操作的 future，SSH 連線隨之關閉；升級類操作以 `batch::stopped_upgrade` 把主機存為失敗、結果未知（錯誤訊息含 `sudo dpkg --configure -a`），檢查與測試連線不寫主機庫，回傳說明已中斷的錯誤。稽核記為 `cancelled`。
+- **批次**：`batch::run` 自己監看中斷訊號，以便保留已完成的主機：中斷後 `abort_all` 執行中的工作，再收回每個工作。已完成的照常儲存與回報；被中斷的升級存為結果未知並回報，被中斷的檢查不寫主機庫；回應另含 `cancelled`（執行中被中斷的主機），`skipped` 為還沒開始的主機。稽核對 `cancelled` 與 `skipped` 的主機記為 `cancelled`。
+- **UI**：可中斷的請求執行中，狀態列顯示「中斷」。升級類操作先以 `StopDialog` 確認並說明 dpkg 可能停在半途；檢查與測試連線直接中斷。中斷的錯誤顯示在狀態列，不當作錯誤視窗。操作進行中按「鎖定」時，可中斷的請求會詢問「操作結束後鎖定」或「中斷並鎖定」，其他請求直接等它結束後鎖定（`App::lock_after`）；閒置自動鎖定仍不中斷操作。
+- **風險**：中斷與關閉程式相同，遠端命令會因連線關閉而終止（有 PTY 時收到 SIGHUP），所以升級可能停在半途。MISF 不在遠端脫離連線執行升級。
+
 ## 介面與背景工作
 
-UI 把請求放入工作佇列，由背景執行緒與 Tokio runtime 執行 SSH 與磁碟操作，期間停用衝突操作。關閉程式會結束本機連線，但不能保證中止遠端已開始的套件程序。「設定」視窗以左側分類樹集中語言、外觀、偏好（再分為外觀與主機清單、安全性、批次作業）與 LUKSbox 管理，並顯示程式版本（Cargo 套件版本）、主機庫格式與結構版本；容器內仍為 JSON 時提供「轉換為 SQLite 資料庫」（`convert_storage`）。偏好存在 `ui-settings.json`，以暫存檔原子替換，主機庫鎖定時也能讀寫。自動鎖定（`auto_lock_minutes`，1～1440；設定檔沒有這個鍵時預設 15 分鐘，選「永不」存為 null）由 UI 計算閒置時間：滑鼠、鍵盤、捲動、貼上等使用者輸入與互動 shell 的輸出會重新計時，worker 忙碌時也重新計時以免中斷作業；所以開著持續輸出的程式（`top`、`tail -f`）時不會自動鎖定，使用指南有說明。時間到時 UI 先結束互動 shell（記 `shell_close`）、清除主機快取、終端機與相關視窗，再送出 `vault_lock`（core 也會關閉所有 shell），稽核記為 `vault_auto_lock`。
+UI 把請求放入工作佇列，由背景執行緒與 Tokio runtime 執行 SSH 與磁碟操作，期間停用衝突操作。關閉程式會結束本機連線，但不能保證中止遠端已開始的套件程序。「設定」視窗以左側分類樹集中語言、外觀、偏好（再分為外觀與主機清單、安全性、批次作業）、LOG 匯出（主機庫鎖定時停用，`export_log` 也再檢查一次並記 `blocked`）與 LUKSbox 管理，並顯示程式版本（Cargo 套件版本）、主機庫格式與結構版本；容器內仍為 JSON 時提供「轉換為 SQLite 資料庫」（`convert_storage`）。偏好存在 `ui-settings.json`，以暫存檔原子替換，主機庫鎖定時也能讀寫。自動鎖定（`auto_lock_minutes`，1～1440；設定檔沒有這個鍵時預設 15 分鐘，選「永不」存為 null）由 UI 計算閒置時間：滑鼠、鍵盤、捲動、貼上等使用者輸入與互動 shell 的輸出會重新計時，worker 忙碌時也重新計時以免中斷作業；所以開著持續輸出的程式（`top`、`tail -f`）時不會自動鎖定，使用指南有說明。時間到時 UI 先結束互動 shell（記 `shell_close`）、清除主機快取、終端機與相關視窗，再送出 `vault_lock`（core 也會關閉所有 shell），稽核記為 `vault_auto_lock`。
 
 主視窗不使用系統標題列（`no-frame`），最上方由 `app/ui/title_bar.slint` 自繪：選單式命令、最小化／最大化／關閉；拖曳移動與邊緣縮放交給 winit 的 `drag_window`／`drag_resize_window`，關閉按鈕送出與系統關閉相同的 `CloseRequested`。頁面下方的工具視窗（終端機、過往操作）由左側細直條切換，共用高度；工具視窗開啟時主機頁與批次頁可捲動。
 

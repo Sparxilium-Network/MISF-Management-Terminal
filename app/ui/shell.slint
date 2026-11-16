@@ -9,6 +9,8 @@ export struct HistoryLine {
 
 export global Shell {
     in property <bool> busy;
+    // The running operation can be stopped (a check, test, upgrade or batch).
+    in property <bool> stoppable;
     in property <string> status;
     // Newest first.
     in property <[HistoryLine]> history;
@@ -27,4 +29,5 @@ export global Shell {
     callback manage-keys();
     callback review-plaintext();
     callback view-chosen(view: int);
+    callback stop();
 }
