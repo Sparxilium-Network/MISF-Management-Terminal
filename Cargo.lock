@@ -3483,6 +3483,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "misf-sshtest"
+version = "0.1.0"
+dependencies = [
+ "misf-core",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "ml-kem"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

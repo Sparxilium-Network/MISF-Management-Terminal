@@ -1,0 +1,17 @@
+#!/bin/sh
+# Publishes the named packages' second version in the local repository, replacing
+# whatever was published before. Without names the repository is valid and empty.
+set -eu
+repo=/opt/misf/repo
+rm -rf "$repo"
+mkdir -p "$repo"
+for name in "$@"; do
+    cp /opt/misf/pool/v2/"$name"_*.deb "$repo"/
+done
+cd "$repo"
+apt-ftparchive packages . > Packages
+apt-ftparchive \
+    -o APT::FTPArchive::Release::Origin=MISF \
+    -o APT::FTPArchive::Release::Suite=misf-test \
+    release . > /tmp/misf-release
+mv /tmp/misf-release Release

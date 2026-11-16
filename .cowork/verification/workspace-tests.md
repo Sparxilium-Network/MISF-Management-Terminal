@@ -1,5 +1,16 @@
 # 全工作區檢查結果
 
+## 2026-11-16（sshtest：真實容器的 APT 故障測試，分支 `feat/WYSIWYG-Terminal`，基於 `0b85af9`）
+
+- 使用者要求在 `sshtest` 資料夾做可重複執行的 APT 自動化測試（升級到一半失敗、斷線、不正常的輸出、出現 TUI 畫面等），供日後 CI 使用。使用者選擇：Docker 真實 APT、workspace 成員 crate（測試標 `#[ignore]`）、發現問題只記錄並回報不改 core、這次不接 GitHub Actions 只寫文件。
+- 新增 crate `misf-sshtest`（`sshtest/`）：`docker/` 是映像（sshd、三個帳號、本機套件庫與 13 個會搗亂的測試套件），`src/lib.rs` 是框架（容器、TCP 中繼、`Lab`），`tests/apt.rs` 有 18 項測試。沒有新增第三方依賴；`Cargo.lock` 只多了這個 crate 的條目，`./licenses.ps1` 重新產生戳記。core 與 app 的程式碼沒有改。
+- 結果：`cargo test -p misf-sshtest -- --ignored` 在 `debian:13` 連續 4 次全過（17 項約 45 秒；加上 `MISF_SSHTEST_SLOW=1` 的 18 項約 217 秒，跑過 1 次），`MISF_SSHTEST_BASE=ubuntu:26.04` 1 次全過（不含慢速項）。執行後沒有殘留容器。`cargo test --workspace`（22、37、70、29 項，sshtest 18 項 ignored）、`cargo clippy --workspace --all-targets --all-features -- -D warnings`、`cargo fmt --all -- --check` 通過。
+- 測試發現 8 個缺口（斷言記錄的是目前行為，標為 `GAP n`，詳見 `sshtest/README.md`）：升級半途失敗後再檢查顯示成功且沒有待更新套件；未結束的跳脫序列吃掉之後保存的輸出；腳本印出 `E:` 行讓成功的升級存成失敗；sudo 收下密碼後輸出出現提示標記被當成密碼錯誤；免密碼 sudo 時密碼送進套件腳本（使用指南已記載）；腳本等待輸入或畫出對話框時等到 30 分鐘上限；中斷後遠端 apt-get 仍卡著並持有鎖；斷線時錯誤沒提升級可能進行中、該步驟輸出未保存，遠端照常升級完，無聲斷線約 210 秒才放棄。都還沒有處理，等使用者逐項決定。
+- 也確認有效：`DEBIAN_FRONTEND=noninteractive` 經 `sudo -- env` 仍生效、`--force-confold`、`TERM=dumb` 讓 whiptail 直接失敗、各種失敗都存成失敗、不正常輸出不會洩漏密碼、真實 `needrestart -r l -b`（3.11）與 reboot-required 解析正確、kept back 與 dist-upgrade 模擬計畫。
+- 過程中修正的測試套件問題（不是 MISF 的問題）：Ubuntu 26.04 的 `timeout` 是 uutils 版，背景讀取終端機的程序被停住後不會被喚醒，測試卡住；改成不用 `timeout`。
+- 未驗證：GitHub Actions 上的實際執行（沒有接）；sudo-rs；HTTP 套件庫的逾時與簽章錯誤；phased updates；有 systemd 的主機上的 needrestart 服務清單；私鑰登入與批次作業在真實容器上的行為。
+- 殘留：探索時被強制停止的一次 Ubuntu 執行留下一個容器（`docker ps --filter label=misf-sshtest=1`），移除指令被安全檢查擋下，留給使用者移除。
+
 ## 2026-11-16（MYTHOS-r4 的處理，分支 `feat/WYSIWYG-Terminal`，基於 `8b1a81f`）
 
 - 使用者決定：第 1、4、7 項為預期風險；第 5 項暫不處理；第 8 項之後再說；低風險項目暫不處理。

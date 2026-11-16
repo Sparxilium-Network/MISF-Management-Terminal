@@ -5,7 +5,7 @@
 | `decisions/agent-rules-location.md` | 移除 AGENTS.md；專案慣例改放 docs/PROJECT-DEV.md，工作紀錄放 .cowork；Claude 記憶需與 .claude/MEMORY.md 同步 | agents, rules, commit, push, package, docs, memory |
 | `decisions/mandatory-encryption.md` | 移除未加密模式；新密碼至少 8 字元、含數字／字母／符號其中兩種 | luksbox, vault, encryption, password, plaintext |
 | `decisions/rsa-advisory.md` | RUSTSEC-2023-0071：2026-11-08 移除 RSA 支援的做法與影響（取代先前保留 RSA 的決定） | rustsec, rsa, russh, audit, security |
-| `verification/workspace-tests.md` | 最近一次全工作區測試、fmt、Clippy 結果 | test, clippy, fmt, ci |
+| `verification/workspace-tests.md` | 最近一次全工作區測試、fmt、Clippy 結果；2026-11-16 起含 sshtest（真實容器 APT 故障測試）結果與發現的缺口 | test, clippy, fmt, ci, sshtest, docker, apt |
 | `verification/dependency-update-2026-10-30.md` | 2026-10-30 依賴更新的版本表、RustSec 與驗證結果 | dependency, cargo, rustsec, fido2, p256 |
 | `verification/luksbox-integration.md` | LUKSbox 原型、整合與 release CLI 實測結果 | luksbox, vault, prototype, backup, keyslot |
 | `verification/passkey-hardware.md` | Passkey 實體裝置測試狀態與不可推論的範圍 | passkey, fido2, webauthn, windows-hello, hardware |

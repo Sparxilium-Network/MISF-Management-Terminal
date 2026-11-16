@@ -1,5 +1,5 @@
 [workspace]
-members = ["core", "app", "third_party/LUKSbox/luksbox-fido2"]
+members = ["core", "app", "sshtest", "third_party/LUKSbox/luksbox-fido2"]
 resolver = "3"
 
 [profile.release]

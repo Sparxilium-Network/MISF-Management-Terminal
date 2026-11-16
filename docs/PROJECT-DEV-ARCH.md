@@ -1,10 +1,10 @@
 # 原始碼檔案說明
 
-> 最後修改：2026-11-16 ｜ 基於 commit：`8b1a81f`
+> 最後修改：2026-11-16 ｜ 基於 commit：`0b85af9`
 
 每個 `.rs` 檔案負責什麼。整體設計與資料流見 [架構](architecture.md)，建置與慣例見 [開發說明](PROJECT-DEV.md)。新增、改名或刪除 `.rs` 檔案時，請一併更新本文件。
 
-Workspace 有三個 crate：`core`（`misf-core`，核心函式庫與 JSON CLI）、`app`（`misf`，桌面 GUI）、`third_party/LUKSbox/luksbox-fido2`（LUKSbox FIDO2 的本機相容性副本）。依賴方向是 `app` → `core` → `luksbox-fido2`；`core` 不知道 UI 存在。
+Workspace 有四個 crate：`core`（`misf-core`，核心函式庫與 JSON CLI）、`app`（`misf`，桌面 GUI）、`sshtest`（`misf-sshtest`，只有測試，不編進 app）、`third_party/LUKSbox/luksbox-fido2`（LUKSbox FIDO2 的本機相容性副本）。依賴方向是 `app` → `core` → `luksbox-fido2`，`sshtest` → `core`；`core` 不知道 UI 存在。
 
 ## core：核心
 
@@ -66,6 +66,8 @@ Workspace 有三個 crate：`core`（`misf-core`，核心函式庫與 JSON CLI�
 | 檔案 | 作用 |
 | --- | --- |
 | `core/tests/workflow.rs` | 在 loopback 啟動測試 SSH 伺服器，端到端驗證密碼／私鑰登入、指紋、PTY 與 sudo、APT／DNF 檢查與升級、失敗處理、批次、主機分類、共用金鑰，以及透過 LUKSbox 的儲存與 CLI 相容性。 |
+| `sshtest/src/lib.rs` | APT 故障測試的框架：`Container`（以 `docker` 啟動測試容器、`docker exec`、讀 dpkg 狀態）、`Relay`（MISF 與容器之間的 TCP 中繼，可斷線、凍結、恢復）、`Lab`（像 app 一樣儲存主機、信任指紋、測試連線，再以 `dispatch_with` 執行並收集即時輸出）。映像內容在 `sshtest/docker/`。 |
+| `sshtest/tests/apt.rs` | 對真實 Debian／Ubuntu 容器的 APT 測試（`#[ignore]`，需要 Docker）：升級半途失敗、套件檔抓不到、不正常的輸出、sudo 提示標記、對話框與等待輸入、斷線、dpkg 被殺、鎖被佔用。斷言記錄目前行為，缺口列在 `sshtest/README.md`。 |
 
 ## app：桌面 GUI
 
