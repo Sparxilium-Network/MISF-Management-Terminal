@@ -1,6 +1,6 @@
 # MISF Management Terminal 開發說明
 
-> 最後修改：2026-11-16 ｜ 基於 commit：`0b85af9`
+> 最後修改：2026-11-16 ｜ 基於 commit：`416718d`
 
 一般使用方式見 [README](../README.md) 與 [使用指南](user-guide.md)。本文件是開發文件的入口，給開發者與維護者，記錄建置、儲存格式、安全設計細節與測試方式。
 
@@ -35,7 +35,7 @@
 
 - `app/`：Slint 原生 UI（`app/ui/*.slint` 宣告畫面，`app/src/ui/` 處理狀態）；背景執行緒執行網路及磁碟作業。
 - `core/`：主機資料、SSH 及套件管理核心；亦提供 stdin/stdout JSON CLI。
-- `sshtest/`：以真實 Debian／Ubuntu 容器測試 APT 故障情境的測試 crate（需要 Docker，預設不執行），見 [`sshtest/README.md`](../sshtest/README.md)。
+- `sshtest/`：以真實容器測試套件管理器故障情境的測試 crate（需要 Docker，預設不執行）；每個套件管理器一個資料夾，目前只有 `sshtest/apt/`。見 [`sshtest/README.md`](../sshtest/README.md)。
 - CLI 的加密工作階段只存在同一程序內；可透過 stdin 傳入 JSON 請求陣列，依序執行解鎖、操作與鎖定。不要把解鎖密碼放進命令列參數。
 
 ## 啟動與打包
@@ -166,13 +166,13 @@ UI 測試在 `app/src/ui/tests.rs`：狀態邏輯測試，加上以 `i-slint-bac
 
 Rust 整合測試在 loopback 啟動測試 SSH 伺服器，驗證密碼／私鑰、指紋、PTY、sudo、系統偵測、APT 與 DNF 檢查／升級、套件管理器不符與混合批次阻擋，以及互動 shell（回顯、視窗大小、結束、輸出流量控制），不接觸真實遠端主機。
 
-APT 故障情境（升級半途失敗、斷線、不正常的輸出、套件腳本跳出畫面或等待回答、鎖被佔用）另有 `sshtest/`：每個測試啟動一個真的 Debian／Ubuntu 容器（sshd、sudo、apt、dpkg、本機套件庫），由 core 經 SSH 檢查與升級。需要 Docker，測試標為 `#[ignore]`，`cargo test --workspace` 只編譯不執行：
+套件管理器的故障情境（升級半途失敗、斷線、不正常的輸出、套件腳本跳出畫面或等待回答、鎖被佔用）另有 `sshtest/`，每個套件管理器一個資料夾（映像、測試與說明各自獨立），共用框架在 `sshtest/src/`。目前只有 APT（`sshtest/apt/`）：每個測試啟動一個真的 Debian／Ubuntu 容器（sshd、sudo、apt、dpkg、本機套件庫），由 core 經 SSH 檢查與升級。需要 Docker，測試標為 `#[ignore]`，`cargo test --workspace` 只編譯不執行：
 
 ```powershell
 cargo test -p misf-sshtest -- --ignored
 ```
 
-做法、環境變數、接到 CI 的方式，以及測試發現的缺口（斷言記錄的是目前行為）見 [`sshtest/README.md`](../sshtest/README.md)。目前沒有接進 GitHub Actions。
+做法、環境變數、接到 CI 與新增套件管理器的方式見 [`sshtest/README.md`](../sshtest/README.md)；APT 的測試項目與測試發現的缺口（斷言記錄的是目前行為）見 [`sshtest/apt/README.md`](../sshtest/apt/README.md)。目前沒有接進 GitHub Actions。
 
 LUKSbox 測試使用暫存資料，涵蓋未建立容器時拒絕主機操作且不寫出明文檔、新密碼長度與字元種類規則、明文保留、確認刪除與路徑限制、鎖定後拒絕操作、錯誤密碼、多 keyslot、重新啟動、加密備份、縮短資料、密文損壞及並行開啟阻擋。Passkey 核心流程由模擬驗證器測試，未代替實體 Windows Hello／USB 裝置驗證。
 

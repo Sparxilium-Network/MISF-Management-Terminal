@@ -1,5 +1,13 @@
 # 全工作區檢查結果
 
+## 2026-11-16（sshtest 依套件管理器分資料夾，分支 `feat/WYSIWYG-Terminal`，基於 `416718d`）
+
+- 使用者要求：之後會增加其他套件管理器，測試要像 `apt/…`、`yum/…` 這樣分開，不能擠在一起。
+- `sshtest/docker/` 與 `sshtest/tests/apt.rs` 搬到 `sshtest/apt/`（`docker/`、`main.rs`、`support.rs`，測試依主題拆成 `upgrade.rs`、`failures.rs`、`output.rs`、`prompts.rs`、`connection.rs`）；`Cargo.toml` 以 `[[test]] name = "apt"` 指向 `apt/main.rs`。`src/lib.rs` 只留共用框架：新增 `System`／`APT`，映像依管理器建置（`misf-sshtest-<管理器>:<基底>`），dpkg 專用的輔助移到 `apt/support.rs`。環境變數 `MISF_SSHTEST_BASE` 改為 `MISF_SSHTEST_APT_BASE`。說明拆成 `sshtest/README.md`（共用、如何新增套件管理器）與 `sshtest/apt/README.md`（APT 的套件、測試項目、缺口）。測試內容與斷言沒有改。
+- 結果：`cargo test -p misf-sshtest --test apt -- --ignored` 在 `debian:13` 全過（18 項，約 45 秒，慢速項略過）；`cargo test --workspace`、`cargo clippy --workspace --all-targets --all-features -- -D warnings`、`cargo fmt --all -- --check` 通過。
+- 未驗證：搬動後沒有重跑 `ubuntu:26.04` 與 `MISF_SSHTEST_SLOW=1`（測試內容未變）。`package.ps1` 因使用者的 `dist\MISF\misf.exe` 正在執行而無法覆寫；app 的程式碼沒有改。
+- 殘留：舊名稱的映像 `misf-sshtest:debian-13`、`misf-sshtest:ubuntu-26-04` 可以刪除。
+
 ## 2026-11-16（sshtest：真實容器的 APT 故障測試，分支 `feat/WYSIWYG-Terminal`，基於 `0b85af9`）
 
 - 使用者要求在 `sshtest` 資料夾做可重複執行的 APT 自動化測試（升級到一半失敗、斷線、不正常的輸出、出現 TUI 畫面等），供日後 CI 使用。使用者選擇：Docker 真實 APT、workspace 成員 crate（測試標 `#[ignore]`）、發現問題只記錄並回報不改 core、這次不接 GitHub Actions 只寫文件。

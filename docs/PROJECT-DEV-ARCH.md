@@ -1,6 +1,6 @@
 # 原始碼檔案說明
 
-> 最後修改：2026-11-16 ｜ 基於 commit：`0b85af9`
+> 最後修改：2026-11-16 ｜ 基於 commit：`416718d`
 
 每個 `.rs` 檔案負責什麼。整體設計與資料流見 [架構](architecture.md)，建置與慣例見 [開發說明](PROJECT-DEV.md)。新增、改名或刪除 `.rs` 檔案時，請一併更新本文件。
 
@@ -66,8 +66,14 @@ Workspace 有四個 crate：`core`（`misf-core`，核心函式庫與 JSON CLI�
 | 檔案 | 作用 |
 | --- | --- |
 | `core/tests/workflow.rs` | 在 loopback 啟動測試 SSH 伺服器，端到端驗證密碼／私鑰登入、指紋、PTY 與 sudo、APT／DNF 檢查與升級、失敗處理、批次、主機分類、共用金鑰，以及透過 LUKSbox 的儲存與 CLI 相容性。 |
-| `sshtest/src/lib.rs` | APT 故障測試的框架：`Container`（以 `docker` 啟動測試容器、`docker exec`、讀 dpkg 狀態）、`Relay`（MISF 與容器之間的 TCP 中繼，可斷線、凍結、恢復）、`Lab`（像 app 一樣儲存主機、信任指紋、測試連線，再以 `dispatch_with` 執行並收集即時輸出）。映像內容在 `sshtest/docker/`。 |
-| `sshtest/tests/apt.rs` | 對真實 Debian／Ubuntu 容器的 APT 測試（`#[ignore]`，需要 Docker）：升級半途失敗、套件檔抓不到、不正常的輸出、sudo 提示標記、對話框與等待輸入、斷線、dpkg 被殺、鎖被佔用。斷言記錄目前行為，缺口列在 `sshtest/README.md`。 |
+| `sshtest/src/lib.rs` | 套件管理器故障測試的共用框架：`System`（一個套件管理器的測試主機，映像在 `sshtest/<管理器>/docker/`）、`Container`（以 `docker` 啟動測試容器、`docker exec`）、`Relay`（MISF 與容器之間的 TCP 中繼，可斷線、凍結、恢復）、`Lab`（像 app 一樣儲存主機、信任指紋、測試連線，再以 `dispatch_with` 執行並收集即時輸出）。每個套件管理器的測試放在自己的資料夾，不放進這裡。 |
+| `sshtest/apt/main.rs` | 測試目標 `apt` 的入口（`#[ignore]`，需要 Docker），對真實 Debian／Ubuntu 容器。斷言記錄目前行為，缺口列在 `sshtest/apt/README.md`。 |
+| `sshtest/apt/support.rs` | APT 測試共用：啟動 APT 主機、`Dpkg`（dpkg 狀態、`dpkg --audit`、apt 是否仍在執行）、共用斷言。 |
+| `sshtest/apt/upgrade.rs` | 正常升級與 reboot-required、debconf 與 conffile 不詢問、kept back 與 dist-upgrade。 |
+| `sshtest/apt/failures.rs` | postinst 失敗、套件庫索引或套件檔抓不到、dpkg 被殺、鎖被佔用。 |
+| `sshtest/apt/output.rs` | 不正常的輸出、`E:` 開頭的腳本輸出、輸出中的 sudo 提示標記。 |
+| `sshtest/apt/prompts.rs` | 對話框在 `TERM=dumb` 下失敗、畫出來的對話框、等待輸入的腳本。 |
+| `sshtest/apt/connection.rs` | 升級途中斷線與網路無聲中斷。 |
 
 ## app：桌面 GUI
 

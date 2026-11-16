@@ -1,12 +1,17 @@
-//! Harness for the APT fault tests in `tests/apt.rs`.
+//! Shared harness for the package-manager fault tests.
 //!
-//! Each test gets its own throwaway container built from `docker/`: a Debian or Ubuntu
-//! system with sshd and a local package repository whose packages misbehave on purpose.
-//! MISF's core then checks and upgrades it over SSH exactly as the app does, through a
-//! TCP relay the test can cut or freeze to stand in for a lost connection.
+//! Each package manager has its own directory beside `src/`: `apt/` today. It holds a
+//! `docker/` build context for a throwaway host and the tests that drive it; this crate
+//! holds only what every manager's tests share. Each test gets its own container from
+//! that image, and MISF's core checks and upgrades it over SSH exactly as the app does,
+//! through a TCP relay the test can cut or freeze to stand in for a lost connection.
 //!
-//! Needs a `docker` command that can run Linux containers. The image is built once per
-//! test run; `MISF_SSHTEST_BASE` picks its base image (default `debian:13`).
+//! An image must run sshd on port 22 with an Ed25519 or ECDSA host key, create the three
+//! [`Account`]s, and provide a `misf-scenario` command that publishes the named packages'
+//! upgrades in a local repository.
+//!
+//! Needs a `docker` command that can run Linux containers. Images are built once per test
+//! run; `MISF_SSHTEST_<MANAGER>_BASE` picks the base image (see [`System`]).
 
 use misf_core::{
     batch::Unattended,
@@ -19,8 +24,9 @@ use misf_core::{
 };
 use serde_json::{Value, json};
 use std::{
+    collections::HashMap,
     process::Command,
-    sync::{Arc, Mutex, OnceLock},
+    sync::{Arc, Mutex},
     time::Duration,
 };
 use tokio::{
@@ -40,14 +46,28 @@ const LABEL: &str = "misf-sshtest=1";
 /// How long [`Lab::run`] lets one operation take, in seconds.
 pub const PATIENCE: u64 = 5 * 60;
 
-/// The accounts the image creates; the passwords are written in `docker/Dockerfile`.
+/// One package manager's test host: where its image is built from and how MISF names it.
+pub struct System {
+    /// MISF's ID for the package manager, which is also the directory holding `docker/`.
+    pub manager: &'static str,
+    /// The base image when `MISF_SSHTEST_<MANAGER>_BASE` is not set.
+    pub default_base: &'static str,
+}
+
+/// Debian and Ubuntu hosts, built from `apt/docker`; `MISF_SSHTEST_APT_BASE` picks the base.
+pub const APT: System = System {
+    manager: "apt",
+    default_base: "debian:13",
+};
+
+/// The accounts every image creates; the passwords are written in its Dockerfile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Account {
-    /// Runs APT directly.
+    /// Runs the package manager directly.
     Root,
-    /// Runs APT through sudo, which asks for the password.
+    /// Runs it through sudo, which asks for the password.
     Admin,
-    /// Runs APT through sudo configured with NOPASSWD.
+    /// Runs it through sudo configured with NOPASSWD.
     Deploy,
 }
 
@@ -88,32 +108,40 @@ async fn docker(args: &[&str]) -> (bool, String) {
         .unwrap()
 }
 
-/// Builds the image once per test run; unchanged layers come from Docker's cache.
-fn image() -> &'static str {
-    static IMAGE: OnceLock<String> = OnceLock::new();
-    IMAGE.get_or_init(|| {
-        let base = std::env::var("MISF_SSHTEST_BASE").unwrap_or_else(|_| "debian:13".into());
-        let tag: String = base
-            .chars()
-            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-            .collect();
-        let image = format!("misf-sshtest:{tag}");
-        let context = concat!(env!("CARGO_MANIFEST_DIR"), "/docker");
-        let (built, log) = docker_now(&[
-            "build".into(),
-            "--build-arg".into(),
-            format!("BASE={base}"),
-            "-t".into(),
-            image.clone(),
-            context.into(),
-        ]);
-        assert!(
-            built,
-            "building the test image failed:
-{log}"
-        );
-        image
-    })
+/// Builds a system's image once per test run; unchanged layers come from Docker's cache.
+fn image(system: &System) -> String {
+    static IMAGES: Mutex<Option<HashMap<&'static str, String>>> = Mutex::new(None);
+    // Held while building, so tests starting together wait for one build.
+    let mut images = IMAGES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let images = images.get_or_insert_with(HashMap::new);
+    if let Some(image) = images.get(system.manager) {
+        return image.clone();
+    }
+    let variable = format!("MISF_SSHTEST_{}_BASE", system.manager.to_uppercase());
+    let base = std::env::var(variable).unwrap_or_else(|_| system.default_base.into());
+    let tag: String = base
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let image = format!("misf-sshtest-{}:{tag}", system.manager);
+    let context = format!("{}/{}/docker", env!("CARGO_MANIFEST_DIR"), system.manager);
+    let (built, log) = docker_now(&[
+        "build".into(),
+        "--build-arg".into(),
+        format!("BASE={base}"),
+        "-t".into(),
+        image.clone(),
+        context,
+    ]);
+    assert!(
+        built,
+        "building the {} test image failed:\n{log}",
+        system.manager
+    );
+    images.insert(system.manager, image.clone());
+    image
 }
 
 /// One running test host; removed when dropped.
@@ -124,9 +152,11 @@ pub struct Container {
 }
 
 impl Container {
-    /// Starts a fresh host whose repository offers version 2.0 of `packages`.
-    pub async fn start(packages: &[&str]) -> Self {
-        let image = tokio::task::spawn_blocking(image).await.unwrap();
+    /// Starts a fresh host whose repository offers the upgrades of `packages`.
+    pub async fn start(system: &'static System, packages: &[&str]) -> Self {
+        let image = tokio::task::spawn_blocking(move || image(system))
+            .await
+            .unwrap();
         let (started, id) = docker(&[
             "run",
             "-d",
@@ -136,7 +166,7 @@ impl Container {
             LABEL,
             "-p",
             "127.0.0.1::22",
-            image,
+            &image,
         ])
         .await;
         assert!(started, "starting a container failed:\n{id}");
@@ -184,34 +214,6 @@ impl Container {
             );
             sleep(Duration::from_millis(200)).await;
         }
-    }
-
-    /// dpkg's view of a package: its state abbreviation and version, e.g. `ii 2.0`
-    /// (installed), `iF 2.0` (failed to configure) or `iU 2.0` (unpacked only).
-    pub async fn dpkg(&self, package: &str) -> String {
-        self.sh(&format!(
-            "dpkg-query -W -f='${{db:Status-Abbrev}}${{Version}}' {package}"
-        ))
-        .await
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-    }
-
-    /// Whether an apt or dpkg process is still running in the host.
-    pub async fn apt_running(&self) -> bool {
-        self.try_sh("pgrep -x 'apt-get|dpkg' >/dev/null").await.0
-    }
-
-    /// Waits until no apt or dpkg process is left in the host.
-    pub async fn wait_until_apt_idle(&self, seconds: u64) {
-        self.wait_for("! pgrep -x 'apt-get|dpkg' >/dev/null", seconds)
-            .await;
-    }
-
-    /// What `dpkg --audit` reports: empty when every package is fully installed.
-    pub async fn audit(&self) -> String {
-        self.sh("dpkg --audit").await.trim().to_owned()
     }
 }
 
@@ -344,9 +346,15 @@ pub struct Lab {
 }
 
 impl Lab {
-    /// Starts a host offering version 2.0 of `packages` and registers it for `account`.
-    pub async fn start(account: Account, use_pty: bool, packages: &[&str]) -> Self {
-        let container = Container::start(packages).await;
+    /// Starts a `system` host offering the upgrades of `packages` and registers it for
+    /// `account`.
+    pub async fn start(
+        system: &'static System,
+        account: Account,
+        use_pty: bool,
+        packages: &[&str],
+    ) -> Self {
+        let container = Container::start(system, packages).await;
         let relay = Relay::start(container.port).await;
         let directory = tempfile::tempdir().unwrap();
         let store = Store::new(directory.path().join("hosts.db"));
@@ -386,7 +394,7 @@ impl Lab {
         let test = dispatch(json!({"action":"test","id":id}), &store, &|_| {})
             .await
             .unwrap();
-        assert_eq!(test["package_manager"], "apt", "{test}");
+        assert_eq!(test["package_manager"], system.manager, "{test}");
         Self {
             container,
             relay,

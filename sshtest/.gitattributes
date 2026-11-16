@@ -1,2 +1,2 @@
 # These files run inside a Linux image; CRLF would break the shell scripts.
-docker/** text eol=lf
+*/docker/** text eol=lf
