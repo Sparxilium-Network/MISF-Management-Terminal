@@ -1,6 +1,6 @@
 # 原始碼檔案說明
 
-> 最後修改：2026-11-16 ｜ 基於 commit：`416718d`
+> 最後修改：2026-11-17 ｜ 基於 commit：`ffff655`
 
 每個 `.rs` 檔案負責什麼。整體設計與資料流見 [架構](architecture.md)，建置與慣例見 [開發說明](PROJECT-DEV.md)。新增、改名或刪除 `.rs` 檔案時，請一併更新本文件。
 
@@ -66,7 +66,7 @@ Workspace 有四個 crate：`core`（`misf-core`，核心函式庫與 JSON CLI�
 | 檔案 | 作用 |
 | --- | --- |
 | `core/tests/workflow.rs` | 在 loopback 啟動測試 SSH 伺服器，端到端驗證密碼／私鑰登入、指紋、PTY 與 sudo、APT／DNF 檢查與升級、失敗處理、批次、主機分類、共用金鑰，以及透過 LUKSbox 的儲存與 CLI 相容性。 |
-| `sshtest/src/lib.rs` | 套件管理器故障測試的共用框架：`System`（一個套件管理器的測試主機，映像在 `sshtest/<管理器>/docker/`）、`Container`（以 `docker` 啟動測試容器、`docker exec`）、`Relay`（MISF 與容器之間的 TCP 中繼，可斷線、凍結、恢復）、`Lab`（像 app 一樣儲存主機、信任指紋、測試連線，再以 `dispatch_with` 執行並收集即時輸出）。每個套件管理器的測試放在自己的資料夾，不放進這裡。 |
+| `sshtest/src/lib.rs` | 套件管理器故障測試的共用框架：`System`（一個套件管理器的測試主機，映像在 `sshtest/<管理器>/docker/`）、`Container`（以 `docker` 啟動測試容器、`docker exec`）、`Relay`（MISF 與容器之間的 TCP 中繼，可斷線、凍結、恢復）、`Lab`（像 app 一樣儲存主機、信任指紋、測試連線，再以 `dispatch_with` 執行並收集即時輸出），以及各管理器通用的斷言。每個套件管理器的測試放在自己的資料夾，不放進這裡。 |
 | `sshtest/apt/main.rs` | 測試目標 `apt` 的入口（`#[ignore]`，需要 Docker），對真實 Debian／Ubuntu 容器。斷言記錄目前行為，缺口列在 `sshtest/apt/README.md`。 |
 | `sshtest/apt/support.rs` | APT 測試共用：啟動 APT 主機、`Dpkg`（dpkg 狀態、`dpkg --audit`、apt 是否仍在執行）、共用斷言。 |
 | `sshtest/apt/upgrade.rs` | 正常升級與 reboot-required、debconf 與 conffile 不詢問、kept back 與 dist-upgrade。 |
@@ -74,6 +74,13 @@ Workspace 有四個 crate：`core`（`misf-core`，核心函式庫與 JSON CLI�
 | `sshtest/apt/output.rs` | 不正常的輸出、`E:` 開頭的腳本輸出、輸出中的 sudo 提示標記。 |
 | `sshtest/apt/prompts.rs` | 對話框在 `TERM=dumb` 下失敗、畫出來的對話框、等待輸入的腳本。 |
 | `sshtest/apt/connection.rs` | 升級途中斷線與網路無聲中斷。 |
+| `sshtest/dnf/main.rs` | 測試目標 `dnf` 的入口（`#[ignore]`，需要 Docker），對真實 Rocky Linux／AlmaLinux 9 容器。斷言記錄目前行為，缺口列在 `sshtest/dnf/README.md`。 |
+| `sshtest/dnf/support.rs` | DNF 測試共用：啟動 DNF 主機、`Rpm`（已安裝的版本、dnf 是否仍在執行）。 |
+| `sshtest/dnf/upgrade.rs` | 正常升級與連帶安裝相依、設定檔保留、root 不經 sudo、沒有 dist-upgrade。 |
+| `sshtest/dnf/failures.rs` | `%post`／`%pre` 失敗、相依不滿足、套件庫或套件檔抓不到、dnf 被殺、等待鎖。 |
+| `sshtest/dnf/output.rs` | 不正常的輸出、`Error:` 開頭的腳本輸出、輸出中的 sudo 提示標記。 |
+| `sshtest/dnf/prompts.rs` | 對話框在 `TERM=dumb` 下失敗、標準輸入上的問題、終端機上的對話框與問題。 |
+| `sshtest/dnf/connection.rs` | 升級途中斷線（root、sudo 加 PTY）與網路無聲中斷。 |
 
 ## app：桌面 GUI
 

@@ -1,5 +1,15 @@
 # 全工作區檢查結果
 
+## 2026-11-17（sshtest 新增 DNF，分支 `feat/WYSIWYG-Terminal`，基於 `ffff655`）
+
+- 使用者要求新增 DNF 版本。新增 `sshtest/dnf/`：`docker/`（預設 `rockylinux/rockylinux:9`，以 rpmbuild 建出 16 個測試套件、`createrepo_c` 本機套件庫）、`support.rs`（`Rpm`）、五個主題檔共 22 項測試、`README.md`。`src/lib.rs` 新增 `DNF`，並把通用斷言（`names`、`assert_plain`、`assert_failed`）從 `apt/support.rs` 移到共用框架。基底映像沒有先問使用者，選 Rocky Linux 9 是因為既有模擬測試與文件都以它為例。core 與 app 沒有改，沒有新增依賴，`Cargo.lock` 沒有變。
+- 結果：`cargo test -p misf-sshtest --test dnf -- --ignored` 在 Rocky Linux 9.8（dnf 4.14）連續 3 次全過（約 45 秒），`MISF_SSHTEST_SLOW=1` 的慢速項單獨通過 1 次（214 秒），`almalinux:9` 1 次全過。`cargo test --locked --workspace -- --include-ignored` 全過（22、37、70、29 項，APT 18 項，DNF 22 項），沒有殘留容器；clippy（`--all-features -D warnings`）、`cargo fmt --check` 通過。
+- `fedora:latest`（dnf5 5.4）不能用：新版 rpm 拒絕未簽章的測試套件（已在映像改用 `_pkgverify_level none`），之後 22 項仍全部失敗，原因是 MISF 讀不懂 dnf5 的清單（`check-update` 先印一行 `Upgrades`），回報「無法解析 DNF／YUM 套件清單」；映像也還留著 Fedora 自己的套件庫快取。沒有再往下處理。
+- 測試發現 11 個缺口（`sshtest/dnf/README.md`，編號只在 DNF 內有效）：`%post` 失敗仍存成成功；`skip_if_unavailable` 的套件庫抓不到時檢查不會發現；`Error:` 開頭的行讓成功的升級存成失敗；dnf 被訊號殺掉時錯誤沒提升級、輸出未保存；之後留下新舊兩版重複安裝而沒有提示；未結束的跳脫序列吃掉之後保存的輸出；sudo 收下密碼後的提示標記被當成密碼錯誤；腳本在 `/dev/tty` 上等人時等到 30 分鐘上限；斷線時錯誤沒提升級可能進行中；經 sudo 加 PTY 斷線時腳本被中途結束但套件算已安裝；dnf5 清單無法解析。都還沒有處理。
+- 與 APT 不同且較好的地方也寫進 README：rpm 不給腳本標準輸入（`read` 不會卡住、密碼到不了腳本）、`%pre` 失敗的套件仍在待更新清單、dnf 會等鎖、中斷後不會留下卡住的程序。
+- 未驗證：Fedora／dnf5、RHEL 8、HTTP 套件庫、GPG 簽章錯誤、`best=False`；GitHub Actions 上的執行。
+- 殘留：試 Fedora 留下的映像 `misf-sshtest-dnf:fedora-latest` 可以刪除。
+
 ## 2026-11-16（文件補上「執行所有測試」，分支 `feat/WYSIWYG-Terminal`，基於 `752ab8d`）
 
 - 使用者要求把如何執行所有測試寫進文件。`docs/PROJECT-DEV.md` 的「測試」新增「執行所有測試」小節與指令對照表，`sshtest/README.md` 補上同一條指令。只改文件。

@@ -1,6 +1,6 @@
 # sshtest：套件管理器故障情境測試
 
-> 最後修改：2026-11-16 ｜ 基於 commit：`752ab8d`
+> 最後修改：2026-11-17 ｜ 基於 commit：`ffff655`
 
 用真的容器測試 MISF 經 SSH 做的套件檢查與升級：升級到一半失敗、斷線、不正常的輸出、套件腳本跳出畫面或等人回答。`core/tests/workflow.rs` 的模擬 SSH 伺服器只會回傳寫好的文字；這裡跑的是真的 sshd、sudo 與套件管理器。
 
@@ -13,19 +13,21 @@
 ```text
 sshtest/
 ├─ Cargo.toml        每個套件管理器一個 [[test]] 目標
-├─ src/lib.rs        共用框架：System、Container、Relay、Lab、Account
-└─ apt/              APT（Debian／Ubuntu）
-   ├─ README.md      測試套件、測試項目、發現的缺口
-   ├─ docker/        映像：Dockerfile、build-packages.sh、misf-scenario
-   ├─ main.rs        測試目標 `apt` 的入口
-   ├─ support.rs     APT 專用的輔助（讀 dpkg 狀態、共用斷言）
-   └─ upgrade.rs、failures.rs、output.rs、prompts.rs、connection.rs
+├─ src/lib.rs        共用框架：System、Container、Relay、Lab、Account、共用斷言
+├─ apt/              APT（Debian／Ubuntu）
+│  ├─ README.md      測試套件、測試項目、發現的缺口
+│  ├─ docker/        映像：Dockerfile、build-packages.sh、misf-scenario
+│  ├─ main.rs        測試目標 `apt` 的入口
+│  ├─ support.rs     APT 專用的輔助（讀 dpkg 狀態）
+│  └─ upgrade.rs、failures.rs、output.rs、prompts.rs、connection.rs
+└─ dnf/              DNF（Enterprise Linux），檔案配置與 apt/ 相同
 ```
 
 | 套件管理器 | 資料夾 | 說明 |
 | --- | --- | --- |
 | APT | [`apt/`](apt/README.md) | 18 項測試；`debian:13`（預設）與 `ubuntu:26.04` 通過 |
-| DNF、YUM、pkg | 尚未建立 | |
+| DNF | [`dnf/`](dnf/README.md) | 22 項測試；`rockylinux/rockylinux:9`（預設）與 `almalinux:9` 通過；Fedora（dnf5）不能用 |
+| YUM、pkg | 尚未建立 | |
 
 ## 需要什麼
 
@@ -46,12 +48,12 @@ cargo test -p misf-sshtest -- --ignored
 cargo test --locked --workspace -- --include-ignored
 ```
 
-只跑一個套件管理器：`cargo test -p misf-sshtest --test apt -- --ignored`。只跑一類或一項：在最後加上模組或測試名稱的一部分，例如 `connection` 或 `a_cut_connection`。
+只跑一個套件管理器：`cargo test -p misf-sshtest --test apt -- --ignored`（或 `--test dnf`）。只跑一類或一項：在最後加上模組或測試名稱的一部分，例如 `connection` 或 `a_cut_connection`。
 
 | 環境變數 | 作用 |
 | --- | --- |
-| `MISF_SSHTEST_<管理器>_BASE` | 該套件管理器的基底映像，例如 `MISF_SSHTEST_APT_BASE=ubuntu:26.04`（預設 `debian:13`）。映像名稱是 `misf-sshtest-<管理器>:<基底>`。 |
-| `MISF_SSHTEST_SLOW=1` | 另外執行需要幾分鐘的測試（目前是 APT 的「網路無聲中斷」，約 4 分鐘）；沒設定時這些測試直接通過並印出略過的說明。 |
+| `MISF_SSHTEST_<管理器>_BASE` | 該套件管理器的基底映像，例如 `MISF_SSHTEST_APT_BASE=ubuntu:26.04`（預設 `debian:13`）、`MISF_SSHTEST_DNF_BASE=almalinux:9`（預設 `rockylinux/rockylinux:9`）。映像名稱是 `misf-sshtest-<管理器>:<基底>`。 |
+| `MISF_SSHTEST_SLOW=1` | 另外執行需要幾分鐘的測試（目前是 APT 與 DNF 各一項「網路無聲中斷」，各約 4 分鐘，會同時進行）；沒設定時這些測試直接通過並印出略過的說明。 |
 
 測試程序被強制結束時（例如按 Ctrl+C），容器來不及移除。列出與清除：
 
@@ -67,6 +69,8 @@ docker rm -f (docker ps -aq --filter label=misf-sshtest=1)
 ```yaml
 - name: APT fault tests
   run: cargo test --locked -p misf-sshtest --test apt -- --ignored
+- name: DNF fault tests
+  run: cargo test --locked -p misf-sshtest --test dnf -- --ignored
 ```
 
 Windows runner 不能執行 Linux 容器，所以只能放在 Linux 工作。這些測試會從 Docker Hub 與發行版套件庫下載，外部服務故障時會失敗；建議先用獨立、手動觸發的 workflow，不要擋住發布。
@@ -78,10 +82,11 @@ Windows runner 不能執行 Linux 容器，所以只能放在 Linux 工作。這
   └────────── docker exec：佈置情境、觀察主機狀態 ──────────────────────────────►
 ```
 
-- `System`：一個套件管理器的測試主機（MISF 的管理器代碼，同時是資料夾名稱；以及預設基底映像）。目前只有 `APT`。
+- `System`：一個套件管理器的測試主機（MISF 的管理器代碼，同時是資料夾名稱；以及預設基底映像）。目前有 `APT` 與 `DNF`。
 - `Container`：啟動容器、`sh`／`try_sh`／`spawn`（`docker exec`）、`wait_for`。
 - `Relay`：MISF 與容器之間的 TCP 中繼。`cut` 立刻斷線並拒絕新連線，`freeze` 不關閉但不再傳資料，`restore` 恢復。
 - `Lab`：像 app 一樣把主機存進主機庫、信任指紋、測試連線，再用 `dispatch_with` 執行 `check`／`upgrade`／`dist_upgrade`，並收集即時終端機輸出（`screen`）。`run` 最多等 5 分鐘（`PATIENCE`），超過就讓測試失敗，不會等到 MISF 自己的 30 分鐘上限；`run_for` 在指定秒數後放棄並斷開連線，效果等同 app 的「中斷」。
+- `names`、`assert_plain`、`assert_failed`：各套件管理器通用的斷言（套件名稱、輸出是純文字且沒有密碼、失敗結果不帶套件）。
 - `Account`：每個映像都要建立的三個帳號（密碼寫在 Dockerfile，只是測試值；SSH 埠只發布在 127.0.0.1）。
 
 | `Account` | 帳號 | 說明 |

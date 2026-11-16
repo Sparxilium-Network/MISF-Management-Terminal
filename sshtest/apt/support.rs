@@ -1,7 +1,7 @@
 //! What the APT tests share: starting an APT host, reading dpkg's state, common checks.
 
-use misf_core::model::{CheckResult, Package};
 use misf_sshtest::{APT, Account, Container, Lab};
+pub use misf_sshtest::{assert_failed, assert_plain, names};
 
 /// Starts a Debian/Ubuntu host offering version 2.0 of `packages`, registered for `account`.
 pub async fn start(account: Account, use_pty: bool, packages: &[&str]) -> Lab {
@@ -44,36 +44,4 @@ impl Dpkg for Container {
         self.wait_for("! pgrep -x 'apt-get|dpkg' >/dev/null", seconds)
             .await;
     }
-}
-
-pub fn names(packages: &[Package]) -> Vec<&str> {
-    packages
-        .iter()
-        .map(|package| package.name.as_str())
-        .collect()
-}
-
-/// Saved output and live lines are plain text: no control characters but the newline,
-/// and none of the host's secrets.
-pub fn assert_plain(lab: &Lab, text: &str) {
-    let host = lab.host();
-    assert!(
-        !text.chars().any(|c| c.is_control() && c != '\n'),
-        "control characters left in:\n{text:?}"
-    );
-    assert!(!text.contains(&host.password), "the password leaked");
-    // The live view also shows each command (`$ …`), and sudo commands name the marker.
-    assert!(
-        !(text.lines())
-            .any(|line| !line.starts_with("$ ") && line.contains("__MISF_SUDO_PROMPT__")),
-        "the sudo prompt marker was left in the output"
-    );
-}
-
-/// A failed run names the step and never claims packages.
-pub fn assert_failed(result: &CheckResult, error: &str) {
-    assert_eq!(result.status, "failed", "{}", result.output);
-    assert!(result.error.contains(error), "{}", result.error);
-    assert!(result.packages.is_empty() && result.upgraded.is_empty());
-    assert!(result.restart.is_none());
 }

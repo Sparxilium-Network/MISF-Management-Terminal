@@ -16,3 +16,7 @@ tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "time", "
 [[test]]
 name = "apt"
 path = "apt/main.rs"
+
+[[test]]
+name = "dnf"
+path = "dnf/main.rs"

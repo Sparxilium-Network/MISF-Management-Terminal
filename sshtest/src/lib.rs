@@ -18,7 +18,7 @@ use misf_core::{
     cancel::Cancel,
     console::Console,
     dispatch, dispatch_with,
-    model::{CheckResult, Host},
+    model::{CheckResult, Host, Package},
     ssh,
     store::Store,
 };
@@ -58,6 +58,13 @@ pub struct System {
 pub const APT: System = System {
     manager: "apt",
     default_base: "debian:13",
+};
+
+/// Fedora and Enterprise Linux hosts, built from `dnf/docker`; `MISF_SSHTEST_DNF_BASE`
+/// picks the base.
+pub const DNF: System = System {
+    manager: "dnf",
+    default_base: "rockylinux/rockylinux:9",
 };
 
 /// The accounts every image creates; the passwords are written in its Dockerfile.
@@ -440,4 +447,37 @@ impl Lab {
     pub fn host(&self) -> Host {
         self.store.host(&self.id).unwrap()
     }
+}
+
+/// The names of `packages`, in order.
+pub fn names(packages: &[Package]) -> Vec<&str> {
+    packages
+        .iter()
+        .map(|package| package.name.as_str())
+        .collect()
+}
+
+/// Saved output and live lines are plain text: no control characters but the newline,
+/// and none of the host's secrets.
+pub fn assert_plain(lab: &Lab, text: &str) {
+    let host = lab.host();
+    assert!(
+        !text.chars().any(|c| c.is_control() && c != '\n'),
+        "control characters left in:\n{text:?}"
+    );
+    assert!(!text.contains(&host.password), "the password leaked");
+    // The live view also shows each command (`$ …`), and sudo commands name the marker.
+    assert!(
+        !(text.lines())
+            .any(|line| !line.starts_with("$ ") && line.contains("__MISF_SUDO_PROMPT__")),
+        "the sudo prompt marker was left in the output"
+    );
+}
+
+/// A failed run names the step and never claims packages.
+pub fn assert_failed(result: &CheckResult, error: &str) {
+    assert_eq!(result.status, "failed", "{}", result.output);
+    assert!(result.error.contains(error), "{}", result.error);
+    assert!(result.packages.is_empty() && result.upgraded.is_empty());
+    assert!(result.restart.is_none());
 }
