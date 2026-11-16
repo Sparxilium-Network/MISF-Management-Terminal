@@ -1,6 +1,6 @@
 # MISF Management Terminal 開發說明
 
-> 最後修改：2026-11-17 ｜ 基於 commit：`eebbd7a`
+> 最後修改：2026-11-17 ｜ 基於 commit：`546e058`
 
 一般使用方式見 [README](../README.md) 與 [使用指南](user-guide.md)。本文件是開發文件的入口，給開發者與維護者，記錄建置、儲存格式、安全設計細節與測試方式。
 
@@ -19,6 +19,7 @@
 | [更新依賴的步驟](update-dependency.md) | 套用 Dependabot PR、手動升級與處理安全公告的操作清單 |
 | [LUKSbox 加密儲存設計](luksbox-design.md) | 加密主機庫的實作決定、限制與測試範圍 |
 | [Passkey 實體測試](passkey-testing.md) | 以實體驗證器測試 Passkey 的程序 |
+| [測試清單](test/README.md) | 每個套件管理器有哪些測試、在哪個檔案，以及怎麼只跑其中一部分 |
 
 ## 專案慣例
 
@@ -169,6 +170,8 @@ cargo run --locked -p misf -- --debug.dir="C:\temp\misf-test"
 
 判斷新測試放哪裡：只要模擬伺服器的固定回應就能說清楚的，是程式本體的行為，放在前三層；要看真實主機或真實套件管理器怎麼反應的，放 `sshtest/`。`workflow.rs` 的模擬輸出不保證與真實輸出一致，真實格式以 `sshtest/` 為準。
 
+每一項測試的名稱、所在檔案與驗證內容，依套件管理器整理在 [`docs/test/`](test/README.md)（[APT](test/apt-test.md)、[DNF](test/dnf-test.md)、[pacman](test/pacman-test.md)、[apk](test/apk-test.md)），總覽說明怎麼只跑其中一部分。
+
 ### 提交前的檢查
 
 不需要 Docker，約 2 分鐘：
@@ -203,6 +206,7 @@ Linux／macOS 的 shell：`MISF_SSHTEST_SLOW=1 cargo test --locked --workspace -
 | 全部（含容器） | `cargo test --locked --workspace -- --include-ignored` |
 | 只跑容器測試 | `cargo test --locked -p misf-sshtest -- --ignored` |
 | 只跑某個套件管理器的容器測試 | `cargo test --locked -p misf-sshtest --test apt -- --ignored`（或 `--test dnf`、`--test pacman`、`--test apk`） |
+| 只跑某個套件管理器在各層的測試 | 見各清單的「怎麼跑」：[APT](test/apt-test.md)、[DNF](test/dnf-test.md)、[pacman](test/pacman-test.md)、[apk](test/apk-test.md) |
 | 只跑某一個 crate | `cargo test --locked -p misf-core`（或 `-p misf`） |
 | 只跑名稱符合的測試 | 在指令最後加上名稱的一部分，例如 `cargo test --locked --workspace sudo` |
 

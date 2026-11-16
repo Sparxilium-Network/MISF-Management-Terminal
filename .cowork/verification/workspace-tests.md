@@ -1,5 +1,12 @@
 # 全工作區檢查結果
 
+## 2026-11-17（新增 docs/test 測試清單，分支 `feat/WYSIWYG-Terminal`，基於 `546e058`）
+
+- 使用者要求 `docs/test/` 下每個套件管理器一份清單（`apt-test.md`、`dnf-test.md`、`pacman-test.md`、`apk-test.md`），列出測試項目與所在檔案，另有總覽 `README.md` 說明怎麼只跑一部分。
+- 清單涵蓋三層：單元測試、`core/tests/workflow.rs`、`sshtest/<管理器>/`（含帳號與 GAP 編號）。不屬於某個套件管理器的 16 項 workflow 測試與涵蓋四個管理器的 5 項單元測試列在總覽。
+- 文件裡的每個選取指令都以 `--list` 實跑核對項數：單元 APT 12、DNF 8、pacman 8、apk 7；workflow APT 10、DNF 6、pacman 2、apk 2；sshtest 18、22、23、22。APT 的單元與 workflow 指令另實際執行通過（PowerShell 陣列傳名稱給 `--exact` 可用）。容器測試沒有執行。
+- `docs/test/` 不在 `package.ps1` 複製的範圍（只複製 `docs/*.md`），不會進發行包。
+
 ## 2026-11-17（寫清楚測試分工，分支 `feat/WYSIWYG-Terminal`，基於 `eebbd7a`）
 
 - 使用者決定保留 `core/tests/workflow.rs`，不與 `sshtest/` 合併：程式本體自己的行為由各 crate 的測試負責，SSH 連到真實主機時實際會遇到的狀況由 `sshtest/` 負責。
