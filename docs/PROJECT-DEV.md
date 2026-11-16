@@ -1,6 +1,6 @@
 # MISF Management Terminal 開發說明
 
-> 最後修改：2026-11-17 ｜ 基於 commit：`8aaa1b9`
+> 最後修改：2026-11-17 ｜ 基於 commit：`eebbd7a`
 
 一般使用方式見 [README](../README.md) 與 [使用指南](user-guide.md)。本文件是開發文件的入口，給開發者與維護者，記錄建置、儲存格式、安全設計細節與測試方式。
 
@@ -156,7 +156,22 @@ cargo run --locked -p misf -- --debug.dir="C:\temp\misf-test"
 
 ## 測試
 
-提交前的檢查（不需要 Docker，約 2 分鐘）：
+### 分工
+
+程式本體自己的行為由各 crate 的測試負責；SSH 連到真實主機時實際會遇到的狀況由 `sshtest/` 負責。兩者分開維護，不合併。
+
+| 層級 | 位置 | 負責什麼 | 什麼時候跑 |
+| --- | --- | --- | --- |
+| 單元測試 | 各模組內的 `#[cfg(test)]` | 單一函式：命令字串、輸出解析、失敗判斷、驗證規則、資料轉換 | `cargo test --workspace`、CI |
+| core 整合測試 | `core/tests/workflow.rs` | core 自己的流程：連線與驗證、指紋、sudo 提示的處理、命令順序、批次與中斷、儲存與主機庫、互動 shell。用 loopback 模擬 SSH 伺服器，回應是寫好的文字，所以能穩定做出拆包的提示、永不結束的命令這類情況 | `cargo test --workspace`、CI（Ubuntu、Windows），約 1 秒 |
+| UI 測試 | `app/src/ui/tests.rs` | 介面狀態與畫面操作 | `cargo test --workspace`、CI |
+| 真實主機狀況 | `sshtest/` | 真的 sshd、sudo 與套件管理器：升級半途失敗、斷線、套件腳本的輸出與提問、鎖、各發行版的實際輸出。斷言記錄 MISF 目前的行為，缺口以 GAP 標示 | 需要 Docker，`#[ignore]`，手動執行，不在 CI |
+
+判斷新測試放哪裡：只要模擬伺服器的固定回應就能說清楚的，是程式本體的行為，放在前三層；要看真實主機或真實套件管理器怎麼反應的，放 `sshtest/`。`workflow.rs` 的模擬輸出不保證與真實輸出一致，真實格式以 `sshtest/` 為準。
+
+### 提交前的檢查
+
+不需要 Docker，約 2 分鐘：
 
 ```powershell
 cargo test --locked --workspace
@@ -195,7 +210,7 @@ Linux／macOS 的 shell：`MISF_SSHTEST_SLOW=1 cargo test --locked --workspace -
 
 UI 測試在 `app/src/ui/tests.rs`：狀態邏輯測試，加上以 `i-slint-backend-testing` 送出實際指標與鍵盤事件的畫面測試（需要 debug 建置保留元件名稱，`app/build.rs` 已設定）。這個測試後端由整個程序共用，所以畫面測試集中在同一個測試函式 `pages_respond_to_clicks`。
 
-Rust 整合測試在 loopback 啟動測試 SSH 伺服器，驗證密碼／私鑰、指紋、PTY、sudo、系統偵測、APT 與 DNF 檢查／升級、套件管理器不符與混合批次阻擋，以及互動 shell（回顯、視窗大小、結束、輸出流量控制），不接觸真實遠端主機。
+Rust 整合測試在 loopback 啟動測試 SSH 伺服器，驗證密碼／私鑰、指紋、PTY、sudo、系統偵測、APT、DNF、pacman 與 apk 的檢查／升級、套件管理器不符與混合批次阻擋，以及互動 shell（回顯、視窗大小、結束、輸出流量控制），不接觸真實遠端主機。
 
 套件管理器的故障情境（升級半途失敗、斷線、不正常的輸出、套件腳本跳出畫面或等待回答、鎖被佔用）另有 `sshtest/`，每個套件管理器一個資料夾（映像、測試與說明各自獨立），共用框架在 `sshtest/src/`。目前有 APT（`sshtest/apt/`，Debian／Ubuntu）、DNF（`sshtest/dnf/`，Rocky Linux／AlmaLinux 9）、pacman（`sshtest/pacman/`，Arch Linux）與 apk（`sshtest/apk/`，Alpine 3.24）：每個測試啟動一個真的容器（sshd、sudo、套件管理器、本機套件庫），由 core 經 SSH 檢查與升級。需要 Docker，測試標為 `#[ignore]`，`cargo test --workspace` 只編譯不執行：
 

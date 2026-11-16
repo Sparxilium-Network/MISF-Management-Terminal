@@ -1,5 +1,11 @@
 # 全工作區檢查結果
 
+## 2026-11-17（寫清楚測試分工，分支 `feat/WYSIWYG-Terminal`，基於 `eebbd7a`）
+
+- 使用者決定保留 `core/tests/workflow.rs`，不與 `sshtest/` 合併：程式本體自己的行為由各 crate 的測試負責，SSH 連到真實主機時實際會遇到的狀況由 `sshtest/` 負責。
+- `docs/PROJECT-DEV.md` 的「測試」新增「分工」表與放置原則；`docs/PROJECT-DEV.md`、`docs/architecture.md` 的整合測試描述補上 pacman 與 apk（上一次提交漏改）。
+- 只改文件，沒有執行建置或測試。
+
 ## 2026-11-17（sshtest 新增 pacman 與 apk，分支 `feat/WYSIWYG-Terminal`，基於 `8aaa1b9`）
 
 - 使用者要求新增 pacman 與 apk 的容器測試，並說明 core 的支援已由另一個工作階段完成（`8aaa1b9`）。該工作階段留下未追蹤、未接線的草稿：`sshtest/apk/`（映像與 16 項測試）與 `sshtest/pacman/`（只有映像）。本次接手：在 `src/lib.rs` 加上 `PACMAN`、`APK`，`Cargo.toml` 加兩個測試目標。
