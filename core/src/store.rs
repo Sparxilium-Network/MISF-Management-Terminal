@@ -234,6 +234,10 @@ pub(crate) fn parse_legacy(bytes: &[u8]) -> Result<Database> {
     let db: Database =
         serde_json::from_slice(bytes).context("舊版主機資料格式錯誤；原始檔案已保留")?;
     ensure!(db.version == 1, "不支援的舊版主機資料版本");
+    let mut db = db;
+    for host in &mut db.hosts {
+        host.forget_unsupported();
+    }
     Ok(db)
 }
 

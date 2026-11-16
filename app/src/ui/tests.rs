@@ -98,7 +98,7 @@ fn connection_rows_explain_aead_post_quantum_and_unreached_steps() {
         auth_method: "publickey".into(),
         client_key_algorithm: "ecdsa-sha2-nistp521".into(),
         client_key_fingerprint: "SHA256:abc".into(),
-        package_managers: vec!["dnf".into(), "yum".into()],
+        package_managers: vec!["apt".into(), "apk".into()],
         ..Default::default()
     };
     let rows = connection_rows(t, &test);
@@ -106,7 +106,7 @@ fn connection_rows_explain_aead_post_quantum_and_unreached_steps() {
     assert_eq!(value(&rows, t.get("conn.mac")), t.get("conn.mac_aead"));
     assert_eq!(value(&rows, t.get("conn.strict")), t.get("conn.strict_yes"));
     assert!(value(&rows, t.get("conn.auth")).contains("ecdsa-sha2-nistp521"));
-    assert_eq!(value(&rows, t.get("conn.managers")), "DNF、YUM");
+    assert_eq!(value(&rows, t.get("conn.managers")), "APT、apk");
     // A test that failed before key exchange shows dashes, not "not strict".
     let failed = ConnectionTest {
         status: "failed".into(),

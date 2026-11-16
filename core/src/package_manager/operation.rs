@@ -212,10 +212,13 @@ impl Run<'_> {
         let failed = output
             .lines()
             .any(|line| manager.update_failed(line.trim_start()));
-        ensure!(
-            code == 0 && !failed,
-            "更新套件索引失敗（退出碼 {code}）；未把舊快取當作最新結果"
-        );
+        if code != 0 || failed {
+            let needs = manager
+                .update_needs()
+                .map(|needs| format!("；{needs}"))
+                .unwrap_or_default();
+            anyhow::bail!("更新套件索引失敗（退出碼 {code}）；未把舊快取當作最新結果{needs}");
+        }
         Ok(())
     }
 
@@ -240,7 +243,7 @@ impl Run<'_> {
             mode.command_name()
         )));
         self.transcript.push_str(&output);
-        validate_upgrade(code, &output)?;
+        validate_upgrade(manager, code, &output)?;
         Ok(output)
     }
 
@@ -277,7 +280,7 @@ fn choose(host: &Host, platform: &Platform) -> Result<Manager> {
     }
     let manager = platform
         .manager
-        .context("此主機沒有支援的套件管理器（APT、DNF、YUM 或 FreeBSD pkg）；不支援此檢查")?;
+        .context("此主機沒有支援的套件管理器（APT、DNF、pacman 或 apk）；不支援此檢查")?;
     let expected = host.manager();
     ensure!(
         expected.is_empty() || expected == manager.id(),
@@ -288,13 +291,12 @@ fn choose(host: &Host, platform: &Platform) -> Result<Manager> {
 }
 
 /// Any upgrade error line fails the run even with exit 0; the remote may be half-upgraded.
-fn validate_upgrade(code: u32, output: &str) -> Result<()> {
+fn validate_upgrade(manager: Manager, code: u32, output: &str) -> Result<()> {
     ensure!(
         code == 0
-            && !output.lines().any(|line| {
-                let line = line.trim_start();
-                line.starts_with("E:") || line.starts_with("Error:")
-            }),
+            && !output
+                .lines()
+                .any(|line| manager.upgrade_failed(line.trim_start())),
         "套件升級失敗（退出碼 {code}）；請查看執行輸出，遠端可能已部分升級"
     );
     Ok(())
@@ -356,24 +358,49 @@ mod tests {
 
     #[test]
     fn upgrade_errors_are_failures_even_with_zero_exit() {
+        let apt = Manager::Apt;
         assert!(
-            validate_upgrade(0, "E: Sub-process /usr/bin/dpkg returned an error code (1)").is_err()
+            validate_upgrade(
+                apt,
+                0,
+                "E: Sub-process /usr/bin/dpkg returned an error code (1)"
+            )
+            .is_err()
         );
-        assert!(validate_upgrade(100, "Setting up libc6").is_err());
-        assert!(validate_upgrade(0, "Setting up libc6 (2.36-9) ...").is_ok());
+        assert!(validate_upgrade(apt, 100, "Setting up libc6").is_err());
+        assert!(validate_upgrade(apt, 0, "Setting up libc6 (2.36-9) ...").is_ok());
+        // Each manager's own error form; another's is only text.
+        assert!(validate_upgrade(Manager::Dnf, 0, "Error: Transaction failed").is_err());
+        assert!(
+            validate_upgrade(
+                Manager::Pacman,
+                0,
+                "error: command failed to execute correctly"
+            )
+            .is_err()
+        );
+        assert!(
+            validate_upgrade(
+                Manager::Apk,
+                0,
+                "ERROR: misf-fail-2.0-r0.post-upgrade: script exited with error 1"
+            )
+            .is_err()
+        );
+        assert!(validate_upgrade(Manager::Apk, 0, "E: printed by a script").is_ok());
     }
 
     #[test]
     fn only_the_chosen_or_recorded_manager_may_run() {
         let mut host = Host::default();
-        let both = platform(vec![Manager::Dnf, Manager::Yum]);
-        assert_eq!(choose(&host, &both).unwrap(), Manager::Dnf);
-        host.manager_choice = "yum".into();
-        assert_eq!(choose(&host, &both).unwrap(), Manager::Yum);
-        host.manager_choice = "apt".into();
+        let both = platform(vec![Manager::Apt, Manager::Apk]);
+        assert_eq!(choose(&host, &both).unwrap(), Manager::Apt);
+        host.manager_choice = "apk".into();
+        assert_eq!(choose(&host, &both).unwrap(), Manager::Apk);
+        host.manager_choice = "dnf".into();
         assert!(choose(&host, &both).is_err());
         host.manager_choice.clear();
-        host.package_manager = "apt".into();
+        host.package_manager = "dnf".into();
         assert!(choose(&host, &both).is_err());
         assert!(choose(&Host::default(), &platform(vec![])).is_err());
     }

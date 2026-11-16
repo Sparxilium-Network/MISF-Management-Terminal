@@ -274,6 +274,10 @@ pub(crate) fn load(conn: &Connection) -> Result<Database> {
             key_id: row.get(17)?,
             group_id: row.get(18)?,
         });
+        // Saved back with the next change; nothing is written just for reading.
+        if let Some(host) = hosts.last_mut() {
+            host.forget_unsupported();
+        }
     }
     let mut statement = conn.prepare(
         "SELECT id, name, algorithm, fingerprint, private_key, passphrase
@@ -585,7 +589,7 @@ pub(crate) mod tests {
                         auth_method: "password".into(),
                         kernel: "Linux".into(),
                         distro: "Debian 13".into(),
-                        package_managers: vec!["apt".into(), "yum".into()],
+                        package_managers: vec!["apt".into(), "apk".into()],
                         ..Default::default()
                     }),
                     ..Default::default()

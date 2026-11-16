@@ -3,7 +3,7 @@ use misf_core::{
     console::{Console, Echo},
     dispatch, dispatch_with,
     model::{CheckResult, Host},
-    package_manager::{self, Manager, Mode, apt, dnf},
+    package_manager::{self, Manager, Mode, apk, apt, dnf, pacman},
     reboot, shell, ssh,
     store::Store,
 };
@@ -23,7 +23,12 @@ use std::{
 };
 
 const APT_HOST: &str = "Linux\n6.12.0\n__MISF_NAME__Debian GNU/Linux\n__MISF_VERSION__13\n__MISF_PRETTY__Debian GNU/Linux 13 (trixie)\n__MISF_PM__apt\n";
-const DNF_HOST: &str = "Linux\n5.14.0\n__MISF_NAME__Rocky Linux\n__MISF_VERSION__9.5\n__MISF_PM__dnf\n__MISF_PM__yum\n";
+const DNF_HOST: &str =
+    "Linux\n5.14.0\n__MISF_NAME__Rocky Linux\n__MISF_VERSION__9.5\n__MISF_PM__dnf\n";
+const PACMAN_HOST: &str = "Linux\n6.17.2-arch1-1\n__MISF_NAME__Arch Linux\n__MISF_VERSION__\n__MISF_PRETTY__Arch Linux\n__MISF_PM__pacman\n";
+/// Alpine with a Debian-style apt wrapper would never happen; this host has both so a
+/// choice in the editor has something to pick.
+const APK_HOST: &str = "Linux\n6.12.0\n__MISF_NAME__Alpine Linux\n__MISF_VERSION__3.24.4\n__MISF_PM__apt\n__MISF_PM__apk\n";
 
 #[derive(Default)]
 struct State {
@@ -85,7 +90,7 @@ impl State {
             };
             (listing, 0)
         } else if [dnf::LIST, dnf::SUDO_LIST].contains(&command) {
-            // A long name wraps onto its own line, as yum and dnf do on narrow terminals.
+            // A long name wraps onto its own line, as dnf does on narrow terminals.
             let held = "kernel-core-with-a-very-long-package-name.x86_64\r\n      5.14.0-503.el9   baseos\r\n";
             let fresh = if upgraded {
                 ""
@@ -141,6 +146,52 @@ Not upgrading yet due to phasing:
         } else if [dnf::UPGRADE, dnf::SUDO_UPGRADE].contains(&command) {
             self.upgraded.store(true, Ordering::SeqCst);
             ("Setting up openssl (3.0.17) ...\r\n".into(), 0)
+        } else if command == pacman::UPDATE {
+            if self.fail_update {
+                ("==> ERROR: Cannot fetch updates\n".into(), 1)
+            } else {
+                (String::new(), 0)
+            }
+        } else if command == pacman::LIST {
+            // linux is pinned with IgnorePkg, so the upgrade leaves it.
+            let held = "linux 6.17.1.arch1-1 -> 6.17.2.arch1-1 [ignored]\n";
+            let fresh = if upgraded {
+                ""
+            } else {
+                "openssl 3.6.0-1 -> 3.6.0-2\n"
+            };
+            (format!("{fresh}{held}"), 0)
+        } else if [pacman::UPGRADE, pacman::SUDO_UPGRADE].contains(&command) {
+            self.upgraded.store(true, Ordering::SeqCst);
+            (
+                ":: Synchronizing package databases...\r\n:: Starting full system upgrade...\r\nwarning: linux: ignoring package upgrade (6.17.1.arch1-1 => 6.17.2.arch1-1)\r\n(1/1) upgrading openssl\r\n".into(),
+                0,
+            )
+        } else if [apk::UPDATE, apk::SUDO_UPDATE].contains(&command) {
+            if self.fail_update {
+                // apk only warns about an index it cannot fetch, and exits 0.
+                (
+                    "WARNING: fetching https://dl-cdn.alpinelinux.org/alpine/v3.24/main: temporary error (try again later)\nOK: 0 distinct packages available\n".into(),
+                    0,
+                )
+            } else {
+                ("OK: 28671 distinct packages available\r\n".into(), 0)
+            }
+        } else if command == apk::LIST {
+            let held = "musl-1.2.6-r1 x86_64 {musl} (MIT) [upgradable from: musl-1.2.6-r0]\n";
+            let fresh = if upgraded {
+                ""
+            } else {
+                "openssl-3.6.0-r2 x86_64 {openssl} (Apache-2.0) [upgradable from: openssl-3.6.0-r1]\n"
+            };
+            (format!("{fresh}{held}"), 0)
+        } else if [apk::UPGRADE, apk::SUDO_UPGRADE].contains(&command) {
+            self.upgraded.store(true, Ordering::SeqCst);
+            (
+                "(1/1) Upgrading openssl (3.6.0-r1 -> 3.6.0-r2)\r\nOK: 12 MiB in 30 packages\r\n"
+                    .into(),
+                0,
+            )
         } else if [apt::UPDATE, apt::SUDO_UPDATE].contains(&command) {
             if self.fail_update {
                 ("E: repository unavailable\n".into(), 100)
@@ -669,11 +720,23 @@ async fn recorded_manager_mismatch_and_unsupported_systems_never_touch_packages(
         *fixture.state.commands.lock().unwrap(),
         [package_manager::DETECT]
     );
-    let mut fixture = fixture_on("OpenBSD\n7.6\n", false, false).await;
+    // CentOS 7 has only yum, which MISF no longer drives.
+    let mut fixture = fixture_on(
+        "Linux\n3.10.0\n__MISF_NAME__CentOS Linux\n__MISF_VERSION__7\n__MISF_PM__yum\n",
+        false,
+        false,
+    )
+    .await;
     fixture.host.package_manager.clear();
     let result = package_manager::check(&fixture.host, &|_| {}).await;
     assert_eq!(result.status, "unsupported");
-    assert_eq!(result.distro, "OpenBSD 7.6");
+    assert_eq!(result.distro, "CentOS Linux 7");
+    assert!(result.error.contains("pacman 或 apk"), "{}", result.error);
+    assert_eq!(
+        *fixture.state.commands.lock().unwrap(),
+        [package_manager::DETECT]
+    );
+
     assert_eq!(
         *fixture.state.commands.lock().unwrap(),
         [package_manager::DETECT]
@@ -682,17 +745,18 @@ async fn recorded_manager_mismatch_and_unsupported_systems_never_touch_packages(
 
 #[tokio::test]
 async fn chosen_package_manager_overrides_detection_only_when_installed() {
-    // Rocky has dnf and yum; detection prefers dnf, but the user chose yum.
-    let mut fixture = fixture_on(DNF_HOST, false, false).await;
-    fixture.host.package_manager = "dnf".into();
-    fixture.host.manager_choice = "yum".into();
+    // This host has apt and apk; detection prefers apt, but the user chose apk.
+    let mut fixture = fixture_on(APK_HOST, false, false).await;
+    fixture.host.package_manager = "apt".into();
+    fixture.host.manager_choice = "apk".into();
     let result = package_manager::check(&fixture.host, &|_| {}).await;
     let commands = fixture.state.commands.lock().unwrap().clone();
     let expected = package_manager::package_commands(&fixture.host, Mode::Check);
-    assert!(expected[1].contains("yum"), "{expected:?}");
-    assert_eq!(commands[..2], expected[..2], "{}", result.error);
+    assert!(expected[1].contains("apk update"), "{expected:?}");
+    assert_eq!(commands, expected, "{}", result.error);
+    assert_eq!(result.status, "success", "{}", result.error);
     // The detected manager is still recorded as detected.
-    assert_eq!(result.package_manager, "dnf");
+    assert_eq!(result.package_manager, "apt");
     let mut fixture = fixture_on(DNF_HOST, false, false).await;
     fixture.host.manager_choice = "apt".into();
     let result = package_manager::upgrade(&fixture.host, &|_| {}).await;
@@ -1089,7 +1153,7 @@ async fn persistence_saves_check_and_resets_trust_when_endpoint_changes() {
     assert_eq!(updated.last_check.as_ref().unwrap().packages.len(), 2);
     assert_eq!(updated.distro, "Debian 13");
     // The editor cannot overwrite detection results.
-    updated.package_manager = "pkg".into();
+    updated.package_manager = "dnf".into();
     dispatch(
         json!({"action":"save","host":updated.clone()}),
         &store,
@@ -1702,5 +1766,154 @@ async fn a_stopped_batch_keeps_finished_hosts_and_marks_running_upgrades_unknown
         } else {
             assert_eq!(saved.status, "success", "{}", saved.error);
         }
+    }
+}
+
+#[tokio::test]
+async fn pacman_checks_without_sudo_or_a_system_sync_and_upgrades_through_sudo() {
+    let fixture = fixture_on(PACMAN_HOST, false, false).await;
+    let check = package_manager::check(&fixture.host, &|_| {}).await;
+    assert_eq!(check.status, "success", "{}", check.error);
+    assert_eq!(check.distro, "Arch Linux");
+    assert_eq!(check.package_manager, "pacman");
+    assert_eq!(check.packages.len(), 2);
+    assert_eq!(check.packages[0].name, "openssl");
+    assert_eq!(check.packages[0].current_version, "3.6.0-1");
+    assert_eq!(check.packages[0].candidate_version, "3.6.0-2");
+    // checkupdates syncs a private copy: no sudo and no `pacman -Sy`. The refresh still
+    // gets the host's PTY setting, as every manager's refresh does; the listing does not.
+    assert_eq!(fixture.state.pty_count.load(Ordering::SeqCst), 1);
+    {
+        let commands = fixture.state.commands.lock().unwrap();
+        assert_eq!(
+            *commands,
+            [package_manager::DETECT, pacman::UPDATE, pacman::LIST]
+        );
+        assert!(
+            commands
+                .iter()
+                .all(|c| !c.contains("sudo") && !c.contains("-Sy"))
+        );
+    }
+
+    let upgrade = package_manager::upgrade(&fixture.host, &|_| {}).await;
+    assert_eq!(upgrade.status, "success", "{}", upgrade.error);
+    assert_eq!(upgrade.upgraded.len(), 1);
+    assert_eq!(upgrade.upgraded[0].name, "openssl");
+    assert_eq!(upgrade.packages.len(), 1);
+    assert_eq!(upgrade.packages[0].name, "linux");
+    // The refresh again, then the upgrade through sudo with the password.
+    assert_eq!(fixture.state.pty_count.load(Ordering::SeqCst), 3);
+    let commands = fixture.state.commands.lock().unwrap();
+    assert_eq!(
+        commands[3..],
+        package_manager::package_commands(&fixture.host, Mode::Upgrade)
+    );
+    assert!(commands.contains(&pacman::SUDO_UPGRADE.to_owned()));
+}
+
+#[tokio::test]
+async fn a_failed_pacman_sync_says_what_the_host_needs_and_lists_nothing() {
+    let fixture = fixture_on(PACMAN_HOST, true, false).await;
+    let result = package_manager::upgrade(&fixture.host, &|_| {}).await;
+    assert_eq!(result.status, "failed");
+    assert!(result.error.contains("pacman-contrib"), "{}", result.error);
+    assert!(result.packages.is_empty());
+    assert_eq!(
+        *fixture.state.commands.lock().unwrap(),
+        [package_manager::DETECT, pacman::UPDATE]
+    );
+}
+
+#[tokio::test]
+async fn apk_upgrades_as_root_and_an_unfetched_index_fails_despite_exit_zero() {
+    let mut fixture = fixture_on(APK_HOST, false, false).await;
+    fixture.host.username = "root".into();
+    fixture.host.manager_choice = "apk".into();
+    let result = package_manager::upgrade(&fixture.host, &|_| {}).await;
+    assert_eq!(result.status, "success", "{}", result.error);
+    assert_eq!(result.upgraded.len(), 1);
+    assert_eq!(result.upgraded[0].name, "openssl");
+    assert_eq!(result.upgraded[0].current_version, "3.6.0-r1");
+    assert_eq!(result.upgraded[0].architecture, "x86_64");
+    assert_eq!(result.packages.len(), 1);
+    assert_eq!(result.packages[0].name, "musl");
+    let commands = fixture.state.commands.lock().unwrap().clone();
+    assert_eq!(
+        commands,
+        [
+            package_manager::DETECT,
+            apk::UPDATE,
+            apk::LIST,
+            apk::UPGRADE,
+            apk::LIST
+        ]
+    );
+
+    let mut fixture = fixture_on(APK_HOST, true, false).await;
+    fixture.host.manager_choice = "apk".into();
+    let result = package_manager::upgrade(&fixture.host, &|_| {}).await;
+    assert_eq!(result.status, "failed");
+    assert!(
+        result.error.contains("更新套件索引失敗"),
+        "{}",
+        result.error
+    );
+    assert_eq!(
+        *fixture.state.commands.lock().unwrap(),
+        [package_manager::DETECT, apk::SUDO_UPDATE]
+    );
+}
+
+#[tokio::test]
+async fn hosts_saved_for_bsd_or_yum_come_back_linux_and_detected_automatically() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("hosts.db");
+    // A host list from before SQLite, the way an older MISF wrote it.
+    std::fs::write(
+        dir.path().join("hosts.json"),
+        serde_json::to_vec(&json!({
+            "version": 1,
+            "hosts": [
+                {"id":"bsd","name":"bsd","address":"10.0.0.1","port":22,"username":"root",
+                 "os":"BSD","auth_type":"password","password":"pw","package_manager":"pkg",
+                 "manager_choice":"pkg"},
+                {"id":"centos","name":"centos","address":"10.0.0.2","port":22,"username":"root",
+                 "os":"Linux","auth_type":"password","password":"pw","package_manager":"yum",
+                 "manager_choice":"yum"},
+                {"id":"debian","name":"debian","address":"10.0.0.3","port":22,"username":"root",
+                 "os":"Linux","auth_type":"password","password":"pw","package_manager":"apt"},
+            ],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let store = Store::new(path);
+    let db = store.read().unwrap();
+    let found: Vec<_> = db
+        .hosts
+        .iter()
+        .map(|h| {
+            (
+                h.id.as_str(),
+                h.os.as_str(),
+                h.package_manager.as_str(),
+                h.manager_choice.as_str(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        found,
+        [
+            ("bsd", "Linux", "", ""),
+            ("centos", "Linux", "", ""),
+            ("debian", "Linux", "apt", ""),
+        ]
+    );
+    // Each one can be saved again as it is now.
+    for host in db.hosts {
+        dispatch(json!({"action":"save","host":host}), &store, &|_| {})
+            .await
+            .unwrap();
     }
 }

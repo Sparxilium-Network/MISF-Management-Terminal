@@ -11,7 +11,7 @@ export global EditorState {
     in-out property <string> address;
     in-out property <string> port;
     in-out property <string> username;
-    // 0 Linux, 1 BSD.
+    // An index into the OS list; only Linux today.
     in property <int> os;
     // 0 password, 1 private key, 2 stored key.
     in property <int> auth;
@@ -130,7 +130,7 @@ export component EditorDialog inherits Modal {
                         color: Theme.ink;
                     }
                     ComboBox {
-                        model: ["Linux", "BSD"];
+                        model: ["Linux"];
                         current-index: EditorState.os;
                         selected(value) => { EditorState.os-chosen(self.current-index); }
                     }

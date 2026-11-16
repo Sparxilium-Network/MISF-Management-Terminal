@@ -1,11 +1,11 @@
 # MISF Management Terminal 架構
 
-> 最後修改：2026-11-16 ｜ 基於 commit：`8b1a81f`
+> 最後修改：2026-11-17 ｜ 基於 commit：`fe385c8`
 
 > [!WARNING]
 > **本專案仍處於開發階段，請勿用於正式環境。** 相關安全保護機制尚未完善。
 >
-> 目前只有 **APT**（Debian／Ubuntu）在真實主機上測試過。DNF、YUM、pkg 等其他功能只通過 loopback 模擬伺服器的自動測試，不保證可用或安全。
+> 目前只有 **APT**（Debian／Ubuntu）在真實主機上測試過。DNF、pacman、apk 等其他功能只通過 loopback 模擬伺服器的自動測試，不保證可用或安全。
 
 本文件描述目前的實作；每個 `.rs` 檔案的職責見 [原始碼檔案說明](PROJECT-DEV-ARCH.md)。建置、慣例與測試指令見 [開發說明](PROJECT-DEV.md)，加密容器的取捨見 [LUKSbox 加密儲存設計](luksbox-design.md)。
 
@@ -30,7 +30,7 @@ flowchart LR
     Worker --> Session[Session<br/>稽核與 debug 政策]
     Session --> Storage[StorageSession<br/>LUKSbox 容器]
     Storage --> DB[(hosts.lbx 內的<br/>SQLite 映像)]
-    Session -->|russh| Host[Linux／BSD 目標主機]
+    Session -->|russh| Host[Linux 目標主機]
 ```
 
 ## 程式結構
@@ -56,7 +56,7 @@ flowchart LR
 | `core/src/console.rs` | 即時遠端輸出：把執行中命令的輸出切成行、遮蔽密碼後交給終端機面板 |
 | `core/src/cancel.rs` | 使用者中斷進行中的遠端操作：UI 與 worker 共用的 `Cancel` 訊號 |
 | `core/src/shell.rs` | 互動 shell：開 PTY 與 login shell，在背景雙向搬運位元組，含流量控制 |
-| `core/src/package_manager/` | 套件管理：`mod.rs`（`Manager` 與分派）、`detect.rs`（系統偵測）、`operation.rs`（檢查／升級／dist-upgrade 流程）、`apt.rs`、`dnf.rs`、`yum.rs`、`pkg.rs`（各自的固定命令、失敗判斷與解析）、`rpm.rs`（DNF／YUM 共用的清單解析） |
+| `core/src/package_manager/` | 套件管理：`mod.rs`（`Manager` 與分派）、`detect.rs`（系統偵測）、`operation.rs`（檢查／升級／dist-upgrade 流程）、`apt.rs`、`dnf.rs`、`pacman.rs`、`apk.rs`（各自的固定命令、失敗判斷與解析）、`rpm.rs`（DNF 的清單解析） |
 | `core/src/model.rs` | `Host`、`SshKey`、`HostGroup`、`CheckResult`、`UpgradePlan`、`RestartStatus`、`ConnectionTest` |
 | `core/src/audit.rs`、`core/src/runtime.rs` | 操作日誌；資料目錄與 `--debug.*` 參數 |
 
@@ -87,15 +87,16 @@ UI 與 CLI 都送出 `{"action": …}` JSON 給 `Session::handle`。CLI 從 stdi
 
 每個套件管理器一個檔案，命令一律是 `&'static str` 常數，不把主機紀錄中的任何值插入命令；確認視窗顯示的就是實際執行的字串。`Manager` 以 `match` 分派，新增套件管理器時編譯器會要求補齊每個操作。測試確認 root 命令不含 sudo、一般帳號的命令都使用相同的 `sudo -S -p` 提示標記。
 
-每次測試、檢查或升級先以 `sh -c` 執行 `uname -s`／`uname -r`、讀取 `/etc/os-release` 的 NAME／VERSION_ID（例如「Debian 13」「Ubuntu 26.04」），並列出可用的 apt、dnf、yum 與已初始化的 pkg。Linux 依 APT → DNF → YUM 選擇，FreeBSD／DragonFly 用 pkg，其餘只支援連線測試。使用者可在主機上指定套件管理器（`manager_choice`），但它必須確實存在。主機已有偵測紀錄時，執行時偵測結果不同即失敗，不執行套件命令，因為確認視窗顯示的是紀錄中的命令。
+每次測試、檢查或升級先以 `sh -c` 執行 `uname -s`／`uname -r`、讀取 `/etc/os-release` 的 NAME／VERSION_ID（例如「Debian 13」「Ubuntu 26.04」），並列出可用的 apt、dnf、pacman 與 apk。只接受 Linux，依 APT → DNF → pacman → apk 選擇；沒有其中任何一種（例如只有 yum）時只支援連線測試。舊版存下的 BSD、YUM、pkg 設定在讀取主機庫時（`Host::forget_unsupported`）改回 Linux 與自動偵測，不另做資料庫升級，下次儲存時寫回。使用者可在主機上指定套件管理器（`manager_choice`），但它必須確實存在。主機已有偵測紀錄時，執行時偵測結果不同即失敗，不執行套件命令，因為確認視窗顯示的是紀錄中的命令。
 
 | 管理器 | 檢查 | 升級 | 實機測試 |
 | --- | --- | --- | --- |
 | APT | `apt-get -q=1 update`，再以英文 locale 列出待更新套件；有待更新套件時以唯讀的 `apt-get -s -q=1 upgrade` 找出 phasing 延後的套件 | `apt-get -y upgrade`（`DEBIAN_FRONTEND=noninteractive`、`NEEDRESTART_MODE=l`、`--force-confdef --force-confold`）；另有使用者明確選擇的 `dist-upgrade`（相同參數） | upgrade 已測試；dist-upgrade 未實機測試 |
-| DNF／YUM | `makecache`，再 `check-update -C` 並輸出 `rpm -qa` 版本；退出碼 0／100 為成功 | `-y upgrade` | 未測試 |
-| pkg | `pkg update`，`pkg version -URv -l '<'` | `pkg upgrade -y` | 未測試 |
+| DNF | `makecache`，再 `check-update -C` 並輸出 `rpm -qa` 版本；退出碼 0／100 為成功 | `-y upgrade` | 未測試 |
+| pacman | `checkupdates`（pacman-contrib，需 fakeroot）在 `/tmp/checkup-db-<UID>` 同步私有資料庫，再 `checkupdates --nosync`；退出碼 0／2 為成功；不經 sudo，不動系統資料庫 | `pacman -Syu --noconfirm --noprogressbar` | 未測試 |
+| apk | `apk update`，再 `apk list --upgradable`（不經 sudo） | `apk upgrade --no-progress` | 未測試 |
 
-- 索引更新失敗不讀套件清單，也不開始升級。APT 輸出含 `E:`、DNF／YUM 含 `Error:`／`Failed to download metadata`／`Ignoring repositories`，或非零退出碼，即為失敗；升級失敗時提示遠端可能已部分升級。索引更新上限 5 分鐘，升級上限 30 分鐘。
+- 索引更新失敗不讀套件清單，也不開始升級。APT 輸出含 `E:`、DNF 含 `Error:`／`Failed to download metadata`／`Ignoring repositories`、pacman 含 `==> ERROR:`（失敗時另提示需要 pacman-contrib 與 fakeroot）、apk 含 `ERROR:` 或打不開／抓不到／略過索引的 `WARNING:`（apk 此時仍以 0 結束），或非零退出碼，即為失敗。升級輸出中各管理器自己的錯誤行（APT `E:`、DNF `Error:`、pacman `error:`、apk `ERROR:`）即使退出碼為 0 也視為失敗，並提示遠端可能已部分升級。索引更新上限 5 分鐘，升級上限 30 分鐘。
 - 升級前後各讀一次待更新清單：`CheckResult.upgraded` 為升級後消失的套件，`packages` 為剩餘套件，`operation` 為 `check`／`upgrade`／`dist_upgrade`。APT 的 phasing 延後套件在載入時從保存的輸出解析（升級或檢查的模擬皆可），kept back 套件與 dist-upgrade 計畫只從升級類結果解析，皆不另存欄位。
 - 輸出統一換行、移除 ANSI 與終端控制字串後保存，UI 以可選取的等寬文字顯示。每個步驟以 `transcript::heading` 產生的星號框標題分段（更新套件索引、待更新套件、APT upgrade、dist-upgrade 模擬、重新啟動狀態），框寬依標題的顯示寬度（中文算兩格）。每台主機只保存最近一次檢查或升級。
 
@@ -221,6 +222,6 @@ UI 把請求放入工作佇列，由背景執行緒與 Tokio runtime 執行 SSH 
 - 整合測試在 loopback 啟動測試 SSH 伺服器，涵蓋密碼／私鑰、指紋、連線資訊、PTY、拆包的 sudo 提示、系統偵測、APT 與 DNF 檢查／升級、套件管理器不符、混合批次、失敗處理、儲存流程，以及互動 shell 的回顯、視窗大小、結束與流量控制；不接觸真實主機。
 - 互動 shell 只在 loopback 測試伺服器上測過，尚未在真實主機上實測 `nano`、`top` 等全螢幕程式。
 - 儲存測試涵蓋未建立容器時拒絕、轉入保留原檔、鎖定與錯誤密碼、多金鑰槽、備份、密文篡改、並行開啟、WAL 與結構竄改拒絕。Passkey 以模擬驗證器測試，實體裝置依 [Passkey 實體測試](passkey-testing.md) 驗證。
-- 實機只測試過 APT；YUM 與 pkg 只有輸出解析的單元測試。
+- 實機只測試過 APT；pacman 與 apk 有輸出解析的單元測試與 loopback 模擬伺服器的整合測試。
 - 除了需逐次確認的 APT `dist-upgrade` 外，不支援 full-upgrade 類操作；MISF 自己執行的仍只有固定命令，其餘交給互動 shell（使用者自行輸入，不經 MISF 確認，不記錄輸入與輸出，稽核只記開啟與結束）。
 - 不支援排程、滾動升級或 Ansible；沒有原地改密碼、主金鑰輪替或 TPM。

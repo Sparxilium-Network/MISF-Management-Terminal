@@ -1,6 +1,6 @@
 # MISF Management Terminal
 
-> 最後修改：2026-11-16 ｜ 基於 commit：`ea4c9a9`
+> 最後修改：2026-11-17 ｜ 基於 commit：`fe385c8`
 
 [GitHub 儲存庫](https://github.com/Sparxilium-Network/MISF-Management-Terminal)
 
@@ -8,9 +8,9 @@
 > **本專案仍處於開發階段，請勿用於正式環境。**
 > 相關安全保護機制尚未完善。
 >
-> 目前只有 **APT**（Debian／Ubuntu）在真實主機上測試過；DNF、YUM、pkg 等其他功能不保證可用或安全。
+> 目前只有 **APT**（Debian／Ubuntu）在真實主機上測試過；DNF、pacman、apk 等其他功能不保證可用或安全。
 
-MISF 是一個桌面程式，用來集中管理多台 Linux／BSD 伺服器的套件更新：透過 SSH 連上主機，檢查有哪些套件可以更新，並在你確認後升級。目標是讓大多數更新作業都能在 MISF 內完成，不必另外開 shell；需要手動處理時，也可以直接在 MISF 的終端機對主機開互動 shell。不需要安裝 Java、瀏覽器或另外架設管理伺服器。
+MISF 是一個桌面程式，用來集中管理多台 Linux 伺服器的套件更新：透過 SSH 連上主機，檢查有哪些套件可以更新，並在你確認後升級。目標是讓大多數更新作業都能在 MISF 內完成，不必另外開 shell；需要手動處理時，也可以直接在 MISF 的終端機對主機開互動 shell。不需要安裝 Java、瀏覽器或另外架設管理伺服器。
 
 - [使用指南](docs/user-guide.md)：終端機與互動 shell、批次作業、整理主機清單、設定與解鎖金鑰管理等進階用法。
 - [開發說明](docs/PROJECT-DEV.md)：給開發者的建置、架構與測試文件入口。
@@ -47,11 +47,11 @@ MISF 是一個桌面程式，用來集中管理多台 Linux／BSD 伺服器的�
 | --- | --- | --- | --- |
 | Debian、Ubuntu | APT | 檢查與升級 | 已測試 |
 | Fedora、RHEL 8 以上 | DNF | 檢查與升級 | 未測試，不保證可用或安全 |
-| CentOS 7 等 | YUM | 檢查與升級 | 未測試，不保證可用或安全 |
-| FreeBSD、DragonFly | pkg | 檢查與升級 | 未測試，不保證可用或安全 |
-| OpenBSD、NetBSD | — | 只支援連線測試 | 未測試 |
+| Arch Linux | pacman | 檢查與升級（主機需安裝 pacman-contrib 與 fakeroot） | 未測試，不保證可用或安全 |
+| Alpine Linux | apk | 檢查與升級（一般帳號需安裝 sudo） | 未測試，不保證可用或安全 |
+| 其他 Linux | — | 只支援連線測試 | 未測試 |
 
-程式會自動偵測套件管理器；若同一台主機裝了多種（例如同時有 DNF 與 YUM），可在「編輯主機」手動指定。
+只支援 Linux 主機；YUM（CentOS 7 等）與 BSD 已不再支援。程式會自動偵測套件管理器；若同一台主機裝了多種，可在「編輯主機」手動指定。
 
 要一次檢查或升級多台主機、用分類整理主機清單，或調整外觀與預設解鎖方式，請見 [使用指南](docs/user-guide.md)。
 

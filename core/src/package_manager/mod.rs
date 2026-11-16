@@ -5,13 +5,13 @@
 //! constants: nothing from a host record is ever interpolated into them, and the
 //! confirmation dialog shows exactly the strings that run.
 
+pub mod apk;
 pub mod apt;
 pub mod detect;
 pub mod dnf;
 mod operation;
-pub mod pkg;
+pub mod pacman;
 mod rpm;
-pub mod yum;
 
 pub use detect::{DETECT, Platform, parse_platform};
 pub(crate) use operation::run;
@@ -85,8 +85,8 @@ pub struct Commands {
 pub enum Manager {
     Apt,
     Dnf,
-    Yum,
-    Pkg,
+    Pacman,
+    Apk,
 }
 
 impl Manager {
@@ -94,8 +94,8 @@ impl Manager {
         Some(match id {
             "apt" => Self::Apt,
             "dnf" => Self::Dnf,
-            "yum" => Self::Yum,
-            "pkg" => Self::Pkg,
+            "pacman" => Self::Pacman,
+            "apk" => Self::Apk,
             _ => return None,
         })
     }
@@ -104,8 +104,8 @@ impl Manager {
         match self {
             Self::Apt => "apt",
             Self::Dnf => "dnf",
-            Self::Yum => "yum",
-            Self::Pkg => "pkg",
+            Self::Pacman => "pacman",
+            Self::Apk => "apk",
         }
     }
 
@@ -113,8 +113,8 @@ impl Manager {
         match self {
             Self::Apt => "APT",
             Self::Dnf => "DNF",
-            Self::Yum => "YUM",
-            Self::Pkg => "pkg",
+            Self::Pacman => "pacman",
+            Self::Apk => "apk",
         }
     }
 
@@ -125,10 +125,10 @@ impl Manager {
             (Self::Apt, false) => apt::SUDO,
             (Self::Dnf, true) => dnf::ROOT,
             (Self::Dnf, false) => dnf::SUDO,
-            (Self::Yum, true) => yum::ROOT,
-            (Self::Yum, false) => yum::SUDO,
-            (Self::Pkg, true) => pkg::ROOT,
-            (Self::Pkg, false) => pkg::SUDO,
+            (Self::Pacman, true) => pacman::ROOT,
+            (Self::Pacman, false) => pacman::SUDO,
+            (Self::Apk, true) => apk::ROOT,
+            (Self::Apk, false) => apk::SUDO,
         }
     }
 
@@ -136,24 +136,45 @@ impl Manager {
     fn update_failed(self, line: &str) -> bool {
         match self {
             Self::Apt => apt::update_failed(line),
-            Self::Dnf | Self::Yum => rpm::update_failed(line),
-            Self::Pkg => pkg::update_failed(line),
+            Self::Dnf => rpm::update_failed(line),
+            Self::Pacman => pacman::update_failed(line),
+            Self::Apk => apk::update_failed(line),
+        }
+    }
+
+    /// Why a failed index refresh failed, when the manager needs something installed.
+    fn update_needs(self) -> Option<&'static str> {
+        match self {
+            Self::Pacman => Some(pacman::NEEDS),
+            Self::Apt | Self::Dnf | Self::Apk => None,
+        }
+    }
+
+    /// Whether an upgrade output line reports an error the exit code may hide.
+    fn upgrade_failed(self, line: &str) -> bool {
+        match self {
+            Self::Apt => line.starts_with("E:"),
+            Self::Dnf => line.starts_with("Error:"),
+            Self::Pacman => pacman::upgrade_failed(line),
+            Self::Apk => apk::upgrade_failed(line),
         }
     }
 
     /// Whether the listing command's exit code means it listed successfully.
     fn listed(self, code: u32) -> bool {
         match self {
-            Self::Dnf | Self::Yum => rpm::listed(code),
-            Self::Apt | Self::Pkg => code == 0,
+            Self::Dnf => rpm::listed(code),
+            Self::Pacman => pacman::listed(code),
+            Self::Apt | Self::Apk => code == 0,
         }
     }
 
     fn parse_pending(self, output: &str) -> Result<Vec<Package>> {
         match self {
             Self::Apt => apt::parse_pending(output),
-            Self::Dnf | Self::Yum => rpm::parse_pending(output),
-            Self::Pkg => pkg::parse_pending(output),
+            Self::Dnf => rpm::parse_pending(output),
+            Self::Pacman => pacman::parse_pending(output),
+            Self::Apk => apk::parse_pending(output),
         }
     }
 
@@ -161,7 +182,7 @@ impl Manager {
     fn held_back(self, output: &str) -> Vec<String> {
         match self {
             Self::Apt => apt::parse_phased(output),
-            Self::Dnf | Self::Yum | Self::Pkg => vec![],
+            Self::Dnf | Self::Pacman | Self::Apk => vec![],
         }
     }
 
@@ -169,7 +190,7 @@ impl Manager {
     fn kept_back(self, output: &str) -> Vec<String> {
         match self {
             Self::Apt => apt::parse_kept_back(output),
-            Self::Dnf | Self::Yum | Self::Pkg => vec![],
+            Self::Dnf | Self::Pacman | Self::Apk => vec![],
         }
     }
 }
@@ -206,7 +227,7 @@ pub fn package_commands(host: &Host, mode: Mode) -> Vec<&'static str> {
 mod tests {
     use super::{Manager, SUDO_PROMPT};
 
-    const ALL: [Manager; 4] = [Manager::Apt, Manager::Dnf, Manager::Yum, Manager::Pkg];
+    const ALL: [Manager; 4] = [Manager::Apt, Manager::Dnf, Manager::Pacman, Manager::Apk];
 
     #[test]
     fn ids_round_trip() {
@@ -250,11 +271,16 @@ mod tests {
             // The simulation changes nothing, so it never needs sudo.
             assert_eq!(user.simulate, root.simulate);
             assert_eq!(user.preview, root.preview);
-            for command in [user.update, user.upgrade] {
-                assert!(command.contains(&sudo), "{command}");
+            assert!(user.upgrade.contains(&sudo), "{}", user.upgrade);
+            // The refresh and listing either need no privileges (pacman's checkupdates
+            // syncs a private copy) or go through the same sudo form.
+            for command in [user.update, user.list] {
+                assert!(
+                    !command.contains("sudo") || command.contains(&sudo),
+                    "{command}"
+                );
             }
-            // Listing either needs no privileges or goes through the same sudo form.
-            assert!(!user.list.contains("sudo") || user.list.contains(&sudo));
+            assert_eq!(user.update.contains("sudo"), manager != Manager::Pacman);
             for command in [user.update, user.list, user.upgrade] {
                 assert!(command.contains("LC_ALL=C"), "{command}");
             }

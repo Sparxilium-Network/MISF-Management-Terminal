@@ -1,5 +1,14 @@
 # 全工作區檢查結果
 
+## 2026-11-17（新增 pacman、apk，移除 YUM 與 BSD，分支 `feat/WYSIWYG-Terminal`，基於 `fe385c8`）
+
+- 使用者決定：舊主機保留並改回自動偵測（`Host::forget_unsupported`，讀取時處理、不做資料庫升級）；編輯主機的 OS 選單保留但只剩 Linux；pacman 檢查用 `checkupdates`（需 pacman-contrib 與 fakeroot，不經 sudo、不動系統資料庫）；apk 只支援 root 或 sudo。
+- core：新增 `pacman.rs`、`apk.rs`，刪除 `yum.rs`、`pkg.rs`；偵測只接受 Linux；升級的錯誤行改依管理器判斷（APT `E:`、DNF `Error:`、pacman `error:`、apk `ERROR:`）；apk 索引警告視為更新失敗；pacman 更新失敗時提示需要的套件。
+- UI：管理器選單改為 APT／DNF／pacman／apk；pacman 的檢查說明另寫（不使用 sudo）；語系移除 BSD／YUM／pkg。
+- 測試：既有測試改掉 YUM／BSD 的例子；新增 pacman、apk 的單元測試與 loopback 整合測試（workflow 33 項），以及舊紀錄改回自動偵測的測試。`cargo test --workspace`（luksbox-fido2 22、misf 37、misf-core 72、workflow 33）、兩種 clippy、`cargo fmt --check` 通過。
+- 使用者說明測試另有人寫，sshtest 的 pacman／apk 容器測試未納入（草稿留在工作目錄，未追蹤）。實作前曾以 Arch 與 Alpine 3.24（apk-tools 3.0.9）容器確認命令與輸出格式。
+- 未驗證：真實 Arch／Alpine 主機；apk-tools 2（Alpine 3.22 以前）只依文件與解析測試；新選單與說明的實際畫面。升級中斷後的提示仍寫 `dpkg --configure -a`，對 pacman／apk 不適用，沒有改。
+
 ## 2026-11-17（sshtest 新增 DNF，分支 `feat/WYSIWYG-Terminal`，基於 `ffff655`）
 
 - 使用者要求新增 DNF 版本。新增 `sshtest/dnf/`：`docker/`（預設 `rockylinux/rockylinux:9`，以 rpmbuild 建出 16 個測試套件、`createrepo_c` 本機套件庫）、`support.rs`（`Rpm`）、五個主題檔共 22 項測試、`README.md`。`src/lib.rs` 新增 `DNF`，並把通用斷言（`names`、`assert_plain`、`assert_failed`）從 `apt/support.rs` 移到共用框架。基底映像沒有先問使用者，選 Rocky Linux 9 是因為既有模擬測試與文件都以它為例。core 與 app 沒有改，沒有新增依賴，`Cargo.lock` 沒有變。

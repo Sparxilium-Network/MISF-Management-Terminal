@@ -1,4 +1,4 @@
-//! DNF (Fedora, RHEL 8 and later). Listing and parsing are shared with YUM in `rpm.rs`.
+//! DNF (Fedora, RHEL 8 and later). Listing is parsed in `rpm.rs`.
 
 use super::Commands;
 

@@ -86,16 +86,12 @@ impl App {
         }
     }
 
-    /// Picks the editor's OS family; a package manager the new family lacks is dropped.
+    /// Picks the editor's OS family; Linux is the only one today.
     pub fn editor_os(&mut self, os: &str) {
         let Some(editor) = &mut self.editor else {
             return;
         };
         editor.host.os = os.to_owned();
-        let managers = misf_core::model::manager_choices(&editor.host.os);
-        if !managers.contains(&editor.host.manager_choice.as_str()) {
-            editor.host.manager_choice.clear();
-        }
         self.log(Action::FormEdit, Outcome::Succeeded);
     }
 
@@ -185,7 +181,7 @@ fn pull_keys(app: &mut App, w: &AppWindow) {
 }
 
 fn manager_choices(t: Translator, editor: &Editor) -> (Vec<String>, i32) {
-    let managers = misf_core::model::manager_choices(&editor.host.os);
+    let managers = misf_core::model::MANAGER_CHOICES;
     let auto = if editor.host.package_manager.is_empty() {
         t.get("host.manager_auto").to_owned()
     } else {
@@ -248,7 +244,7 @@ pub fn push(app: &mut App, w: &AppWindow) {
     }
     state.set_shown(true);
     state.set_adding(editor.host.id.is_empty());
-    state.set_os(if editor.host.os == "BSD" { 1 } else { 0 });
+    state.set_os(OS.iter().position(|os| *os == editor.host.os).unwrap_or(0) as i32);
     let saved = editor.host.auth_type == "key" && editor.saved_key;
     state.set_auth(match (editor.host.auth_type.as_str(), saved) {
         ("key", true) => 2,
@@ -327,6 +323,9 @@ fn push_keys(app: &mut App, w: &AppWindow, t: Translator) {
     state.set_error(dialog.error.clone().into());
 }
 
+/// The editor's OS families, in the order of its list.
+const OS: [&str; 1] = ["Linux"];
+
 pub fn wire(ctx: &Ctx, w: &AppWindow) {
     let state = w.global::<EditorState>();
     let c = ctx.clone();
@@ -335,7 +334,9 @@ pub fn wire(ctx: &Ctx, w: &AppWindow) {
     state.on_os_chosen(move |index| {
         c.update_with(|app, w| {
             pull_editor(app, w);
-            app.editor_os(if index == 1 { "BSD" } else { "Linux" });
+            if let Some(os) = usize::try_from(index).ok().and_then(|i| OS.get(i)) {
+                app.editor_os(os);
+            }
         })
     });
     let c = ctx.clone();
@@ -355,7 +356,7 @@ pub fn wire(ctx: &Ctx, w: &AppWindow) {
     state.on_manager_chosen(move |index| {
         c.update(|app| {
             if let Some(editor) = &mut app.editor {
-                let managers = misf_core::model::manager_choices(&editor.host.os);
+                let managers = misf_core::model::MANAGER_CHOICES;
                 if let Some(id) = usize::try_from(index).ok().and_then(|i| managers.get(i)) {
                     editor.host.manager_choice = (*id).into();
                 }

@@ -1,6 +1,6 @@
 # 原始碼檔案說明
 
-> 最後修改：2026-11-17 ｜ 基於 commit：`ffff655`
+> 最後修改：2026-11-17 ｜ 基於 commit：`fe385c8`
 
 每個 `.rs` 檔案負責什麼。整體設計與資料流見 [架構](architecture.md)，建置與慣例見 [開發說明](PROJECT-DEV.md)。新增、改名或刪除 `.rs` 檔案時，請一併更新本文件。
 
@@ -25,7 +25,7 @@ Workspace 有四個 crate：`core`（`misf-core`，核心函式庫與 JSON CLI�
 
 | 檔案 | 作用 |
 | --- | --- |
-| `core/src/model.rs` | 資料結構 `Host`、`SshKey`、`HostGroup`、`Package`、`CheckResult`（`is_upgrade`）、`UpgradePlan`、`RestartStatus`、`ConnectionTest`；主機欄位驗證、`redact`（遮蔽錯誤與輸出中的密碼／位址）、`manager()`（選用或偵測到的套件管理器）、`decode_private_key`（拒絕 RSA）。 |
+| `core/src/model.rs` | 資料結構 `Host`、`SshKey`、`HostGroup`、`Package`、`CheckResult`（`is_upgrade`）、`UpgradePlan`、`RestartStatus`、`ConnectionTest`；主機欄位驗證、`redact`（遮蔽錯誤與輸出中的密碼／位址）、`manager()`（選用或偵測到的套件管理器）、`MANAGER_CHOICES`（可手動指定的套件管理器）、`forget_unsupported`（讀取時把舊版的 BSD／YUM／pkg 設定改回 Linux 與自動偵測）、`decode_private_key`（拒絕 RSA）。 |
 | `core/src/store.rs` | `Database`（記憶體中的完整主機資料）與明文 `Store`：只在建立加密主機庫時讀取舊版 `hosts.db`／`hosts.json`，含跨程序檔案鎖與舊 JSON 解析。 |
 | `core/src/sqlite.rs` | SQLite 讀寫：開檔前拒絕 WAL、強化連線設定、`quick_check`、`application_id`／`user_version` 與結構逐列比對；`load`／`save` 在 `Database` 與資料表之間轉換；記憶體映像的序列化與 `sqlite3_deserialize`。 |
 | `core/src/vault.rs` | `StorageSession`：LUKSbox 容器的建立（含重新解鎖驗證）、密碼／Passkey 解鎖、鎖定、結構升級詢問、金鑰槽新增／命名／撤銷、加密備份、舊版明文轉入與刪除（`hosts.db`、`hosts.json`、`hosts.v<N>.bak.db` 依序逐一確認）；`hosts_for_audit` 以一次讀取取得批次稽核用的主機。處理 `storage_status` 與所有 `vault_*` 請求，解鎖後把主機請求轉給 `dispatch`。 |
@@ -57,9 +57,9 @@ Workspace 有四個 crate：`core`（`misf-core`，核心函式庫與 JSON CLI�
 | `core/src/package_manager/operation.rs` | 一台主機的檢查／升級／dist-upgrade 流程：偵測 → 選定管理器（不得與紀錄或確認內容不同）→ 更新索引 → 讀清單 →（檢查且有待更新：唯讀模擬 upgrade，找出 phasing 延後的套件）→（升級或 dist-upgrade → 再讀清單）→（有 kept back：唯讀模擬 dist-upgrade）→（APT：讀重啟狀態），選用步驟失敗不影響結果；各段輸出以星號框標題分隔，最後組成 `CheckResult`。 |
 | `core/src/package_manager/apt.rs` | APT 的固定命令（含 `DIST_UPGRADE`、唯讀的 `SIMULATE` 與檢查時用的 `PREVIEW`，以及 root 直接執行／一般帳號整段放進 sudo 的 `STATUS`／`SUDO_STATUS`）、索引更新失敗判斷、`apt list --upgradable` 解析、phasing 延後與 kept back 套件解析、`parse_plan`（`apt-get -s` 的 `Inst`／`Remv`），以及 `parse_restart`。 |
 | `core/src/package_manager/dnf.rs` | DNF 的固定命令。 |
-| `core/src/package_manager/yum.rs` | YUM 的固定命令。 |
-| `core/src/package_manager/rpm.rs` | DNF／YUM 共用：索引更新失敗判斷、`check-update` 退出碼（0／100）與清單解析（含 yum 換行、rpm 已安裝版本）。 |
-| `core/src/package_manager/pkg.rs` | FreeBSD／DragonFly pkg 的固定命令、失敗判斷與 `pkg version` 解析。 |
+| `core/src/package_manager/rpm.rs` | DNF 的索引更新失敗判斷、`check-update` 退出碼（0／100）與清單解析（含換行、rpm 已安裝版本）。 |
+| `core/src/package_manager/pacman.rs` | pacman 的固定命令（`checkupdates` 檢查、`pacman -Syu` 升級）、失敗判斷、退出碼（0／2）與 `name old -> new` 解析。 |
+| `core/src/package_manager/apk.rs` | apk 的固定命令、索引警告與 `ERROR:` 的失敗判斷，以及 `apk list --upgradable` 解析。 |
 
 ### 整合測試
 

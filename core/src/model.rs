@@ -39,7 +39,7 @@ pub struct Host {
     pub notes: String,
     /// Detected over SSH, e.g. "Ubuntu 26.04"; never taken from the editor.
     pub distro: String,
-    /// Detected package manager ID ("apt", "dnf", "yum" or "pkg").
+    /// Detected package manager ID ("apt", "dnf", "pacman" or "apk").
     pub package_manager: String,
     /// Package manager chosen in the editor; empty means use the detected one.
     pub manager_choice: String,
@@ -90,17 +90,14 @@ impl Host {
         );
         ensure!(self.port > 0, "SSH 埠必須介於 1–65535");
         ensure!(!self.username.is_empty(), "請填寫 SSH 使用者名稱");
-        ensure!(
-            ["Linux", "BSD"].contains(&self.os.as_str()),
-            "僅支援 Linux／BSD"
-        );
+        ensure!(self.os == "Linux", "僅支援 Linux");
         ensure!(
             ["password", "key"].contains(&self.auth_type.as_str()),
             "不支援的認證方式"
         );
         ensure!(
-            manager_choices(&self.os).contains(&self.manager_choice.as_str()),
-            "此目標系統不支援所選的套件管理器"
+            MANAGER_CHOICES.contains(&self.manager_choice.as_str()),
+            "不支援所選的套件管理器"
         );
         if self.auth_type == "key" && !self.key_id.is_empty() {
             // The stored key is filled in when connecting; keep no second copy here.
@@ -118,6 +115,27 @@ impl Host {
             self.key_id.clear();
         }
         Ok(())
+    }
+
+    /// Brings a record saved by an older MISF to what this one supports: BSD and YUM/pkg
+    /// are gone, so the host becomes Linux and its package manager goes back to automatic
+    /// detection. The next operation detects again and says what the host lacks.
+    /// Returns whether anything changed.
+    pub fn forget_unsupported(&mut self) -> bool {
+        let mut changed = false;
+        if self.os == "BSD" {
+            self.os = "Linux".into();
+            changed = true;
+        }
+        if !MANAGER_CHOICES.contains(&self.manager_choice.as_str()) {
+            self.manager_choice.clear();
+            changed = true;
+        }
+        if !MANAGER_CHOICES.contains(&self.package_manager.as_str()) {
+            self.package_manager.clear();
+            changed = true;
+        }
+        changed
     }
 
     /// The chosen, else the detected package manager; records older than detection only
@@ -251,14 +269,8 @@ impl SshKey {
     }
 }
 
-/// Package managers a host of this OS family may be set to; "" means detect automatically.
-pub fn manager_choices(os: &str) -> &'static [&'static str] {
-    if os == "BSD" {
-        &["", "pkg"]
-    } else {
-        &["", "apt", "dnf", "yum"]
-    }
-}
+/// Package managers a host may be set to; "" means detect automatically.
+pub const MANAGER_CHOICES: [&str; 5] = ["", "apt", "dnf", "pacman", "apk"];
 
 #[derive(Clone, Default, Debug, Deserialize, Serialize, PartialEq)]
 pub struct Package {

@@ -1,11 +1,11 @@
 # MISF Management Terminal 開發說明
 
-> 最後修改：2026-11-17 ｜ 基於 commit：`ffff655`
+> 最後修改：2026-11-17 ｜ 基於 commit：`fe385c8`
 
 一般使用方式見 [README](../README.md) 與 [使用指南](user-guide.md)。本文件是開發文件的入口，給開發者與維護者，記錄建置、儲存格式、安全設計細節與測試方式。
 
 > [!WARNING]
-> 目前只有 **APT**（Debian／Ubuntu）在真實主機上測試過；DNF、YUM、pkg 等其他功能不保證可用或安全。
+> 目前只有 **APT**（Debian／Ubuntu）在真實主機上測試過；DNF、pacman、apk 等其他功能不保證可用或安全。
 
 全 Rust 原生桌面客戶端，以 Slint 繪製畫面，內建 Rust SSH 核心。畫面與核心編譯成同一個執行檔，不需要 Java、瀏覽器或管理伺服器。
 
@@ -93,14 +93,14 @@ Linux／macOS 可使用 `cargo run --locked -p misf`，須在對應平台建置�
 
 - 使用 russh 自帶 SSH，不呼叫系統 ssh，也不讀取電腦的 SSH config、known_hosts、SSH agent 或系統私鑰。不支援 RSA 私鑰與 RSA 主機金鑰（russh 未啟用 `rsa` 功能）。首次連線先核對並保存 SHA-256 主機指紋，確認前不提交帳密；指紋變更立即阻擋認證。
 - 系統偵測讀取 `uname` 與 `/etc/os-release`。偵測結果只來自主機本身，編輯主機不能改寫；位址或埠變更時清除。手動指定的套件管理器必須確實存在於主機上，否則在執行任何套件指令前停止。
-- 檢查先更新索引（`apt-get update`／`dnf makecache --refresh`／`yum makecache`／`pkg update`），停用動態下載進度。
-- 升級：APT 執行 `apt-get -y upgrade`（`DEBIAN_FRONTEND=noninteractive`、`--force-confold`、`NEEDRESTART_MODE=l`），只升級既有套件；DNF／YUM 執行 `-y upgrade`（可能依相依關係安裝或移除套件，新設定檔另存為 `.rpmnew`）；pkg 執行 `pkg upgrade -y`。索引更新上限 5 分鐘、升級上限 30 分鐘。
+- 檢查先更新索引（`apt-get update`／`dnf makecache --refresh`／pacman 的 `checkupdates`／`apk update`），停用動態下載進度。
+- 升級：APT 執行 `apt-get -y upgrade`（`DEBIAN_FRONTEND=noninteractive`、`--force-confold`、`NEEDRESTART_MODE=l`），只升級既有套件；DNF 執行 `-y upgrade`（可能依相依關係安裝或移除套件，新設定檔另存為 `.rpmnew`）；pacman 執行 `pacman -Syu --noconfirm`（新設定檔另存為 `.pacnew`）；apk 執行 `apk upgrade`（新設定檔另存為 `.apk-new`）。索引更新上限 5 分鐘、升級上限 30 分鐘。
 - 重啟提示只限 APT：檢查或升級後另外執行固定、唯讀的狀態命令（`/var/run/reboot-required` 與 `needrestart -r l -b`），一般帳號整段 `sh -c` 放在 sudo 裡執行，與 update／upgrade 相同；不解析升級輸出，讀取失敗不影響主結果。
 - APT 升級若有 kept back 套件，記入 `kept_back` 並以唯讀的 `apt-get -s dist-upgrade` 模擬變動；操作結束時 UI 彈出報告。`dist-upgrade` 是另一個需確認的操作，只限 APT，可能安裝或移除套件。MISF 從不重啟服務。重新開機以固定命令 `shutdown -r +1` 執行，只限 APT 主機，UI 需兩次確認。
 - APT 輸出中「Not upgrading yet due to phasing:」或舊版「The following upgrades have been deferred due to phasing:」之下縮排列出的套件，記為該次結果的 `phased`。升級時讀升級輸出；檢查時若有待更新套件，另外執行唯讀的 `apt-get -s -q=1 upgrade`（`apt::PREVIEW`，不取鎖、不需 sudo、不變更系統；失敗只讓 `phased` 為空）。它不另存欄位，載入時從保存的輸出重新解析，因此資料庫結構不變。檢查的模擬輸出中也有 kept back 與 `Inst` 行，但只有升級類結果才會解析成 kept back 與 dist-upgrade 計畫。
-- FreeBSD／DragonFly 的偵測命令以 `sh -c` 包裝，`pkg` 命令以 `env` 設定環境變數，csh 登入 shell 也能執行。
+- pacman 的檢查不經 sudo：`checkupdates` 在暫存目錄同步私有資料庫，避免 `pacman -Sy` 造成的部分升級；它需要 pacman-contrib 與 fakeroot。只支援 Linux，BSD 與 YUM 已移除。
 - sudo 密碼以 SSH channel 標準輸入傳送，不放在命令列。PTY 預設開啟（類似 `ssh -t`）。
-- 只有 APT 經過實機測試；DNF 另有真實容器的自動測試（`sshtest/dnf/`，Rocky Linux／AlmaLinux 9 的 dnf 4；Fedora 的 dnf5 目前無法解析清單），YUM、pkg 只有 loopback 模擬伺服器或輸出解析的自動測試。
+- 只有 APT 經過實機測試；DNF 另有真實容器的自動測試（`sshtest/dnf/`，Rocky Linux／AlmaLinux 9 的 dnf 4；Fedora 的 dnf5 目前無法解析清單），pacman、apk 只有 loopback 模擬伺服器或輸出解析的自動測試。
 - 批次作業最多 8 台並行、單次最多 256 台，每台完成就儲存；某台失敗時暫停開始新主機並詢問中斷或繼續（中斷不會停下已在執行的主機）；核心拒絕混合套件管理器的批次，執行時偵測到的套件管理器若與紀錄不同，該主機失敗而不執行。
 
 ## LUKSbox 加密儲存

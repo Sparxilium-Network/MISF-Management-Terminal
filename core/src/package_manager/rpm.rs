@@ -1,4 +1,4 @@
-//! What DNF and YUM share: both list through `check-update` and read versions from rpm.
+//! How DNF lists: `check-update` rows, with installed versions read from rpm.
 
 use crate::model::Package;
 use anyhow::{Result, bail, ensure};
@@ -21,7 +21,7 @@ pub(super) fn listed(code: u32) -> bool {
 /// Parses `check-update` rows, then the installed `name.arch evr` lines after the marker.
 pub(super) fn parse_pending(output: &str) -> Result<Vec<Package>> {
     let Some((updates, installed)) = output.split_once(INSTALLED_MARKER) else {
-        bail!("無法解析 DNF／YUM 套件清單；請查看原始輸出");
+        bail!("無法解析 DNF 套件清單；請查看原始輸出");
     };
     let mut tokens = Vec::new();
     for line in updates.lines().map(str::trim) {
@@ -34,17 +34,17 @@ pub(super) fn parse_pending(output: &str) -> Result<Vec<Package>> {
         {
             continue;
         }
-        // yum wraps long names onto their own line, so rows are rebuilt from tokens.
+        // dnf wraps long names onto their own line, so rows are rebuilt from tokens.
         tokens.extend(line.split_whitespace());
     }
     ensure!(
         tokens.len() % 3 == 0,
-        "無法解析 DNF／YUM 套件清單；請查看原始輸出"
+        "無法解析 DNF 套件清單；請查看原始輸出"
     );
     let mut packages = Vec::new();
     for row in tokens.chunks(3) {
         let Some((name, architecture)) = row[0].rsplit_once('.') else {
-            bail!("無法解析 DNF／YUM 套件清單；請查看原始輸出");
+            bail!("無法解析 DNF 套件清單；請查看原始輸出");
         };
         let current = installed
             .lines()

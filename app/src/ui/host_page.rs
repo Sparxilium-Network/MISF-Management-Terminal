@@ -175,11 +175,24 @@ pub fn push(app: &mut App, w: &AppWindow) {
     };
     state.set_check_label(check_label.into());
     state.set_upgrade_label(upgrade_label.into());
+    // pacman's check syncs a private copy, without sudo.
+    let (check_title, check_effect, check_risk) = match detected {
+        Some(package_manager::Manager::Pacman) => (
+            t.get("hint.check_title_pacman").to_owned(),
+            t.get("hint.check_effect_pacman").to_owned(),
+            t.get("hint.check_risk_pacman"),
+        ),
+        _ => (
+            t.format("hint.check_title", &manager),
+            check_effect,
+            t.get("hint.check_risk"),
+        ),
+    };
     state.set_check_hint(hint(
-        &t.format("hint.check_title", &manager),
+        &check_title,
         &package_manager::package_commands(&host, package_manager::Mode::Check),
         &check_effect,
-        t.get("hint.check_risk"),
+        check_risk,
     ));
     state.set_upgrade_hint(hint(
         &t.format("hint.upgrade_title", &manager),
