@@ -1,0 +1,23 @@
+#!/bin/sh
+# Publishes the named packages' second version in the local repository, replacing
+# whatever was published before, and signs its index. Without names the repository is
+# valid and empty. `--v1` publishes every package's first version instead (image build).
+set -eu
+repo=/opt/misf/repo
+arch=$(apk --print-arch)
+rm -rf "$repo"
+mkdir -p "$repo/$arch"
+if [ "${1:-}" = --v1 ]; then
+    cp /opt/misf/pool/v1/*.apk "$repo/$arch"/
+else
+    for name in "$@"; do
+        cp /opt/misf/pool/v2/"$name"-[0-9]*.apk "$repo/$arch"/
+    done
+fi
+cd "$repo/$arch"
+set -- *.apk
+[ -e "$1" ] || set --
+# The packages' /bin/sh dependency comes from the system, not this index: no warnings.
+# noarch packages are listed under this architecture, as abuild does for Alpine.
+apk index --quiet --rewrite-arch "$arch" -o APKINDEX.tar.gz "$@" 2>/dev/null
+abuild-sign -q -k /opt/misf/sign.rsa -p "$(basename /opt/misf/*.rsa.pub)" APKINDEX.tar.gz

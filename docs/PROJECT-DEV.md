@@ -1,6 +1,6 @@
 # MISF Management Terminal 開發說明
 
-> 最後修改：2026-11-17 ｜ 基於 commit：`fe385c8`
+> 最後修改：2026-11-17 ｜ 基於 commit：`8aaa1b9`
 
 一般使用方式見 [README](../README.md) 與 [使用指南](user-guide.md)。本文件是開發文件的入口，給開發者與維護者，記錄建置、儲存格式、安全設計細節與測試方式。
 
@@ -35,7 +35,7 @@
 
 - `app/`：Slint 原生 UI（`app/ui/*.slint` 宣告畫面，`app/src/ui/` 處理狀態）；背景執行緒執行網路及磁碟作業。
 - `core/`：主機資料、SSH 及套件管理核心；亦提供 stdin/stdout JSON CLI。
-- `sshtest/`：以真實容器測試套件管理器故障情境的測試 crate（需要 Docker，預設不執行）；每個套件管理器一個資料夾，目前有 `sshtest/apt/` 與 `sshtest/dnf/`。見 [`sshtest/README.md`](../sshtest/README.md)。
+- `sshtest/`：以真實容器測試套件管理器故障情境的測試 crate（需要 Docker，預設不執行）；每個套件管理器一個資料夾，目前有 `sshtest/apt/`、`sshtest/dnf/`、`sshtest/pacman/`、`sshtest/apk/`。見 [`sshtest/README.md`](../sshtest/README.md)。
 - CLI 的加密工作階段只存在同一程序內；可透過 stdin 傳入 JSON 請求陣列，依序執行解鎖、操作與鎖定。不要把解鎖密碼放進命令列參數。
 
 ## 啟動與打包
@@ -100,7 +100,7 @@ Linux／macOS 可使用 `cargo run --locked -p misf`，須在對應平台建置�
 - APT 輸出中「Not upgrading yet due to phasing:」或舊版「The following upgrades have been deferred due to phasing:」之下縮排列出的套件，記為該次結果的 `phased`。升級時讀升級輸出；檢查時若有待更新套件，另外執行唯讀的 `apt-get -s -q=1 upgrade`（`apt::PREVIEW`，不取鎖、不需 sudo、不變更系統；失敗只讓 `phased` 為空）。它不另存欄位，載入時從保存的輸出重新解析，因此資料庫結構不變。檢查的模擬輸出中也有 kept back 與 `Inst` 行，但只有升級類結果才會解析成 kept back 與 dist-upgrade 計畫。
 - pacman 的檢查不經 sudo：`checkupdates` 在暫存目錄同步私有資料庫，避免 `pacman -Sy` 造成的部分升級；它需要 pacman-contrib 與 fakeroot。只支援 Linux，BSD 與 YUM 已移除。
 - sudo 密碼以 SSH channel 標準輸入傳送，不放在命令列。PTY 預設開啟（類似 `ssh -t`）。
-- 只有 APT 經過實機測試；DNF 另有真實容器的自動測試（`sshtest/dnf/`，Rocky Linux／AlmaLinux 9 的 dnf 4；Fedora 的 dnf5 目前無法解析清單），pacman、apk 只有 loopback 模擬伺服器或輸出解析的自動測試。
+- 只有 APT 經過實機測試；DNF 另有真實容器的自動測試（`sshtest/dnf/`，Rocky Linux／AlmaLinux 9 的 dnf 4；Fedora 的 dnf5 目前無法解析清單），pacman 與 apk 也各有真實容器的自動測試（`sshtest/pacman/`：Arch Linux；`sshtest/apk/`：Alpine 3.24 的 apk-tools 3），但都沒有在真實主機上試過。
 - 批次作業最多 8 台並行、單次最多 256 台，每台完成就儲存；某台失敗時暫停開始新主機並詢問中斷或繼續（中斷不會停下已在執行的主機）；核心拒絕混合套件管理器的批次，執行時偵測到的套件管理器若與紀錄不同，該主機失敗而不執行。
 
 ## LUKSbox 加密儲存
@@ -166,13 +166,13 @@ cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 
 ### 執行所有測試
 
-`cargo test --workspace` 會略過標為 `#[ignore]` 的測試；目前只有 `sshtest/` 的真實容器測試是這一類。要連它們一起跑，先啟動 Docker，再加上 `--include-ignored`（約 4 分鐘）：
+`cargo test --workspace` 會略過標為 `#[ignore]` 的測試；目前只有 `sshtest/` 的真實容器測試是這一類。要連它們一起跑，先啟動 Docker，再加上 `--include-ignored`（約 6 分鐘）：
 
 ```powershell
 cargo test --locked --workspace -- --include-ignored
 ```
 
-還有少數要等幾分鐘的測試（目前是 APT 與 DNF 各一項「網路無聲中斷」，同時進行，約 4 分鐘），設了 `MISF_SSHTEST_SLOW=1` 才真的執行，否則直接通過並印出略過的說明。真正一項不漏：
+還有少數要等幾分鐘的測試（目前是每個套件管理器各一項「網路無聲中斷」，各約 4 分鐘，依序執行，合計約 15 分鐘），設了 `MISF_SSHTEST_SLOW=1` 才真的執行，否則直接通過並印出略過的說明。真正一項不漏：
 
 ```powershell
 $env:MISF_SSHTEST_SLOW = '1'
@@ -187,7 +187,7 @@ Linux／macOS 的 shell：`MISF_SSHTEST_SLOW=1 cargo test --locked --workspace -
 | 一般測試（不含容器） | `cargo test --locked --workspace` |
 | 全部（含容器） | `cargo test --locked --workspace -- --include-ignored` |
 | 只跑容器測試 | `cargo test --locked -p misf-sshtest -- --ignored` |
-| 只跑某個套件管理器的容器測試 | `cargo test --locked -p misf-sshtest --test apt -- --ignored`（或 `--test dnf`） |
+| 只跑某個套件管理器的容器測試 | `cargo test --locked -p misf-sshtest --test apt -- --ignored`（或 `--test dnf`、`--test pacman`、`--test apk`） |
 | 只跑某一個 crate | `cargo test --locked -p misf-core`（或 `-p misf`） |
 | 只跑名稱符合的測試 | 在指令最後加上名稱的一部分，例如 `cargo test --locked --workspace sudo` |
 
@@ -197,13 +197,13 @@ UI 測試在 `app/src/ui/tests.rs`：狀態邏輯測試，加上以 `i-slint-bac
 
 Rust 整合測試在 loopback 啟動測試 SSH 伺服器，驗證密碼／私鑰、指紋、PTY、sudo、系統偵測、APT 與 DNF 檢查／升級、套件管理器不符與混合批次阻擋，以及互動 shell（回顯、視窗大小、結束、輸出流量控制），不接觸真實遠端主機。
 
-套件管理器的故障情境（升級半途失敗、斷線、不正常的輸出、套件腳本跳出畫面或等待回答、鎖被佔用）另有 `sshtest/`，每個套件管理器一個資料夾（映像、測試與說明各自獨立），共用框架在 `sshtest/src/`。目前有 APT（`sshtest/apt/`，Debian／Ubuntu）與 DNF（`sshtest/dnf/`，Rocky Linux／AlmaLinux 9）：每個測試啟動一個真的容器（sshd、sudo、套件管理器、本機套件庫），由 core 經 SSH 檢查與升級。需要 Docker，測試標為 `#[ignore]`，`cargo test --workspace` 只編譯不執行：
+套件管理器的故障情境（升級半途失敗、斷線、不正常的輸出、套件腳本跳出畫面或等待回答、鎖被佔用）另有 `sshtest/`，每個套件管理器一個資料夾（映像、測試與說明各自獨立），共用框架在 `sshtest/src/`。目前有 APT（`sshtest/apt/`，Debian／Ubuntu）、DNF（`sshtest/dnf/`，Rocky Linux／AlmaLinux 9）、pacman（`sshtest/pacman/`，Arch Linux）與 apk（`sshtest/apk/`，Alpine 3.24）：每個測試啟動一個真的容器（sshd、sudo、套件管理器、本機套件庫），由 core 經 SSH 檢查與升級。需要 Docker，測試標為 `#[ignore]`，`cargo test --workspace` 只編譯不執行：
 
 ```powershell
 cargo test -p misf-sshtest -- --ignored
 ```
 
-做法、環境變數、接到 CI 與新增套件管理器的方式見 [`sshtest/README.md`](../sshtest/README.md)；各套件管理器的測試項目與測試發現的缺口（斷言記錄的是目前行為）見 [`sshtest/apt/README.md`](../sshtest/apt/README.md) 與 [`sshtest/dnf/README.md`](../sshtest/dnf/README.md)。目前沒有接進 GitHub Actions。
+做法、環境變數、接到 CI 與新增套件管理器的方式見 [`sshtest/README.md`](../sshtest/README.md)；各套件管理器的測試項目與測試發現的缺口（斷言記錄的是目前行為）見各資料夾的 `README.md`（[APT](../sshtest/apt/README.md)、[DNF](../sshtest/dnf/README.md)、[pacman](../sshtest/pacman/README.md)、[apk](../sshtest/apk/README.md)）；pacman 與 apk 的說明另有「特殊行為」一節。目前沒有接進 GitHub Actions。
 
 LUKSbox 測試使用暫存資料，涵蓋未建立容器時拒絕主機操作且不寫出明文檔、新密碼長度與字元種類規則、明文保留、確認刪除與路徑限制、鎖定後拒絕操作、錯誤密碼、多 keyslot、重新啟動、加密備份、縮短資料、密文損壞及並行開啟阻擋。Passkey 核心流程由模擬驗證器測試，未代替實體 Windows Hello／USB 裝置驗證。
 

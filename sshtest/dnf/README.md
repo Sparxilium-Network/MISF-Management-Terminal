@@ -1,6 +1,6 @@
 # sshtest／DNF
 
-> 最後修改：2026-11-17 ｜ 基於 commit：`ffff655`
+> 最後修改：2026-11-17 ｜ 基於 commit：`8aaa1b9`
 
 對真的 Enterprise Linux 容器測試 DNF：sshd、sudo、dnf 4 與 rpm 都是真的。執行方式與共用框架見 [上一層的說明](../README.md)。
 
@@ -74,7 +74,7 @@ cargo test -p misf-sshtest --test dnf -- --ignored
 | --- | --- | --- |
 | GAP 1 | 套件的 `%post` 失敗（包括對話框開不起來），結果仍存成成功，只有輸出裡有一行 `Error in POSTIN scriptlet`。 | rpm 把 `%post` 失敗當成警告，dnf 退出碼 0；MISF 只認 `Error:` 開頭的行。 |
 | GAP 2 | 設了 `skip_if_unavailable` 的套件庫抓不到時，檢查照樣成功，完全沒提到少了一個套件庫。 | `dnf -q makecache` 對被略過的套件庫不印任何東西，`rpm::update_failed` 要找的 `Ignoring repositories` 不會出現在這一步。 |
-| GAP 3 | 輸出裡有 `Error:` 開頭的行，dnf 退出碼 0、套件已裝好，結果卻存成「套件升級失敗（退出碼 0）」。套件腳本印出這種行會這樣；GAP 2 的套件庫在升級時印出的 `Error: Failed to download metadata…` 也會。 | `validate_upgrade` 把任何 `E:`／`Error:` 開頭的行都當成錯誤。 |
+| GAP 3 | 輸出裡有 `Error:` 開頭的行，dnf 退出碼 0、套件已裝好，結果卻存成「套件升級失敗（退出碼 0）」。套件腳本印出這種行會這樣；GAP 2 的套件庫在升級時印出的 `Error: Failed to download metadata…` 也會。 | DNF 主機上，`validate_upgrade` 把任何 `Error:` 開頭的行都當成錯誤（`8aaa1b9` 起各管理器只認自己的錯誤前綴）。 |
 | GAP 4 | dnf 被訊號殺掉時，錯誤只有「遠端命令被訊號中止」，沒提升級被打斷，升級步驟已收到的輸出也沒有保存。 | `ssh::execute` 收到 exit-signal 就直接回傳錯誤。 |
 | GAP 5 | GAP 4 之後，同一個套件的新舊兩版同時裝著（`dnf check` 會報錯）。再升級會把剩下的套件裝完並顯示成功，重複的套件一直留著，沒有任何提示。 | 重複安裝的套件不在 `check-update` 清單裡，MISF 也沒有檢查 rpm 資料庫的狀態。 |
 | GAP 6 | 套件腳本印出沒有結尾的跳脫序列後，該命令之後的輸出（包括 dnf 的 `Complete!`）在保存的紀錄裡全部消失。即時終端機只少那一行。 | `transcript::readable_output` 把 OSC 字串一路吃到結尾符號。 |

@@ -67,6 +67,18 @@ pub const DNF: System = System {
     default_base: "rockylinux/rockylinux:9",
 };
 
+/// Arch Linux hosts, built from `pacman/docker`; `MISF_SSHTEST_PACMAN_BASE` picks the base.
+pub const PACMAN: System = System {
+    manager: "pacman",
+    default_base: "archlinux:latest",
+};
+
+/// Alpine hosts, built from `apk/docker`; `MISF_SSHTEST_APK_BASE` picks the base.
+pub const APK: System = System {
+    manager: "apk",
+    default_base: "alpine:3.24",
+};
+
 /// The accounts every image creates; the passwords are written in its Dockerfile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Account {

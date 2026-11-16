@@ -1,5 +1,16 @@
 # 全工作區檢查結果
 
+## 2026-11-17（sshtest 新增 pacman 與 apk，分支 `feat/WYSIWYG-Terminal`，基於 `8aaa1b9`）
+
+- 使用者要求新增 pacman 與 apk 的容器測試，並說明 core 的支援已由另一個工作階段完成（`8aaa1b9`）。該工作階段留下未追蹤、未接線的草稿：`sshtest/apk/`（映像與 16 項測試）與 `sshtest/pacman/`（只有映像）。本次接手：在 `src/lib.rs` 加上 `PACMAN`、`APK`，`Cargo.toml` 加兩個測試目標。
+- apk：草稿 16 項第一次執行就全過。兩個映像都加了 `misf-dialog`、`misf-tui`、`misf-tty` 三個測試套件，`misf-noise` 多兩行（非 UTF-8、沒有結尾的跳脫序列）；草稿裡因此改變的斷言已更新。新增 `prompts.rs`、有 PTY 時斷線、套件檔讀不到、無聲斷線，鎖與被殺兩項改成明確的斷言。共 22 項。
+- pacman：測試全部新寫（先以探索測試觀察行為）。共 23 項。
+- 結果：pacman 連續 4 次、apk 連續 4 次全過（不含慢速項分別約 40 秒、70 秒）。`MISF_SSHTEST_SLOW=1 cargo test --locked --workspace -- --include-ignored` 全過 1 次：luksbox-fido2 22、misf 37、misf-core 72、workflow 33、apk 22、apt 18、dnf 22、pacman 23（四個容器目標各約 215 秒，依序執行），沒有殘留容器。`cargo clippy --workspace --all-targets --all-features -- -D warnings`、`cargo fmt --all -- --check` 通過。APT 與 DNF 的容器測試在 `8aaa1b9` 改過錯誤行判斷之後仍然全過。
+- pacman 的發現（`sshtest/pacman/README.md`，9 個缺口）：最重要的是過期鎖檔——pacman 被殺，或沒有 PTY 時連線中斷，`/var/lib/pacman/db.lck` 會留下，之後有更新時升級一律失敗直到手動刪除，而當下檢查顯示正常。其他：套件庫抓不到時輸出看不出原因且錯誤訊息誤附「需要安裝 pacman-contrib 與 fakeroot」；腳本印 `error:` 行會把成功的升級存成失敗；其餘與 APT／DNF 相同（提示標記誤判、跳脫序列吃掉輸出、終端機上等人、斷線與訊號的錯誤訊息）。
+- apk 的發現（`sshtest/apk/README.md`，6 個缺口）：apk 最後才寫資料庫，有 PTY 時斷線或被殺，這一輪全部不算，下次整批重做、腳本重跑，沒有紀錄；卡在終端機對話框的套件中斷後仍待更新，下次又卡住。apk 比較好的地方：腳本輸出有前綴所以 `ERROR:` 不會誤判、鎖隨程序釋放。另一個 apk 佔著鎖時連檢查都會失敗（`apk update` 退出碼 99）。
+- 兩份 README 各有「特殊行為」一節，整理給日後修改 core 的人。
+- 未驗證：真實 Arch／Alpine 主機；apk-tools 2；`archlinux:latest` 是滾動發行，日後重建映像時 pacman 的版本與輸出可能改變；pacman 的套件簽章、`IgnorePkg`、套件衝突時的提問。`ubuntu:26.04`、`almalinux:9` 這次沒有重跑。
+
 ## 2026-11-17（新增 pacman、apk，移除 YUM 與 BSD，分支 `feat/WYSIWYG-Terminal`，基於 `fe385c8`）
 
 - 使用者決定：舊主機保留並改回自動偵測（`Host::forget_unsupported`，讀取時處理、不做資料庫升級）；編輯主機的 OS 選單保留但只剩 Linux；pacman 檢查用 `checkupdates`（需 pacman-contrib 與 fakeroot，不經 sudo、不動系統資料庫）；apk 只支援 root 或 sudo。

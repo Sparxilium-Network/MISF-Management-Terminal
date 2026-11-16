@@ -1,6 +1,6 @@
 # sshtest／APT
 
-> 最後修改：2026-11-16 ｜ 基於 commit：`416718d`
+> 最後修改：2026-11-17 ｜ 基於 commit：`8aaa1b9`
 
 對真的 Debian／Ubuntu 容器測試 APT：sshd、sudo、apt、dpkg、debconf 與 needrestart 都是真的。執行方式與共用框架見 [上一層的說明](../README.md)。
 
@@ -64,7 +64,7 @@ cargo test -p misf-sshtest --test apt -- --ignored
 | --- | --- | --- |
 | GAP 1 | 升級半途失敗（postinst 失敗、dpkg 被殺、被對話框卡住）之後，再檢查或再升級都顯示「成功、沒有待更新套件」，主機看起來是最新的，但 `dpkg --audit` 仍回報 half-configured。 | 已解開但未設定完成的套件不再列在 `apt list --upgradable`；清單是空的，MISF 就不執行 `apt-get upgrade`，看不到 APT 的 `dpkg was interrupted` 錯誤，也沒有另外檢查 dpkg 狀態。 |
 | GAP 2 | 套件腳本印出沒有結尾的跳脫序列（`ESC ]`…）後，該命令之後的輸出在保存的紀錄裡全部消失。即時終端機只少那一行。 | `transcript::readable_output` 把 OSC 字串一路吃到結尾符號，整段命令輸出一次處理；即時輸出是逐行處理。 |
-| GAP 3 | 套件腳本印出以 `E:` 開頭的一行，APT 退出碼 0、套件已裝好，結果卻存成「套件升級失敗（退出碼 0）」。 | `validate_upgrade` 把任何 `E:`／`Error:` 開頭的行都當成 APT 錯誤。 |
+| GAP 3 | 套件腳本印出以 `E:` 開頭的一行，APT 退出碼 0、套件已裝好，結果卻存成「套件升級失敗（退出碼 0）」。 | APT 主機上，`validate_upgrade` 把任何 `E:` 開頭的行都當成 APT 錯誤（`8aaa1b9` 起各管理器只認自己的錯誤前綴）。 |
 | GAP 4 | 需要密碼的 sudo：sudo 已收下密碼、APT 正在升級時，套件輸出出現提示標記，MISF 回報「sudo 密碼錯誤或需要額外驗證」並斷線，升級步驟的輸出沒有保存。遠端的升級照常完成。 | `ssh::execute` 把第二次出現的標記當成 sudo 再次詢問。 |
 | GAP 5 | 免密碼（`NOPASSWD`）sudo：套件輸出出現提示標記時，SSH 密碼被送進套件腳本的標準輸入（有無 PTY 都一樣）。保存的輸出與即時輸出都沒有密碼。 | sudo 沒有詢問，第一個標記就被當成 sudo 的提示。使用指南已記載免密碼 sudo 的風險。 |
 | GAP 6 | 套件腳本等待輸入（`read`，或強制 `TERM=xterm` 畫出的對話框）時，MISF 一直等到 30 分鐘上限。對話框的文字會出現在即時終端機，但沒有辦法按鍵。 | MISF 不對命令送出輸入結束（EOF），也沒有偵測長時間沒有輸出。APT 另外給 dpkg 一個自己的終端機，所以沒開 PTY 也一樣。 |

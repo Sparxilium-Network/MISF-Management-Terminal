@@ -1,0 +1,25 @@
+#!/bin/sh
+# Publishes the named packages' second version in the local repository, replacing
+# whatever was published before. Without names the repository is valid and empty.
+# `--v1` publishes every package's first version instead (image build).
+set -eu
+repo=/opt/misf/repo
+rm -rf "$repo"
+mkdir -p "$repo"
+if [ "${1:-}" = --v1 ]; then
+    cp /opt/misf/pool/v1/*.pkg.tar.zst "$repo"/
+else
+    for name in "$@"; do
+        cp /opt/misf/pool/v2/"$name"-[0-9]*.pkg.tar.zst "$repo"/
+    done
+fi
+cd "$repo"
+set -- *.pkg.tar.zst
+[ -e "$1" ] || set --
+if [ "$#" -gt 0 ]; then
+    repo-add --quiet misf-test.db.tar.gz "$@" 2>/dev/null
+else
+    # repo-add needs a package; an empty database is an empty archive.
+    tar -czf misf-test.db.tar.gz -T /dev/null
+    ln -s misf-test.db.tar.gz misf-test.db
+fi

@@ -20,3 +20,11 @@ path = "apt/main.rs"
 [[test]]
 name = "dnf"
 path = "dnf/main.rs"
+
+[[test]]
+name = "pacman"
+path = "pacman/main.rs"
+
+[[test]]
+name = "apk"
+path = "apk/main.rs"

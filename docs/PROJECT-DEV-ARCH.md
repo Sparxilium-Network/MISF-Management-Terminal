@@ -1,6 +1,6 @@
 # 原始碼檔案說明
 
-> 最後修改：2026-11-17 ｜ 基於 commit：`fe385c8`
+> 最後修改：2026-11-17 ｜ 基於 commit：`8aaa1b9`
 
 每個 `.rs` 檔案負責什麼。整體設計與資料流見 [架構](architecture.md)，建置與慣例見 [開發說明](PROJECT-DEV.md)。新增、改名或刪除 `.rs` 檔案時，請一併更新本文件。
 
@@ -81,6 +81,20 @@ Workspace 有四個 crate：`core`（`misf-core`，核心函式庫與 JSON CLI�
 | `sshtest/dnf/output.rs` | 不正常的輸出、`Error:` 開頭的腳本輸出、輸出中的 sudo 提示標記。 |
 | `sshtest/dnf/prompts.rs` | 對話框在 `TERM=dumb` 下失敗、標準輸入上的問題、終端機上的對話框與問題。 |
 | `sshtest/dnf/connection.rs` | 升級途中斷線（root、sudo 加 PTY）與網路無聲中斷。 |
+| `sshtest/pacman/main.rs` | 測試目標 `pacman` 的入口（`#[ignore]`，需要 Docker），對真實 Arch Linux 容器。斷言記錄目前行為，缺口與該管理器的特殊行為列在 `sshtest/pacman/README.md`。 |
+| `sshtest/pacman/support.rs` | pacman 測試共用：啟動主機、`Pacman`（已安裝的版本、pacman 是否仍在執行、鎖檔是否存在）。 |
+| `sshtest/pacman/upgrade.rs` | 檢查不經 sudo 也不動系統資料庫、升級與連帶安裝相依、`.pacnew`、沒有 dist-upgrade。 |
+| `sshtest/pacman/failures.rs` | 套件腳本失敗、相依不滿足、套件庫或套件檔抓不到、缺 checkupdates／fakeroot、pacman 被殺後留下鎖檔、鎖被佔用。 |
+| `sshtest/pacman/output.rs` | 不正常的輸出、`error:` 開頭的腳本輸出、輸出中的 sudo 提示標記。 |
+| `sshtest/pacman/prompts.rs` | 對話框在 `TERM=dumb` 下失敗、標準輸入上的問題、終端機上的對話框與問題。 |
+| `sshtest/pacman/connection.rs` | 升級途中斷線（有無 PTY、是否經 sudo，含留下鎖檔的情況）與網路無聲中斷。 |
+| `sshtest/apk/main.rs` | 測試目標 `apk` 的入口（`#[ignore]`，需要 Docker），對真實 Alpine 容器。斷言記錄目前行為，缺口與該管理器的特殊行為列在 `sshtest/apk/README.md`。 |
+| `sshtest/apk/support.rs` | apk 測試共用：啟動主機、`Apk`（已安裝的版本、等 apk 結束）。 |
+| `sshtest/apk/upgrade.rs` | 正常升級與連帶安裝相依、`.apk-new`、免密碼 sudo、沒有 dist-upgrade。 |
+| `sshtest/apk/failures.rs` | 套件腳本失敗、相依不滿足、索引打不開或簽章不受信任、套件檔讀不到、apk 被殺、鎖被佔用。 |
+| `sshtest/apk/output.rs` | 不正常的輸出、`ERROR:` 開頭的腳本輸出、輸出中的 sudo 提示標記、標準輸入上的問題。 |
+| `sshtest/apk/prompts.rs` | 對話框開不起來、終端機上的對話框與問題。 |
+| `sshtest/apk/connection.rs` | 升級途中斷線（有無 PTY）與網路無聲中斷。 |
 
 ## app：桌面 GUI
 
