@@ -176,7 +176,7 @@ pub(crate) fn load(conn: &Connection) -> Result<Database> {
         let id: String = row.get(0)?;
         let (operation, output): (String, String) = (row.get(2)?, row.get(6)?);
         let upgrade = matches!(operation.as_str(), "upgrade" | "dist_upgrade");
-        let phased = crate::package_manager::apt::parse_phased(&output);
+        let phased = crate::package_manager::apt::phased_in_transcript(&output);
         // As when the result was made: what the upgrade or its dist-upgrade simulation
         // deferred for a phased rollout is not kept back.
         let kept_back: Vec<String> = if upgrade {
@@ -192,10 +192,14 @@ pub(crate) fn load(conn: &Connection) -> Result<Database> {
             // Read back from the saved transcript, so no column is needed for these. A
             // check's transcript holds a simulated upgrade, read only for what phasing
             // defers: its kept-back and `Inst` lines are not this host's dist-upgrade plan.
+            // Only the plain dist-upgrade simulation is the plan, not the one with
+            // phased updates included.
             plan: if kept_back.is_empty() {
                 None
             } else {
-                crate::package_manager::apt::parse_plan(&output)
+                crate::transcript::section(&output, crate::package_manager::apt::SIMULATION_TITLE)
+                    .as_deref()
+                    .and_then(crate::package_manager::apt::parse_plan)
             },
             phased,
             kept_back,

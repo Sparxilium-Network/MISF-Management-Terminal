@@ -73,6 +73,9 @@ pub struct Commands {
     pub dist_upgrade: Option<&'static str>,
     /// Read-only simulation of `dist_upgrade`, run when an upgrade kept packages back.
     pub simulate: Option<&'static str>,
+    /// `simulate` with phased updates included, run when `simulate` still keeps packages
+    /// back, to tell which only wait on a phased rollout; only APT has one.
+    pub simulate_phased: Option<&'static str>,
     /// Read-only simulation of `upgrade` run by a check, for what a phased rollout defers;
     /// only APT has one.
     pub preview: Option<&'static str>,

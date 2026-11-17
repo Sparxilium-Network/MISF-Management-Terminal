@@ -1,7 +1,7 @@
 //! One check, upgrade or dist-upgrade on one host: detect, refresh the index, list, and
 //! maybe upgrade.
 
-use super::{DETECT, Manager, Mode, Platform, parse_platform};
+use super::{Commands, DETECT, Manager, Mode, Platform, parse_platform};
 use crate::console::Echo;
 use crate::model::{CheckResult, Host, Package, RestartStatus, UpgradePlan};
 use crate::ssh::{self, Session};
@@ -130,37 +130,22 @@ impl Run<'_> {
                     let (phased, kept) = self.preview(manager, command).await;
                     outcome.phased = phased;
                     // A package the upgrade would keep back may only wait on others that
-                    // are phased; the dist-upgrade simulation tells, as after an upgrade.
-                    if let Some(command) = commands.simulate
-                        && !kept.is_empty()
-                    {
+                    // are phased; the simulations tell, as after an upgrade. A check
+                    // keeps no kept-back list or plan.
+                    if !kept.is_empty() {
                         progress("正在模擬 dist-upgrade，確認被保留的套件…");
-                        let (_, deferred) = self.simulate(command).await;
-                        outcome
-                            .phased
-                            .extend(kept.into_iter().filter(|name| deferred.contains(name)));
-                        outcome.phased.sort();
-                        outcome.phased.dedup();
+                        self.settle_kept(&commands, &mut outcome.phased, kept).await;
                     }
                 }
                 outcome
             }
         };
         // Kept-back packages need a dist-upgrade; show what it would change, without doing it.
-        if let Some(command) = commands.simulate
-            && !outcome.kept_back.is_empty()
-        {
+        if !outcome.kept_back.is_empty() {
             progress("正在模擬 dist-upgrade…");
-            let (plan, deferred) = self.simulate(command).await;
-            // What the dist-upgrade would defer for a phased rollout too was kept back
-            // only because of the rollout: a dist-upgrade cannot take it either.
-            let (phased, kept): (Vec<String>, Vec<String>) =
-                (outcome.kept_back.drain(..)).partition(|name| deferred.contains(name));
-            outcome.phased.extend(phased);
-            outcome.phased.sort();
-            outcome.phased.dedup();
-            outcome.kept_back = kept;
-            outcome.plan = plan.filter(|_| !outcome.kept_back.is_empty());
+            let kept = std::mem::take(&mut outcome.kept_back);
+            (outcome.kept_back, outcome.plan) =
+                self.settle_kept(&commands, &mut outcome.phased, kept).await;
         }
         if let Some(command) = commands.status {
             progress("正在讀取重新啟動狀態…");
@@ -213,15 +198,56 @@ impl Run<'_> {
         }
     }
 
-    /// What `dist-upgrade` would install, upgrade and remove, and what it would defer
-    /// for a phased rollout; nothing is changed.
-    async fn simulate(&mut self, command: &str) -> (Option<UpgradePlan>, Vec<String>) {
-        match self.optional(super::apt::SIMULATION_TITLE, command).await {
-            Some((0, output)) => (
-                super::apt::parse_plan(&output),
-                super::apt::parse_phased(&output),
-            ),
-            _ => (None, vec![]),
+    /// Sorts what an upgrade, or a check's simulated upgrade, kept back. `simulate` shows
+    /// what a dist-upgrade would change. A package it would not upgrade either may only
+    /// wait on phased ones; `simulate_phased` tells, and those join `phased`. Returns what
+    /// is still kept back and, when anything is, the dist-upgrade plan. Nothing changes.
+    async fn settle_kept(
+        &mut self,
+        commands: &Commands,
+        phased: &mut Vec<String>,
+        kept: Vec<String>,
+    ) -> (Vec<String>, Option<UpgradePlan>) {
+        let Some(command) = commands.simulate else {
+            return (kept, None);
+        };
+        let plain = self.simulation(super::apt::SIMULATION_TITLE, command).await;
+        let plan = plain.as_deref().and_then(super::apt::parse_plan);
+        phased.extend(
+            plain
+                .as_deref()
+                .map(super::apt::parse_phased)
+                .unwrap_or_default(),
+        );
+        let taken = |name: &String| {
+            plan.as_ref()
+                .is_some_and(|p| p.upgrade.iter().chain(&p.install).any(|q| q.name == *name))
+        };
+        if let Some(command) = commands.simulate_phased
+            && kept
+                .iter()
+                .any(|name| !taken(name) && !phased.contains(name))
+            && let Some(with_phased) = self
+                .simulation(super::apt::SIMULATION_PHASED_TITLE, command)
+                .await
+        {
+            phased.extend(super::apt::phasing_freed(
+                plain.as_deref().unwrap_or_default(),
+                &with_phased,
+            ));
+        }
+        phased.sort();
+        phased.dedup();
+        let kept: Vec<String> = kept.into_iter().filter(|n| !phased.contains(n)).collect();
+        let plan = plan.filter(|_| !kept.is_empty());
+        (kept, plan)
+    }
+
+    /// A read-only simulation's output, saved under `title`; `None` when it failed.
+    async fn simulation(&mut self, title: &str, command: &str) -> Option<String> {
+        match self.optional(title, command).await {
+            Some((0, output)) => Some(output),
+            _ => None,
         }
     }
 

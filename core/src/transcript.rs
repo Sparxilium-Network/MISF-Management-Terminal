@@ -15,6 +15,19 @@ pub fn heading(title: &str) -> String {
     format!("\n{rule}\n* {title} *\n{rule}\n")
 }
 
+/// The part of a transcript under [`heading`]`(title)`, up to the next heading; `None`
+/// when the transcript has no such heading.
+pub fn section(transcript: &str, title: &str) -> Option<String> {
+    let title = format!("* {title} *");
+    let mut lines = transcript.lines().skip_while(|line| *line != title);
+    // The title line and the rule under it.
+    lines.next()?;
+    lines.next();
+    let rule = |line: &str| line.len() >= 4 && line.chars().all(|c| c == '*');
+    let body: Vec<&str> = lines.take_while(|line| !rule(line)).collect();
+    Some(body.join("\n").trim().to_owned())
+}
+
 /// East Asian wide characters take two terminal columns.
 fn display_width(c: char) -> usize {
     match c as u32 {

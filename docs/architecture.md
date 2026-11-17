@@ -1,6 +1,6 @@
 # MISF Management Terminal 架構
 
-> 最後修改：2026-11-17 ｜ 基於 commit：`3f6ce34`
+> 最後修改：2026-11-18 ｜ 基於 commit：`7678ab9`
 
 > [!WARNING]
 > **本專案仍處於開發階段，請勿用於正式環境。** 相關安全保護機制尚未完善。
@@ -91,7 +91,7 @@ UI 與 CLI 都送出 `{"action": …}` JSON 給 `Session::handle`。CLI 從 stdi
 
 | 管理器 | 檢查 | 升級 | 實機測試 |
 | --- | --- | --- | --- |
-| APT | `apt-get -q=1 update`，再以英文 locale 列出待更新套件；有待更新套件時以唯讀的 `apt-get -s -q=1 upgrade` 找出 phasing 延後的套件；模擬中有被保留的套件時，再以唯讀的 `apt-get -s dist-upgrade` 確認哪些只是被分階段推送連帶保留，一併算成延後 | `apt-get -y upgrade`（`DEBIAN_FRONTEND=noninteractive`、`NEEDRESTART_MODE=l`、`--force-confdef --force-confold`）；另有使用者明確選擇的 `dist-upgrade`（相同參數） | upgrade 已測試；dist-upgrade 未實機測試 |
+| APT | `apt-get -q=1 update`，再以英文 locale 列出待更新套件；有待更新套件時以唯讀的 `apt-get -s -q=1 upgrade` 找出 phasing 延後的套件；模擬中有被保留的套件時，再以唯讀的 dist-upgrade 模擬確認哪些只是被分階段推送連帶保留，一併算成延後（方法見下方 kept back 一節） | `apt-get -y upgrade`（`DEBIAN_FRONTEND=noninteractive`、`NEEDRESTART_MODE=l`、`--force-confdef --force-confold`）；另有使用者明確選擇的 `dist-upgrade`（相同參數） | upgrade 已測試；dist-upgrade 未實機測試 |
 | DNF | `makecache`，再 `check-update -C` 並輸出 `rpm -qa` 版本；退出碼 0／100 為成功 | `-y upgrade` | 未測試 |
 | pacman | `checkupdates`（pacman-contrib，需 fakeroot）在 `/tmp/checkup-db-<UID>` 同步私有資料庫，再 `checkupdates --nosync`；退出碼 0／2 為成功；不經 sudo，不動系統資料庫 | `pacman -Syu --noconfirm --noprogressbar` | 未測試 |
 | apk | `apk update`，再 `apk list --upgradable`（不經 sudo） | `apk upgrade --no-progress` | 未測試 |
@@ -103,7 +103,9 @@ UI 與 CLI 都送出 `{"action": …}` JSON 給 `Session::handle`。CLI 從 stdi
 ### Kept back 與 dist-upgrade（只限 APT）
 
 - `apt-get upgrade` 不安裝新套件也不移除套件，所以需要新套件的更新（例如核心的 `linux-generic` 需要新的 `linux-image-*`）會被列在「The following packages have been kept back:」，退出碼仍為 0。MISF 解析這份清單存入 `CheckResult.kept_back`（扣除 phasing 延後的套件）。
-- 有 kept back 時，接著執行唯讀的 `apt::SIMULATE`（`apt-get -s dist-upgrade`，不取鎖、不需 sudo、不變更系統），解析 `Inst`／`Remv` 行為 `UpgradePlan`：新安裝、升級（舊→新版本）與移除。模擬失敗只讓 `plan` 為空。模擬裡同樣因分階段推送而延後的被保留套件，是被推送連帶保留的，dist-upgrade 也裝不了：它們改記在 `phased`，不算 kept back；全部如此時沒有 `plan`，也不會彈出報告。從保存的執行輸出讀回結果時套用同樣的規則。
+- 有 kept back 時，接著執行唯讀的 `apt::SIMULATE`（`apt-get -s dist-upgrade`，不取鎖、不需 sudo、不變更系統），解析 `Inst`／`Remv` 行為 `UpgradePlan`：新安裝、升級（舊→新版本）與移除。模擬失敗只讓 `plan` 為空。
+- 依賴分階段延後套件新版本的套件，APT 會列為 kept back 而不是延後，`apt-get -s dist-upgrade` 也一樣（2026-11-18 在 Ubuntu 26.04 實機確認：16 個 Plasma 套件在兩種模擬中都是 kept back）。所以 `SIMULATE` 仍不會升級某些被保留的套件時，再跑唯讀的 `apt::SIMULATE_PHASED`（`-o APT::Get::Always-Include-Phased-Updates=true`，假設所有分階段更新都已推送到這台主機）：它會升級、`SIMULATE` 不會的套件（`apt::phasing_freed`）只是在等推送，改記在 `phased`，不算 kept back；全部如此時沒有 `plan`，也不會彈出報告。檢查時的升級模擬有被保留的套件時也做同樣的確認。`SIMULATE_PHASED` 只在需要時執行，不列在確認視窗的命令清單中。
+- 從保存的執行輸出讀回結果時套用同樣的規則（`apt::phased_in_transcript`，依 `transcript::section` 分開兩次模擬；`plan` 只從 `SIMULATE` 那一段解析）。
 - 升級（`operation: "upgrade"`）結束時（單台，或整個批次結束後），UI 彈出報告：每台需要 dist-upgrade 的主機一個勾選框與一行模擬摘要；模擬沒有變動（`plan` 為空）的主機預設不勾選。報告本身就是 dist-upgrade 的確認（顯示風險與「我了解」勾選），只能以「執行」或「取消」關閉；勾選一台時以單台、多台時以批次執行。「詳細情況」開啟獨立視窗（`KeptBackWindow`），列出被保留的套件、模擬的每個變動、從保存的執行輸出取出的 `apt::SIMULATION_TITLE` 段落，以及 dist-upgrade 的命令。dist-upgrade 的結果不再彈出報告；仍有 kept back 時只在狀態列列出主機。
 - `dist_upgrade` 請求（單台與批次 `operation: "dist_upgrade"`）只有 APT 有命令，其他套件管理器在任何套件命令前就失敗。確認視窗列出實際命令、較強的風險說明，以及各主機上次模擬的新裝／升級／移除數量與將移除的套件。稽核動作為 `dist_upgrade`、`batch_dist_upgrade`。
 

@@ -440,20 +440,8 @@ pub fn wire(ctx: &Ctx, w: &AppWindow) {
     });
 }
 
-/// The `apt-get -s dist-upgrade` part of a saved transcript: from its heading to the next.
+/// The `apt-get -s dist-upgrade` part of a saved transcript.
 pub fn simulation_output(transcript: &str) -> String {
-    let title = format!("* {} *", package_manager::apt::SIMULATION_TITLE);
-    let mut lines = transcript.lines().skip_while(|line| *line != title);
-    // The heading line and the rule under it.
-    lines.next();
-    lines.next();
-    let heading_rule = |line: &str| line.len() >= 4 && line.chars().all(|c| c == '*');
-    let section: Vec<&str> = lines.take_while(|line| !heading_rule(line)).collect();
-    section
-        .join(
-            "
-",
-        )
-        .trim()
-        .to_owned()
+    misf_core::transcript::section(transcript, package_manager::apt::SIMULATION_TITLE)
+        .unwrap_or_default()
 }

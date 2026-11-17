@@ -17,6 +17,7 @@ pub(super) const ROOT: Commands = Commands {
     upgrade: UPGRADE,
     dist_upgrade: None,
     simulate: None,
+    simulate_phased: None,
     preview: None,
     status: None,
 };
@@ -26,6 +27,7 @@ pub(super) const SUDO: Commands = Commands {
     upgrade: SUDO_UPGRADE,
     dist_upgrade: None,
     simulate: None,
+    simulate_phased: None,
     preview: None,
     status: None,
 };

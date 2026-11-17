@@ -18,6 +18,12 @@ pub const SUDO_DIST_UPGRADE: &str = "LC_ALL=C sudo -S -p '__MISF_SUDO_PROMPT__' 
 pub const SIMULATE: &str = "LC_ALL=C apt-get -s -q=1 dist-upgrade";
 /// The heading of SIMULATE's output in the saved transcript.
 pub const SIMULATION_TITLE: &str = "dist-upgrade 模擬（不會變更系統）";
+/// SIMULATE as if every phased update had reached this host. Run only when SIMULATE
+/// still keeps packages back: those it would then upgrade wait only on the rollout.
+pub const SIMULATE_PHASED: &str =
+    "LC_ALL=C apt-get -s -q=1 -o APT::Get::Always-Include-Phased-Updates=true dist-upgrade";
+/// The heading of SIMULATE_PHASED's output in the saved transcript.
+pub const SIMULATION_PHASED_TITLE: &str = "dist-upgrade 模擬，含分階段推送（不會變更系統）";
 /// Run by a check: what `upgrade` would do, read for the updates a phased rollout
 /// defers on this host. Like SIMULATE, it takes no lock, needs no root, changes nothing.
 pub const PREVIEW: &str = "LC_ALL=C apt-get -s -q=1 upgrade";
@@ -42,6 +48,7 @@ pub(super) const ROOT: Commands = Commands {
     upgrade: UPGRADE,
     dist_upgrade: Some(DIST_UPGRADE),
     simulate: Some(SIMULATE),
+    simulate_phased: Some(SIMULATE_PHASED),
     preview: Some(PREVIEW),
     status: Some(STATUS),
 };
@@ -51,6 +58,7 @@ pub(super) const SUDO: Commands = Commands {
     upgrade: SUDO_UPGRADE,
     dist_upgrade: Some(SUDO_DIST_UPGRADE),
     simulate: Some(SIMULATE),
+    simulate_phased: Some(SIMULATE_PHASED),
     preview: Some(PREVIEW),
     status: Some(SUDO_STATUS),
 };
@@ -174,6 +182,39 @@ pub fn parse_plan(output: &str) -> Option<UpgradePlan> {
     }
     (!plan.install.is_empty() || !plan.upgrade.is_empty() || !plan.remove.is_empty())
         .then_some(plan)
+}
+
+/// The upgrades only a phased rollout holds back: SIMULATE_PHASED (`with_phased`) would
+/// take them, SIMULATE (`plain`) would not. APT may list them as kept back rather than
+/// deferred, when they depend on a deferred package.
+pub fn phasing_freed(plain: &str, with_phased: &str) -> Vec<String> {
+    let upgrades = |output: &str| -> Vec<String> {
+        parse_plan(output)
+            .map(|plan| plan.upgrade.into_iter().map(|p| p.name).collect())
+            .unwrap_or_default()
+    };
+    let plain = upgrades(plain);
+    let mut freed: Vec<String> = upgrades(with_phased)
+        .into_iter()
+        .filter(|name| !plain.contains(name))
+        .collect();
+    freed.sort();
+    freed.dedup();
+    freed
+}
+
+/// Everything a saved transcript shows a phased rollout holding back: the deferred lists
+/// and, when SIMULATE_PHASED ran, what only the rollout kept from the dist-upgrade.
+pub fn phased_in_transcript(transcript: &str) -> Vec<String> {
+    use crate::transcript::section;
+    let mut phased = parse_phased(transcript);
+    if let Some(with_phased) = section(transcript, SIMULATION_PHASED_TITLE) {
+        let plain = section(transcript, SIMULATION_TITLE).unwrap_or_default();
+        phased.extend(phasing_freed(&plain, &with_phased));
+    }
+    phased.sort();
+    phased.dedup();
+    phased
 }
 
 /// Reads [`STATUS`] output; `None` when neither part of it ran.

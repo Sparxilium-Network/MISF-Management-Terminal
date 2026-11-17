@@ -1,5 +1,14 @@
 # 全工作區檢查結果
 
+## 2026-11-18（以含分階段推送的模擬判斷連帶保留，分支 `feat/WYSIWYG-Terminal`，基於 `7678ab9`）
+
+- 使用者以 `temp/misf-log-20261118-004128.txt` 回報數字仍不一致（agent-claude-vm 69／53）。log 顯示 `apt-get -s dist-upgrade` 仍把 16 個 Plasma 套件列為 kept back，沒有列為延後，所以 `3f6ce34`、`7678ab9` 的判斷從未成立。
+- 使用者在該主機另外執行 `apt-get -s -o APT::Get::Always-Include-Phased-Updates=true upgrade`：16 個中有 14 個變成會升級，剩 `plasma-session-wayland`、`plasma-workspace` 仍保留。
+- 改為：`SIMULATE` 仍不會升級某些被保留的套件時，再跑唯讀的 `apt::SIMULATE_PHASED`；它會升級而 `SIMULATE` 不會的，算成分階段延後。檢查與升級共用 `settle_kept`。讀回時以 `transcript::section` 分開兩段模擬（`apt::phased_in_transcript`），`plan` 只取 `SIMULATE` 那段。
+- 用 log 裡的真實檢查輸出加上使用者貼的模擬輸出驗證解析：分階段延後 53 → 67，仍被保留的只剩上述 2 個。
+- 檢查：fmt、Clippy（`-D warnings`）通過；`cargo test --locked --workspace` 通過（22、37、72、33）；`sshtest` APT 18 項通過。`.\package.ps1` 雜湊相同。
+- 未驗證：MISF 實際以 dist-upgrade（而非使用者跑的 upgrade）加上這個選項的結果，剩下 2 個套件可能也會被判成延後；`SIMULATE_PHASED` 只在需要時執行，沒有列在確認視窗的命令清單（列出會讓既有 workflow 測試的命令比對失敗）。
+
 ## 2026-11-17（套件明細改為工具視窗；檢查時也確認分階段連帶保留，分支 `feat/WYSIWYG-Terminal`，基於 `3f6ce34`）
 
 - 使用者要求：移除批次表格下方的上一台／下一台、「X 的套件」標題與明細區塊，改成左側工具列的「套件明細」工具視窗，並可從右鍵開啟。使用者選擇移除「批次作業套件明細」設定，右鍵同時保留「在套件明細欄開啟」與「在視窗中顯示套件明細」（後者原本只有設定為視窗模式才啟用，所以是灰的）。
