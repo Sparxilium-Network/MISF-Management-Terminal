@@ -1,5 +1,13 @@
 # 全工作區檢查結果
 
+## 2026-11-17（套件明細改為工具視窗；檢查時也確認分階段連帶保留，分支 `feat/WYSIWYG-Terminal`，基於 `3f6ce34`）
+
+- 使用者要求：移除批次表格下方的上一台／下一台、「X 的套件」標題與明細區塊，改成左側工具列的「套件明細」工具視窗，並可從右鍵開啟。使用者選擇移除「批次作業套件明細」設定，右鍵同時保留「在套件明細欄開啟」與「在視窗中顯示套件明細」（後者原本只有設定為視窗模式才啟用，所以是灰的）。
+- 實作：`Tool::Packages`（索引 3）、`PackagesPanel` 顯示目前主機的 `ResultPanel`；`BatchState.open-dock`。移除 `BatchDetail` 偏好（舊設定檔的 `batch_detail` 鍵讀取時忽略）。因此 `preferences.rs` 與 `ui/tests.rs` 的測試刪掉設定 `batch_detail` 的幾行，其他斷言未動。
+- 使用者回報檢查後「待更新」與「分階段延後」不一致（例如 69／53）：檢查只用 `apt-get -s upgrade` 找分階段延後，被連帶保留的套件不算。現在檢查的模擬有被保留的套件時，再跑唯讀的 `apt-get -s dist-upgrade`，其中延後的一併算成分階段延後；檢查的命令清單（確認與提示）也列出這一步。
+- 檢查：fmt、Clippy（`-D warnings`）通過；`cargo test --locked --workspace` 通過（22、37、72、33）；`sshtest` APT 18 項通過。以新增的 `MISF_OPEN_PACKAGES=1` 擷取批次頁與套件明細工具視窗確認版面。`.\package.ps1` 雜湊相同。
+- 未驗證：真實 Ubuntu 主機上 `apt-get -s dist-upgrade` 是否把那些連帶保留的套件印成延後（沒有輸出可對照）；介面上右鍵選單只依程式與既有 UI 測試確認。
+
 ## 2026-11-17（分階段推送連帶保留的套件不算 kept back，分支 `feat/WYSIWYG-Terminal`，基於 `b364e83`）
 
 - 使用者貼上 Ubuntu 26.04 主機的升級輸出：73 個 Plasma／GTK 套件全部 `deferred due to phasing`。以 core 解析確認判讀正確（phased 73、kept back 0）。先前報告裡該主機的被保留套件都在這 73 個之中，推斷是被分階段推送連帶保留，dist-upgrade 也裝不了。使用者同意改 core。

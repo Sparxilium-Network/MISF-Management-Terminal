@@ -615,6 +615,9 @@ fn open_requested(app: &mut App) {
             if std::env::var("MISF_OPEN_BATCH").as_deref() == Ok("1") {
                 app.set_view(app::View::Batch);
             }
+            if std::env::var("MISF_OPEN_PACKAGES").as_deref() == Ok("1") {
+                app.tool = Some(app::Tool::Packages);
+            }
         }
     }
 }

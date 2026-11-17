@@ -196,7 +196,8 @@ impl Manager {
 }
 
 /// The commands an operation with this manager runs, in order.
-/// The simulation runs only when packages were kept back, and the restart status last.
+/// The dist-upgrade simulation runs only when packages were kept back (after an upgrade,
+/// or in a check's simulated upgrade), and the restart status last.
 pub fn manager_commands(manager: Manager, root: bool, mode: Mode) -> Vec<&'static str> {
     let commands = manager.commands(root);
     let mut list = vec![DETECT, commands.update, commands.list];
@@ -210,6 +211,9 @@ pub fn manager_commands(manager: Manager, root: bool, mode: Mode) -> Vec<&'stati
         list.extend(commands.simulate);
     } else {
         list.extend(commands.preview);
+        if commands.preview.is_some() {
+            list.extend(commands.simulate);
+        }
     }
     list.extend(commands.status);
     list

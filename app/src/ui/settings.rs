@@ -10,8 +10,8 @@ use super::{
 use crate::{
     i18n::{Language, Translator},
     preferences::{
-        AUTO_LOCK_DEFAULT, AUTO_LOCK_MAX, BatchColumn, BatchDetail, BatchOrder, Density,
-        HostDetail, InterfaceFont, SETTINGS_DEFAULT, UnlockMethod,
+        AUTO_LOCK_DEFAULT, AUTO_LOCK_MAX, BatchColumn, BatchOrder, Density, HostDetail,
+        InterfaceFont, SETTINGS_DEFAULT, UnlockMethod,
     },
     theme::Appearance,
 };
@@ -111,9 +111,6 @@ impl App {
             }
             "batch_order" => {
                 prefs.batch_order = BatchOrder::ALL.get(index).copied().unwrap_or_default()
-            }
-            "batch_detail" => {
-                prefs.batch_detail = BatchDetail::ALL.get(index).copied().unwrap_or_default()
             }
             "language" => prefs.language = Language::from_index(value),
             _ => {}
@@ -250,12 +247,6 @@ pub fn push(app: &mut App, w: &SettingsWindow) {
     state.set_batch_orders(texts(BatchOrder::ALL.map(|o| o.label(t))));
     state.set_batch_order(position(
         BatchOrder::ALL.iter().position(|o| *o == prefs.batch_order),
-    ));
-    state.set_batch_details(texts(BatchDetail::ALL.map(|d| d.label(t))));
-    state.set_batch_detail(position(
-        BatchDetail::ALL
-            .iter()
-            .position(|d| *d == prefs.batch_detail),
     ));
     let toggles: Vec<ColumnToggle> = BatchColumn::ALL
         .iter()

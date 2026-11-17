@@ -127,7 +127,21 @@ impl Run<'_> {
                     && !outcome.pending.is_empty()
                 {
                     progress("正在模擬升級，找出分階段延後的套件…");
-                    outcome.phased = self.preview(manager, command).await;
+                    let (phased, kept) = self.preview(manager, command).await;
+                    outcome.phased = phased;
+                    // A package the upgrade would keep back may only wait on others that
+                    // are phased; the dist-upgrade simulation tells, as after an upgrade.
+                    if let Some(command) = commands.simulate
+                        && !kept.is_empty()
+                    {
+                        progress("正在模擬 dist-upgrade，確認被保留的套件…");
+                        let (_, deferred) = self.simulate(command).await;
+                        outcome
+                            .phased
+                            .extend(kept.into_iter().filter(|name| deferred.contains(name)));
+                        outcome.phased.sort();
+                        outcome.phased.dedup();
+                    }
                 }
                 outcome
             }
@@ -182,13 +196,20 @@ impl Run<'_> {
     }
 
     /// What a phased rollout defers, read from a simulated upgrade; a failure finds none.
-    async fn preview(&mut self, manager: Manager, command: &str) -> Vec<String> {
+    /// Also returns what the upgrade would keep back, besides what is phased.
+    async fn preview(&mut self, manager: Manager, command: &str) -> (Vec<String>, Vec<String>) {
         match self
             .optional("APT upgrade 模擬（不會變更系統）", command)
             .await
         {
-            Some((0, output)) => manager.held_back(&output),
-            _ => vec![],
+            Some((0, output)) => {
+                let phased = manager.held_back(&output);
+                let kept = (manager.kept_back(&output).into_iter())
+                    .filter(|name| !phased.contains(name))
+                    .collect();
+                (phased, kept)
+            }
+            _ => (vec![], vec![]),
         }
     }
 

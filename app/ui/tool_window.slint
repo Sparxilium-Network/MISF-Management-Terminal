@@ -4,7 +4,7 @@ import { Theme, T } from "theme.slint";
 import { HintArea } from "widgets.slint";
 
 export global ToolWindow {
-    // 0 none, 1 the terminal, 2 the past results.
+    // 0 none, 1 the terminal, 2 the past results, 3 the chosen host's packages.
     in property <int> open;
     // Set from the saved preference once, then by dragging; `resized` saves it.
     in-out property <length> body-height: 240px;
@@ -71,6 +71,12 @@ export component ToolStripe inherits Rectangle {
             label: T.get("terminal.title");
             // A window with a prompt and a cursor.
             icon: "M 2.5 3.5 L 17.5 3.5 L 17.5 16.5 L 2.5 16.5 Z M 5.5 7.5 L 8.5 10 L 5.5 12.5 M 10 13 L 14.5 13";
+        }
+        StripeButton {
+            tool: 3;
+            label: T.get("tool.packages");
+            // A box with a lid: packages.
+            icon: "M 3 7 L 10 3.5 L 17 7 L 17 15 L 10 18.5 L 3 15 Z M 3 7 L 10 10.5 L 17 7 M 10 10.5 L 10 18.5";
         }
         StripeButton {
             tool: 2;

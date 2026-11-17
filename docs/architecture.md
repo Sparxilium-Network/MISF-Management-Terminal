@@ -1,6 +1,6 @@
 # MISF Management Terminal 架構
 
-> 最後修改：2026-11-17 ｜ 基於 commit：`b364e83`
+> 最後修改：2026-11-17 ｜ 基於 commit：`3f6ce34`
 
 > [!WARNING]
 > **本專案仍處於開發階段，請勿用於正式環境。** 相關安全保護機制尚未完善。
@@ -91,7 +91,7 @@ UI 與 CLI 都送出 `{"action": …}` JSON 給 `Session::handle`。CLI 從 stdi
 
 | 管理器 | 檢查 | 升級 | 實機測試 |
 | --- | --- | --- | --- |
-| APT | `apt-get -q=1 update`，再以英文 locale 列出待更新套件；有待更新套件時以唯讀的 `apt-get -s -q=1 upgrade` 找出 phasing 延後的套件 | `apt-get -y upgrade`（`DEBIAN_FRONTEND=noninteractive`、`NEEDRESTART_MODE=l`、`--force-confdef --force-confold`）；另有使用者明確選擇的 `dist-upgrade`（相同參數） | upgrade 已測試；dist-upgrade 未實機測試 |
+| APT | `apt-get -q=1 update`，再以英文 locale 列出待更新套件；有待更新套件時以唯讀的 `apt-get -s -q=1 upgrade` 找出 phasing 延後的套件；模擬中有被保留的套件時，再以唯讀的 `apt-get -s dist-upgrade` 確認哪些只是被分階段推送連帶保留，一併算成延後 | `apt-get -y upgrade`（`DEBIAN_FRONTEND=noninteractive`、`NEEDRESTART_MODE=l`、`--force-confdef --force-confold`）；另有使用者明確選擇的 `dist-upgrade`（相同參數） | upgrade 已測試；dist-upgrade 未實機測試 |
 | DNF | `makecache`，再 `check-update -C` 並輸出 `rpm -qa` 版本；退出碼 0／100 為成功 | `-y upgrade` | 未測試 |
 | pacman | `checkupdates`（pacman-contrib，需 fakeroot）在 `/tmp/checkup-db-<UID>` 同步私有資料庫，再 `checkupdates --nosync`；退出碼 0／2 為成功；不經 sudo，不動系統資料庫 | `pacman -Syu --noconfirm --noprogressbar` | 未測試 |
 | apk | `apk update`，再 `apk list --upgradable`（不經 sudo） | `apk upgrade --no-progress` | 未測試 |
@@ -215,7 +215,7 @@ Passkey 只使用 `Fido2HmacSecret` 包裝槽。Windows 透過 `windows_passkey.
 
 UI 把請求放入工作佇列，由背景執行緒與 Tokio runtime 執行 SSH 與磁碟操作，期間停用衝突操作。關閉程式會結束本機連線，但不能保證中止遠端已開始的套件程序。「設定」視窗以左側分類樹集中語言、外觀、偏好（再分為外觀與主機清單、安全性、批次作業）、LOG 匯出（主機庫鎖定時停用，`export_log` 也再檢查一次並記 `blocked`）與 LUKSbox 管理，並顯示程式版本（Cargo 套件版本）、主機庫格式與結構版本；容器內仍為 JSON 時提供「轉換為 SQLite 資料庫」（`convert_storage`）。偏好存在 `ui-settings.json`，以暫存檔原子替換，主機庫鎖定時也能讀寫。自動鎖定（`auto_lock_minutes`，1～1440；設定檔沒有這個鍵時預設 15 分鐘，選「永不」存為 null）由 UI 計算閒置時間：滑鼠、鍵盤、捲動、貼上等使用者輸入與互動 shell 的輸出會重新計時，worker 忙碌時也重新計時以免中斷作業；所以開著持續輸出的程式（`top`、`tail -f`）時不會自動鎖定，使用指南有說明。時間到時 UI 先結束互動 shell（記 `shell_close`）、清除主機快取、終端機與相關視窗，再送出 `vault_lock`（core 也會關閉所有 shell），稽核記為 `vault_auto_lock`。
 
-主視窗不使用系統標題列（`no-frame`），最上方由 `app/ui/title_bar.slint` 自繪：選單式命令、最小化／最大化／關閉；拖曳移動與邊緣縮放交給 winit 的 `drag_window`／`drag_resize_window`，關閉按鈕送出與系統關閉相同的 `CloseRequested`。頁面下方的工具視窗（終端機、過往操作）由左側細直條切換，共用高度；工具視窗開啟時主機頁與批次頁可捲動。
+主視窗不使用系統標題列（`no-frame`），最上方由 `app/ui/title_bar.slint` 自繪：選單式命令、最小化／最大化／關閉；拖曳移動與邊緣縮放交給 winit 的 `drag_window`／`drag_resize_window`，關閉按鈕送出與系統關閉相同的 `CloseRequested`。頁面下方的工具視窗（終端機、套件明細、過往操作）由左側細直條切換，共用高度；工具視窗開啟時主機頁與批次頁可捲動。
 
 ## 測試與限制
 

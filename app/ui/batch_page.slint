@@ -52,11 +52,10 @@ export global BatchState {
     in property <HintData> dist-hint;
     in property <[BatchColumnView]> columns;
     in property <[BatchRowView]> rows;
-    // The chosen host's packages below the table.
-    in property <bool> detail-inline;
-    in property <bool> popup-mode;
     // The chosen host's packages open in a window over the table.
     in property <bool> popup-shown;
+    // "Name's packages" for the chosen host, empty when there is none; the packages tool
+    // window shows it too.
     in property <string> detail-title;
     in property <bool> previous-enabled;
     in property <bool> next-enabled;
@@ -72,6 +71,8 @@ export global BatchState {
     callback select-host(id: string);
     callback open-host(id: string);
     callback open-detail(id: string);
+    // Shows the host in the packages tool window.
+    callback open-dock(id: string);
     // Moves the edge left of visible column `column` by `dx` in a table `spare` wide.
     callback column-drag(column: int, dx: length, spare: length);
     callback column-drag-end();
@@ -111,10 +112,11 @@ component HostCell {
     HintArea {
         width: root.width;
         height: root.height;
-        plain: BatchState.popup-mode ? T.get("batch_detail.open_hint") : T.get("batch.host_hint");
+        plain: T.get("batch.host_hint");
         menu: [
             { title: T.get("batch.open_host"), enabled: true, action: "open-host", arg: root.line.id },
-            { title: T.get("batch_detail.open"), enabled: BatchState.popup-mode, action: "open-detail", arg: root.line.id },
+            { title: T.get("batch_detail.open_dock"), enabled: true, action: "open-dock", arg: root.line.id },
+            { title: T.get("batch_detail.open"), enabled: true, action: "open-detail", arg: root.line.id },
         ];
         touch := TouchArea {
             mouse-cursor: pointer;
@@ -355,10 +357,9 @@ export component BatchPage inherits VerticalLayout {
     }
     Card {
         property <length> full: (BatchState.rows.length + 1) * 34px + 36px;
-        vertical-stretch: BatchState.detail-inline ? 0 : 1;
+        vertical-stretch: 1;
         min-height: min(self.full, 170px);
-        preferred-height: BatchState.detail-inline ? min(self.full, 276px) : self.full;
-        max-height: BatchState.detail-inline ? min(self.full, 276px) : max(self.full, 100000px);
+        preferred-height: self.full;
         if BatchState.rows.length == 0: Text {
             x: 18px;
             y: 18px;
@@ -376,15 +377,6 @@ export component BatchPage inherits VerticalLayout {
                 width: scroll.content-width;
                 height: self.preferred-height;
             }
-        }
-    }
-    if BatchState.detail-inline: VerticalLayout {
-        spacing: 8px;
-        vertical-stretch: 1;
-        padding-top: 4px;
-        DetailHeading { }
-        ResultPanel {
-            vertical-stretch: 1;
         }
     }
 }

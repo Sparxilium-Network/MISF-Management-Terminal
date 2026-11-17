@@ -192,6 +192,8 @@ pub struct BatchFailure {
 pub enum Tool {
     Terminal,
     History,
+    /// The chosen host's packages, upgrades, restart needs, output and connection.
+    Packages,
 }
 
 impl Tool {
@@ -201,6 +203,7 @@ impl Tool {
             None => 0,
             Some(Self::Terminal) => 1,
             Some(Self::History) => 2,
+            Some(Self::Packages) => 3,
         }
     }
 
@@ -208,6 +211,7 @@ impl Tool {
         match index {
             1 => Some(Self::Terminal),
             2 => Some(Self::History),
+            3 => Some(Self::Packages),
             _ => None,
         }
     }
@@ -316,7 +320,7 @@ pub struct App {
     pub tab: usize,
     pub view: View,
     pub batch_selected: BTreeSet<String>,
-    /// Whether the chosen host's packages are open in a window ([`crate::preferences::BatchDetail::Popup`]).
+    /// Whether the chosen host's packages are open in a window over the batch table.
     pub batch_popup: bool,
     /// Whether the host page's advanced menu is open.
     pub advanced_open: bool,

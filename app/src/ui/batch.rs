@@ -2,7 +2,7 @@
 
 use super::{
     App, AppWindow, BatchCell, BatchColumnView, BatchRowView, BatchState, Ctx, ManagerChoice,
-    app::View,
+    app::{Tool, View},
     format::{
         batch_managers, batch_ready, format_time, manager_label, operation_label, pending_count,
         restart_summary, status_label, system_label,
@@ -11,7 +11,7 @@ use super::{
 };
 use crate::{
     i18n::Translator,
-    preferences::{BatchColumn, BatchDetail, BatchOrder},
+    preferences::{BatchColumn, BatchOrder},
 };
 use chrono::DateTime;
 use misf_core::{
@@ -19,7 +19,7 @@ use misf_core::{
     package_manager,
 };
 use serde_json::json;
-use slint::{ComponentHandle, ModelRc, VecModel};
+use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 use std::collections::BTreeSet;
 
 /// The narrowest a column gets while its edge is dragged.
@@ -392,15 +392,14 @@ pub fn push(app: &mut App, w: &AppWindow) {
     let mut table = rows(app, t, &order, &headings);
     keep_inner(&state.get_rows(), &mut table, |row| &mut row.cells);
     sync_rows(state.get_rows(), table, |rows| state.set_rows(rows));
-    let host = app.current();
-    let popup_mode = app.preferences.batch_detail == BatchDetail::Popup;
-    if host.is_none() || !popup_mode || app.view != View::Batch {
+    if app.current().is_none() || app.view != View::Batch {
         app.batch_popup = false;
     }
     let host = app.current();
-    state.set_popup_mode(popup_mode);
-    state.set_detail_inline(host.is_some() && !popup_mode);
     state.set_popup_shown(app.batch_popup);
+    if host.is_none() {
+        state.set_detail_title(SharedString::new());
+    }
     if let Some(host) = host {
         state.set_detail_title(
             t.format("batch.detail", &[("name", host.name.clone())])
@@ -460,6 +459,13 @@ pub fn wire(ctx: &Ctx, w: &AppWindow) {
         c.update(|app| {
             app.selected = id.into();
             app.batch_popup = true;
+        })
+    });
+    let c = ctx.clone();
+    state.on_open_dock(move |id| {
+        c.update(|app| {
+            app.selected = id.into();
+            app.tool = Some(Tool::Packages);
         })
     });
     let c = ctx.clone();

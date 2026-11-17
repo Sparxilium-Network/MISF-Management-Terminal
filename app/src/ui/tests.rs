@@ -9,7 +9,7 @@ use super::{
 };
 use crate::{
     i18n::{Language, Translator},
-    preferences::{BatchDetail, BatchOrder, UnlockMethod},
+    preferences::{BatchOrder, UnlockMethod},
     worker::{Event, Interrupted, Worker},
 };
 use i_slint_backend_testing::ElementHandle;
@@ -997,7 +997,6 @@ fn pages_respond_to_clicks() {
     // A double-click on a host in the batch table opens its page.
     ctx.update(|app| {
         app.set_view(View::Batch);
-        app.preferences.batch_detail = BatchDetail::Popup;
     });
     let rows = main.global::<BatchState>().get_rows();
     assert!(rows.iter().any(|r| r.id == "lab"));
@@ -1203,7 +1202,6 @@ fn pages_respond_to_clicks() {
     // On a batch table host: the package window line, then the host page line.
     ctx.update(|app| {
         app.set_view(View::Batch);
-        app.preferences.batch_detail = BatchDetail::Popup;
         app.busy = false;
     });
     let in_table = || {

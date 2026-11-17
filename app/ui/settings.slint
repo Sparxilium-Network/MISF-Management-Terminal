@@ -45,7 +45,6 @@ export global SettingsState {
     in property <[string]> densities;
     in property <[string]> host-details;
     in property <[string]> batch-orders;
-    in property <[string]> batch-details;
     in property <int> appearance;
     in property <int> density;
     in property <int> host-detail;
@@ -57,7 +56,6 @@ export global SettingsState {
     in property <int> auto-lock-minutes;
     in property <int> auto-lock-max;
     in property <int> batch-order;
-    in property <int> batch-detail;
     // The column switches, three to a line.
     in property <[[ColumnToggle]]> batch-columns;
     in property <int> language;
@@ -390,14 +388,6 @@ component PreferencesPage inherits VerticalLayout {
                 key: "batch_order";
                 index: SettingsState.batch-order;
                 model: SettingsState.batch-orders;
-            }
-        }
-        FormRow {
-            label: T.get("batch_detail.title");
-            Choice {
-                key: "batch_detail";
-                index: SettingsState.batch-detail;
-                model: SettingsState.batch-details;
             }
         }
         SectionTitle {

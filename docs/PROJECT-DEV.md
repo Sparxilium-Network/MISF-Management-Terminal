@@ -1,6 +1,6 @@
 # MISF Management Terminal 開發說明
 
-> 最後修改：2026-11-17 ｜ 基於 commit：`fae9a89`
+> 最後修改：2026-11-17 ｜ 基於 commit：`3f6ce34`
 
 一般使用方式見 [README](../README.md) 與 [使用指南](user-guide.md)。本文件是開發文件的入口，給開發者與維護者，記錄建置、儲存格式、安全設計細節與測試方式。
 
@@ -81,7 +81,7 @@ Linux／macOS 可使用 `cargo run --locked -p misf`，須在對應平台建置�
 
 - 主機與憑證只存於 LUKSbox 容器 `hosts.lbx` 內的 SQLite 映像（檔頭 `user_version` 記錄結構版本，目前為 v6），不提供未加密模式；尚未建立容器時，所有主機請求都會被拒絕。舊版留下的未加密 `hosts.db` 只在 `vault_create` 時讀取並轉入，讀取時較舊版本會先在同目錄備份 `hosts.v<N>.bak.db`，再於單一交易內自動升級；較新版本、非 MISF、損壞或結構遭改動的資料庫一律拒絕開啟並保留原檔。每個版本的升級各自在 `core/src/db_upgrade/` 一個檔案。
 - 更早的 JSON 版本 `hosts.json` 同樣只在建立容器時匯入，原 JSON 保持不變。
-- 非敏感偏好存於未加密的 `ui-settings.json`（`version: 1`）：語言、外觀、主視窗大小與是否最大化、設定視窗大小，以及主機清單顯示 `host_list`（等級 `detail`、自訂 `fields`、密集度 `density`：`comfortable`／`compact`，以及「未分類」在分類間的位置 `ungrouped_at`，省略時排在最後；`ungrouped_collapsed` 為其收合狀態）、批次作業排序 `batch_order`（`sidebar`／`pending`／`recent`／`name`）、套件明細位置 `batch_detail`（`inline` 表格下方／`popup` 雙擊開啟視窗）、批次表格欄位 `batch_columns`（`shown` 為顯示的欄位代碼，主機欄一律顯示；`weights` 為各欄寬度比例，限制在 0.2–10；新增的 `restart` 欄在舊設定檔中預設顯示），預設解鎖方式 `unlock_method`（`password`／`windows_hello`／`security_key`；只在啟動時第一次遇到鎖定才自動開始）、自動鎖定分鐘數 `auto_lock_minutes`（1–1440；沒有這個鍵時為 15，`null` 為永不），以及底部工具視窗高度 `tool_height`。不保存憑證，主機庫鎖定時也能讀寫。
+- 非敏感偏好存於未加密的 `ui-settings.json`（`version: 1`）：語言、外觀、主視窗大小與是否最大化、設定視窗大小，以及主機清單顯示 `host_list`（等級 `detail`、自訂 `fields`、密集度 `density`：`comfortable`／`compact`，以及「未分類」在分類間的位置 `ungrouped_at`，省略時排在最後；`ungrouped_collapsed` 為其收合狀態）、批次作業排序 `batch_order`（`sidebar`／`pending`／`recent`／`name`）、批次表格欄位 `batch_columns`（`shown` 為顯示的欄位代碼，主機欄一律顯示；`weights` 為各欄寬度比例，限制在 0.2–10；新增的 `restart` 欄在舊設定檔中預設顯示），預設解鎖方式 `unlock_method`（`password`／`windows_hello`／`security_key`；只在啟動時第一次遇到鎖定才自動開始）、自動鎖定分鐘數 `auto_lock_minutes`（1–1440；沒有這個鍵時為 15，`null` 為永不），以及底部工具視窗高度 `tool_height`。不保存憑證，主機庫鎖定時也能讀寫。
 - 主機清單的分類、順序與收合狀態存於主機庫（`host_groups` 資料表與 `hosts.group_id`）。
 - 主機資料序列化內容（SQLite 映像）上限 1024 MiB（`MAX_DATABASE_BYTES`）；單一遠端命令輸出上限 32 MiB（`ssh.rs` 的 `LIMIT`），超過時中止該命令。兩者都寫在使用指南。容器建立時 metadata 區固定為 1 MiB，2026-11-14 實測可容納約 1.36 GiB 的單一檔案，反覆改寫十次仍可寫入；接近 1 GiB 時一次讀取約 2 秒、一次寫入約 5.5 秒（release，未含 SQLite 檢查）。每個請求仍會解密並檢查整個映像；批次開始時，稽核用的主機資料以同一次讀取取得，每台結果仍在完成時各自寫入。
 - 解鎖後，未加密的 `hosts.db`、`hosts.json` 與結構升級時留下的 `hosts.v<N>.bak.db` 依序逐一列出，每個檔案都要確認其完整路徑後才刪除。
@@ -228,7 +228,7 @@ LUKSbox 測試使用暫存資料，涵蓋未建立容器時拒絕主機操作且
 
 ## 畫面擷取
 
-開發用畫面擷取可使用 `cargo build -p misf --features capture`，以 `MISF_SCREENSHOT_TO` 指定 PNG 路徑，並以 `--debug.dir` 指定測試資料。`MISF_OPEN_EDITOR=1`／`MISF_OPEN_SETTINGS=1`／`MISF_OPEN_PASSKEY=1`／`MISF_OPEN_BATCH=1`／`MISF_OPEN_KEYS=1` 可預先開啟對應畫面，`MISF_OPEN_MENU=1`（需同時 `MISF_FIXTURE=1`）開啟進階選單與其上的右鍵複製選單；`MISF_OPEN_REBOOT=1`／`final`（需同時 `MISF_FIXTURE=1`）開啟重新開機確認的第一步或最後確認；`MISF_OPEN_KEPT_BACK=1`（需同時 `MISF_FIXTURE=1`）以三台範例主機開啟 dist-upgrade 報告，`=details` 另開「詳細情況」視窗並截取該視窗；`MISF_OPEN_HISTORY=1`（需同時 `MISF_FIXTURE=1`）加入幾筆範例結果並開啟過往操作工具視窗；`MISF_OPEN_TERMINAL=1`（需同時 `MISF_FIXTURE=1`）在終端機面板放入一輪批次升級的範例輸出，`MISF_OPEN_TERMINAL=shell` 則放入一個顯示類似 nano 畫面的互動 shell 分頁；旗標只有明確設為 `1` 才啟用；`MISF_OPEN_SETTINGS=about`／`preferences`／`security`／`batch` 直接開啟「關於」或「偏好設定」下的「外觀與主機清單」／「安全性」／「批次作業」頁（設定是獨立視窗，此時截取設定視窗）。`MISF_FIXTURE=1` 以幾台假主機取代主機庫內容，方便截取主機頁與批次頁。debug 模式的 Passkey 按鈕停用，擷取不操作硬體。正式 release 預設不啟用擷取功能。
+開發用畫面擷取可使用 `cargo build -p misf --features capture`，以 `MISF_SCREENSHOT_TO` 指定 PNG 路徑，並以 `--debug.dir` 指定測試資料。`MISF_OPEN_EDITOR=1`／`MISF_OPEN_SETTINGS=1`／`MISF_OPEN_PASSKEY=1`／`MISF_OPEN_BATCH=1`／`MISF_OPEN_KEYS=1` 可預先開啟對應畫面，`MISF_OPEN_MENU=1`（需同時 `MISF_FIXTURE=1`）開啟進階選單與其上的右鍵複製選單；`MISF_OPEN_REBOOT=1`／`final`（需同時 `MISF_FIXTURE=1`）開啟重新開機確認的第一步或最後確認；`MISF_OPEN_PACKAGES=1`（需同時 `MISF_FIXTURE=1`）開啟「套件明細」工具視窗；`MISF_OPEN_KEPT_BACK=1`（需同時 `MISF_FIXTURE=1`）以三台範例主機開啟 dist-upgrade 報告，`=details` 另開「詳細情況」視窗並截取該視窗；`MISF_OPEN_HISTORY=1`（需同時 `MISF_FIXTURE=1`）加入幾筆範例結果並開啟過往操作工具視窗；`MISF_OPEN_TERMINAL=1`（需同時 `MISF_FIXTURE=1`）在終端機面板放入一輪批次升級的範例輸出，`MISF_OPEN_TERMINAL=shell` 則放入一個顯示類似 nano 畫面的互動 shell 分頁；旗標只有明確設為 `1` 才啟用；`MISF_OPEN_SETTINGS=about`／`preferences`／`security`／`batch` 直接開啟「關於」或「偏好設定」下的「外觀與主機清單」／「安全性」／「批次作業」頁（設定是獨立視窗，此時截取設定視窗）。`MISF_FIXTURE=1` 以幾台假主機取代主機庫內容，方便截取主機頁與批次頁。debug 模式的 Passkey 按鈕停用，擷取不操作硬體。正式 release 預設不啟用擷取功能。
 
 畫面以 Slint 的 Skia 繪圖引擎繪製（文字比 femtovg 清楚）。建置時 `skia-bindings` 會從 rust-skia 的 GitHub 發行頁下載預先編譯的 Skia，第一次建置需要網路；Skia 授權全文在 `licenses/Skia/LICENSE`。
 
