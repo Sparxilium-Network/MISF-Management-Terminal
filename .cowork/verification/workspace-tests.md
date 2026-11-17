@@ -1,5 +1,12 @@
 # 全工作區檢查結果
 
+## 2026-11-17（分階段推送連帶保留的套件不算 kept back，分支 `feat/WYSIWYG-Terminal`，基於 `b364e83`）
+
+- 使用者貼上 Ubuntu 26.04 主機的升級輸出：73 個 Plasma／GTK 套件全部 `deferred due to phasing`。以 core 解析確認判讀正確（phased 73、kept back 0）。先前報告裡該主機的被保留套件都在這 73 個之中，推斷是被分階段推送連帶保留，dist-upgrade 也裝不了。使用者同意改 core。
+- `operation.rs`：dist-upgrade 模擬另外讀出分階段延後的套件；被保留套件若在其中，改記到 `phased`，剩下的才是 kept back，沒有剩下時不保留 `plan`。`sqlite.rs` 讀回時同樣以 `phased` 過濾 kept back。
+- 檢查：Clippy（`-D warnings`）、fmt 通過；`cargo test --locked --workspace` 通過（22、37、72、33）；`sshtest` APT 18 項通過（`misf-kept` 因新相依被保留的情境不受影響）。`.\package.ps1` 雜湊相同。
+- 未驗證：真實主機上 `apt-get -s dist-upgrade` 是否真的對那些連帶保留的套件印出 `deferred due to phasing`（沒有當時的輸出）；若它仍列為 kept back，這次改動不會生效，報告仍以「模擬沒有變動、預設不勾選」顯示。沒有新增測試（測試由他人負責）。
+
 ## 2026-11-17（dist-upgrade 報告改版，分支 `feat/WYSIWYG-Terminal`，基於 `fae9a89`）
 
 - 使用者回報報告畫面問題並決定新設計：不能點外面關閉，只有「執行 dist-upgrade」與「取消」；可勾選要做的主機；不顯示被保留的套件，改由「詳細情況」開啟獨立視窗；報告本身就是確認（不再跳第二個確認視窗）。

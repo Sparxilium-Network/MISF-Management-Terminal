@@ -137,7 +137,16 @@ impl Run<'_> {
             && !outcome.kept_back.is_empty()
         {
             progress("正在模擬 dist-upgrade…");
-            outcome.plan = self.simulate(command).await;
+            let (plan, deferred) = self.simulate(command).await;
+            // What the dist-upgrade would defer for a phased rollout too was kept back
+            // only because of the rollout: a dist-upgrade cannot take it either.
+            let (phased, kept): (Vec<String>, Vec<String>) =
+                (outcome.kept_back.drain(..)).partition(|name| deferred.contains(name));
+            outcome.phased.extend(phased);
+            outcome.phased.sort();
+            outcome.phased.dedup();
+            outcome.kept_back = kept;
+            outcome.plan = plan.filter(|_| !outcome.kept_back.is_empty());
         }
         if let Some(command) = commands.status {
             progress("正在讀取重新啟動狀態…");
@@ -183,13 +192,16 @@ impl Run<'_> {
         }
     }
 
-    /// What `dist-upgrade` would install, upgrade and remove; nothing is changed.
-    async fn simulate(&mut self, command: &str) -> Option<UpgradePlan> {
-        let (code, output) = self.optional(super::apt::SIMULATION_TITLE, command).await?;
-        if code != 0 {
-            return None;
+    /// What `dist-upgrade` would install, upgrade and remove, and what it would defer
+    /// for a phased rollout; nothing is changed.
+    async fn simulate(&mut self, command: &str) -> (Option<UpgradePlan>, Vec<String>) {
+        match self.optional(super::apt::SIMULATION_TITLE, command).await {
+            Some((0, output)) => (
+                super::apt::parse_plan(&output),
+                super::apt::parse_phased(&output),
+            ),
+            _ => (None, vec![]),
         }
-        super::apt::parse_plan(&output)
     }
 
     /// Runs DETECT and settles which manager may run; never a different one than confirmed.
