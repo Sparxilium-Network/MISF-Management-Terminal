@@ -27,12 +27,15 @@ use misf_core::{audit::AuditLog, runtime::RuntimePaths};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use std::{cell::RefCell, rc::Rc, sync::Arc, time::Instant};
 
-/// Shared by every callback: the state and both windows.
+/// Shared by every callback: the state and the windows.
 #[derive(Clone)]
 pub struct Ctx {
     app: Rc<RefCell<App>>,
     main: slint::Weak<AppWindow>,
     settings: slint::Weak<SettingsWindow>,
+    /// The dist-upgrade report's details. Held here, as nothing else keeps it; its own
+    /// callbacks never capture a `Ctx`, so this makes no cycle.
+    details: Rc<KeptBackWindow>,
 }
 
 impl Ctx {
@@ -52,6 +55,18 @@ impl Ctx {
         };
         change(&mut app, &main);
         refresh(&mut app, &main, &settings);
+        if self.details.window().is_visible() {
+            style(&app, &self.details);
+        }
+    }
+
+    /// Opens the details of the dist-upgrade report in their own window.
+    pub fn show_kept_back_details(&self) {
+        let Ok(app) = self.app.try_borrow() else {
+            return;
+        };
+        style(&app, &self.details);
+        dialogs::show_kept_back_details(&app, &self.details);
     }
 
     /// The display language, for work done outside [`Self::update`].
@@ -63,6 +78,21 @@ impl Ctx {
 thread_local! {
     /// The callbacks' context, for the worker's wake-ups on the UI thread.
     static CTX: RefCell<Option<Ctx>> = const { RefCell::new(None) };
+}
+
+/// Gives the details window the chosen language, appearance and font.
+fn style(app: &App, details: &KeptBackWindow) {
+    details
+        .global::<T>()
+        .set_language(app.preferences.language.index());
+    let theme = details.global::<Theme>();
+    theme.set_appearance(app.preferences.appearance.index());
+    theme.set_font(
+        crate::preferences::InterfaceFont::ALL
+            .iter()
+            .position(|f| *f == app.preferences.font)
+            .unwrap_or(0) as i32,
+    );
 }
 
 /// Shows every part of the state in both windows.
@@ -97,11 +127,19 @@ pub fn build(
 ) -> Result<(Ctx, AppWindow, SettingsWindow), slint::PlatformError> {
     let main = AppWindow::new()?;
     let settings = SettingsWindow::new()?;
+    let details = KeptBackWindow::new()?;
     main.set_debug(debug);
+    let window = details.as_weak();
+    details.global::<KeptBackDetails>().on_close(move || {
+        if let Some(window) = window.upgrade() {
+            let _ = window.hide();
+        }
+    });
     let ctx = Ctx {
         app: Rc::new(RefCell::new(app)),
         main: main.as_weak(),
         settings: settings.as_weak(),
+        details: Rc::new(details),
     };
     wire(&ctx, &main, &settings);
     ctx.update(|_| {});
@@ -162,6 +200,7 @@ fn wire(ctx: &Ctx, main: &AppWindow, settings: &SettingsWindow) {
     };
     main.global::<T>().on_lookup(lookup);
     settings.global::<T>().on_lookup(lookup);
+    ctx.details.global::<T>().on_lookup(lookup);
     shell::wire(ctx, main);
     sidebar::wire(ctx, main);
     host_page::wire(ctx, main);
@@ -310,6 +349,12 @@ fn capture(ctx: &Ctx) {
                     if std::env::var("MISF_OPEN_TERMINAL").as_deref() == Ok("shell") {
                         sample_shell(app);
                     }
+                    if matches!(
+                        std::env::var("MISF_OPEN_KEPT_BACK").as_deref(),
+                        Ok("1" | "details")
+                    ) {
+                        sample_kept_back(app);
+                    }
                     let reboot = std::env::var("MISF_OPEN_REBOOT");
                     if matches!(reboot.as_deref(), Ok("1" | "final")) {
                         app.choose_advanced(host_page::Advanced::Reboot);
@@ -321,6 +366,9 @@ fn capture(ctx: &Ctx) {
                         app.reboot_step(true);
                     }
                 });
+                if std::env::var("MISF_OPEN_KEPT_BACK").as_deref() == Ok("details") {
+                    c.show_kept_back_details();
+                }
                 if std::env::var("MISF_OPEN_MENU").as_deref() == Ok("1")
                     && let Some(main) = c.main.upgrade()
                 {
@@ -331,7 +379,9 @@ fn capture(ctx: &Ctx) {
                 return;
             }
             let settings_open = c.app.borrow().settings_open;
-            let snapshot = if settings_open {
+            let snapshot = if c.details.window().is_visible() {
+                Some(c.details.window().take_snapshot())
+            } else if settings_open {
                 c.settings.upgrade().map(|w| w.window().take_snapshot())
             } else {
                 c.main.upgrade().map(|w| w.window().take_snapshot())
@@ -420,6 +470,85 @@ fn sample_shell(app: &mut App) {
     app.terminal.size = Some((100, 11));
     app.terminal.add_shell(shell);
     app.tool = Some(app::Tool::Terminal);
+}
+
+/// Three upgrades that kept packages back, so the dist-upgrade report opens: one would
+/// install and upgrade, one would also remove, and one changes nothing as its packages
+/// are phased.
+#[cfg(feature = "capture")]
+fn sample_kept_back(app: &mut App) {
+    use misf_core::model::{CheckResult, Package, UpgradePlan};
+    let package = |name: &str, from: &str, to: &str| Package {
+        name: name.into(),
+        current_version: from.into(),
+        candidate_version: to.into(),
+        architecture: "amd64".into(),
+        ..Default::default()
+    };
+    let heading = misf_core::transcript::heading(misf_core::package_manager::apt::SIMULATION_TITLE);
+    let samples = [
+        (
+            "web",
+            vec![
+                "linux-generic",
+                "linux-headers-generic",
+                "linux-image-generic",
+            ],
+            UpgradePlan {
+                install: vec![package("linux-image-7.0.0-43-generic", "", "7.0.0-43.43")],
+                upgrade: vec![
+                    package("linux-generic", "7.0.0-42.42", "7.0.0-43.43"),
+                    package("linux-headers-generic", "7.0.0-42.42", "7.0.0-43.43"),
+                    package("linux-image-generic", "7.0.0-42.42", "7.0.0-43.43"),
+                ],
+                remove: vec![],
+            },
+            "Inst linux-image-7.0.0-43-generic (7.0.0-43.43 Ubuntu:26.04/resolute-updates [amd64])\nInst linux-generic [7.0.0-42.42] (7.0.0-43.43 Ubuntu:26.04/resolute-updates [amd64])",
+        ),
+        (
+            "db",
+            vec!["libpq5", "postgresql-client-17"],
+            UpgradePlan {
+                install: vec![package("libpq6", "", "18.1-1")],
+                upgrade: vec![package("postgresql-client-17", "17.6-1", "17.7-1")],
+                remove: vec![package("libpq5", "17.6-1", "")],
+            },
+            "Remv libpq5 [17.6-1]\nInst libpq6 (18.1-1 Ubuntu:26.04/resolute-updates [amd64])",
+        ),
+        (
+            "misc",
+            vec![
+                "bluedevil",
+                "kdeplasma-addons-data",
+                "kwin-addons",
+                "libkf6screen8",
+                "plasma-workspace",
+                "powerdevil",
+                "powerdevil-data",
+            ],
+            UpgradePlan::default(),
+            "Calculating upgrade...\nThe following packages have been kept back:\n  bluedevil kdeplasma-addons-data kwin-addons libkf6screen8 plasma-workspace\n  powerdevil powerdevil-data\n0 upgraded, 0 newly installed, 0 to remove and 7 not upgraded.",
+        ),
+    ];
+    let mut ids = Vec::new();
+    for (id, kept, plan, simulation) in samples {
+        let Some(host) = app.hosts.iter_mut().find(|h| h.id == id) else {
+            continue;
+        };
+        let plan_shown =
+            !(plan.install.is_empty() && plan.upgrade.is_empty() && plan.remove.is_empty());
+        host.last_check = Some(CheckResult {
+            checked_at: "2026-11-17T22:24:00+08:00".into(),
+            operation: "upgrade".into(),
+            status: "success".into(),
+            kept_back: kept.into_iter().map(Into::into).collect(),
+            plan: plan_shown.then_some(plan),
+            output: format!("Setting up openssl (3.0.17) ...\n{heading}{simulation}\n"),
+            ..Default::default()
+        });
+        ids.push(id.to_owned());
+    }
+    app.report_kept_back(ids);
 }
 
 /// A few past results and an error, with the status line expanded to show them.

@@ -1,6 +1,6 @@
 # 原始碼檔案說明
 
-> 最後修改：2026-11-17 ｜ 基於 commit：`8aaa1b9`
+> 最後修改：2026-11-17 ｜ 基於 commit：`fae9a89`
 
 每個 `.rs` 檔案負責什麼。整體設計與資料流見 [架構](architecture.md)，建置與慣例見 [開發說明](PROJECT-DEV.md)。新增、改名或刪除 `.rs` 檔案時，請一併更新本文件。
 
@@ -124,6 +124,7 @@ Workspace 有四個 crate：`core`（`misf-core`，核心函式庫與 JSON CLI�
 | `app/ui/tool_window.slint` | IDE 式工具視窗：`ToolWindow`（目前開啟的工具視窗與共用高度）、視窗最左側的圖示直條 `ToolStripe`（終端機、過往操作）、可拖曳的上緣 `DockHandle` 與標題列 `DockTitle`（含收合鈕）。 |
 | `app/ui/terminal.slint` | 終端機工具視窗 `TerminalPanel` 與 `TerminalState`：每台主機一個分頁（狀態圓點；shell 分頁另有 >_ 與關閉鈕）、「開啟 Shell」、「複製」；`ShellScreen` 以等寬字型量出格寬，依面板大小回報行列數，逐列畫出 `ShellRow`／`ShellRun` 與游標，`FocusScope` 接收按鍵（Ctrl+Shift+V 經隱藏的 `TextInput` 貼上），滾輪捲動歷史；以及固定行高的 `ListView`（不換行、過長省略）；捲到底時跟著新輸出捲動，往上捲就停止跟隨。 |
 | `app/ui/sidebar.slint`、`host_page.slint`、`result_panel.slint`、`batch_page.slint`、`settings.slint`、`shell.slint` | 各頁畫面與其 global。 |
+| `app/ui/kept_back_details.slint` | dist-upgrade 報告的「詳細情況」獨立視窗（`KeptBackWindow`）與其 global `KeptBackDetails`；由 `ui/mod.rs` 的 `Ctx` 持有，內容由 `ui/dialogs.rs` 填入。 |
 | `app/ui/dialogs/*.slint` | 主機編輯、SSH 金鑰、主機庫、確認類與簡短對話框。 |
 | `app/src/session_log.rs` | 只存在記憶體的完整工作階段 LOG：操作標題（`banner`）、完整請求與回應（`mask` 只遮蔽密碼、私鑰、密語、PIN 欄位）、進度、錯誤，以及每台主機的區塊（`host`：ID、帳號@位址、指紋、套件、重啟狀態、遠端原始輸出，以 `END OF` 結束）；超過 16 MiB 捨棄最舊的；`export` 寫成文字檔。以 `Zeroizing` 保存，關閉程式即消失。 |
 | `app/src/worker.rs` | 背景執行緒與 Tokio runtime：從佇列取出請求交給 `Session`，以 `Event` 回傳進度與結果，再以 `Wake` 喚醒 UI 執行緒；`Relay` 是批次觀察者，轉送每台結果與失敗詢問，並等待 UI 經 `decisions` 送回的決定；`Screen` 是終端機接收端，把命令與輸出轉成 `Event::Terminal`，互動 shell 的原始輸出轉成 `Event::ShellOutput`、結束轉成 `Event::ShellEnded`（`Worker::shells` 讓 UI 直接把按鍵送進 shell），大量輸出只在 `Worker::terminal` 旗標未設時喚醒一次 UI（UI 讀取前清除旗標）。請求 panic 時，若該請求是升級，先把尚未回報結果的主機（單台升級的那台，或批次中 `Relay` 尚未回報的主機）以 `batch::interrupted` 存入主機庫，再送出帶有這些主機與儲存結果的 `Event::Crashed`，然後結束執行緒；`Running` 只記錄請求的 action／operation／id／ids，不保留含密碼的原始請求。UI（`App::worker_crashed`）解除忙碌、把這些主機標示為結果未知，並在錯誤中逐行列出主機名稱，存檔失敗時另外說明重啟後會遺失標示；執行緒無聲結束時只解除忙碌並顯示錯誤。 |

@@ -41,6 +41,7 @@ export component InfoLines inherits VerticalLayout {
             font-weight: 700;
             color: Theme.muted;
             wrap: word-wrap;
+            min-height: self.preferred-height;
         }
         if line.kind == 7: Mono {
             text: line.value;
@@ -51,6 +52,7 @@ export component InfoLines inherits VerticalLayout {
             color: Theme.ink;
             wrap: word-wrap;
             horizontal-stretch: 1;
+            min-height: self.preferred-height;
         }
         if line.kind == 9: Rectangle { height: 4px; }
         if line.kind == 10: Mono {
@@ -62,10 +64,14 @@ export component InfoLines inherits VerticalLayout {
             color: Theme.ink;
             wrap: word-wrap;
             single-line: false;
+            min-height: self.preferred-height;
         }
         if line.kind < 5 || line.kind == 6: Text {
             text: line.text;
             wrap: word-wrap;
+            // Slint 1.18.1 measures wrapped text in `if`/`for` cells as one line
+            // (slint-ui/slint#13655), so a scroll view around these would cut them off.
+            min-height: self.preferred-height;
             font-weight: line.kind == 4 ? 700 : 400;
             font-size: line.kind == 6 ? 11px : 14px;
             color: line.kind == 1 || line.kind == 6 ? Theme.muted

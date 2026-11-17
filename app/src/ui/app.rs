@@ -139,6 +139,20 @@ pub struct KeptBack {
     pub name: String,
     pub packages: Vec<String>,
     pub plan: Option<UpgradePlan>,
+    /// The `apt-get -s dist-upgrade` output, for the details window.
+    pub simulation: String,
+    /// Ticked for the dist-upgrade the report offers.
+    pub chosen: bool,
+}
+
+impl KeptBack {
+    /// Whether the simulation would change anything; without that a dist-upgrade does
+    /// nothing for these packages either, as with a phased rollout.
+    pub fn has_plan(&self) -> bool {
+        self.plan
+            .as_ref()
+            .is_some_and(|p| !(p.install.is_empty() && p.upgrade.is_empty() && p.remove.is_empty()))
+    }
 }
 
 /// A reboot awaiting two confirmations: the risks first, then a final yes.

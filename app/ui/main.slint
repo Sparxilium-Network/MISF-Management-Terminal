@@ -13,14 +13,15 @@ import { BatchPage, BatchState, DetailHeading, ManagerChoice, BatchColumnView, B
 import { EditorDialog, EditorState } from "dialogs/editor.slint";
 import { KeysDialog, KeysState, KeyView } from "dialogs/keys.slint";
 import { VaultDialog, VaultState, SlotView } from "dialogs/vault.slint";
-import { UpgradeDialog, UpgradeState, KeptBackDialog, KeptBackState, RebootDialog, RebootState, BatchFailureDialog, BatchFailureState } from "dialogs/confirm.slint";
+import { UpgradeDialog, UpgradeState, KeptBackDialog, KeptBackState, KeptBackHost, RebootDialog, RebootState, BatchFailureDialog, BatchFailureState } from "dialogs/confirm.slint";
 import { TrustDialog, TrustState, DeleteDialog, DeleteState, GroupDialog, GroupState, PlaintextDialog, PlaintextState, SchemaDialog, SchemaState, CloseDialog, CloseState, StopDialog, StopState, ErrorDialog, ErrorState } from "dialogs/simple.slint";
 import { SettingsWindow, SettingsState, TreeRow, ColumnToggle } from "settings.slint";
+import { KeptBackWindow, KeptBackDetails } from "kept_back_details.slint";
 import { TerminalPanel, TerminalState, TerminalTab, TerminalLine, ShellRow, ShellRun } from "terminal.slint";
 import { ToolWindow, ToolStripe, DockHandle, DockTitle } from "tool_window.slint";
 import { WindowChrome, DragArea, MenuItem, CaptionButtons, WindowEdges } from "title_bar.slint";
 
-export { HintData, Theme, T, Tip, Clip, MenuLine, PopMenu, Shell, HistoryLine, SidebarState, SidebarRow, HostState, ResultState, InfoLine, BatchState, ManagerChoice, BatchColumnView, BatchCell, BatchRowView, EditorState, KeysState, KeyView, VaultState, SlotView, UpgradeState, KeptBackState, RebootState, BatchFailureState, TrustState, DeleteState, GroupState, PlaintextState, SchemaState, CloseState, StopState, ErrorState, SettingsWindow, SettingsState, TreeRow, ColumnToggle, TerminalState, TerminalTab, TerminalLine, ShellRow, ShellRun, ToolWindow, WindowChrome }
+export { HintData, Theme, T, Tip, Clip, MenuLine, PopMenu, Shell, HistoryLine, SidebarState, SidebarRow, HostState, ResultState, InfoLine, BatchState, ManagerChoice, BatchColumnView, BatchCell, BatchRowView, EditorState, KeysState, KeyView, VaultState, SlotView, UpgradeState, KeptBackState, KeptBackHost, KeptBackWindow, KeptBackDetails, RebootState, BatchFailureState, TrustState, DeleteState, GroupState, PlaintextState, SchemaState, CloseState, StopState, ErrorState, SettingsWindow, SettingsState, TreeRow, ColumnToggle, TerminalState, TerminalTab, TerminalLine, ShellRow, ShellRun, ToolWindow, WindowChrome }
 
 // This run's past results and errors, newest first: the history tool window.
 component HistoryPanel inherits Rectangle {

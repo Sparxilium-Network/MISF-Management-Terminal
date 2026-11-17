@@ -1,5 +1,13 @@
 # 全工作區檢查結果
 
+## 2026-11-17（dist-upgrade 報告改版，分支 `feat/WYSIWYG-Terminal`，基於 `fae9a89`）
+
+- 使用者回報報告畫面問題並決定新設計：不能點外面關閉，只有「執行 dist-upgrade」與「取消」；可勾選要做的主機；不顯示被保留的套件，改由「詳細情況」開啟獨立視窗；報告本身就是確認（不再跳第二個確認視窗）。
+- 原畫面第二台主機被截斷且沒有捲軸：`InfoLines` 的換行文字在 `for`／`if` 內，Slint #13655 以單行量高度，捲動區內容高度被低估。已在 `InfoLines` 的換行元素加 `min-height: self.preferred-height`。
+- 「跳出兩次」：dist-upgrade 結果若仍有 kept back（例如分階段推送，dist-upgrade 也不裝），報告會再跳一次。現在只有 `upgrade` 的結果會開報告，dist-upgrade 之後只在狀態列列出主機。使用者截圖中「無法取得模擬結果」的那台實際原因沒有確認（主機庫加密，讀不到輸出）；新畫面把這種情況說明為「模擬沒有變動」，預設不勾選，原因可在詳細情況的模擬原始輸出看到。
+- 檢查：fmt、Clippy（`-D warnings`）通過；`cargo test --locked --workspace` 通過（22、37、72、33）。以新增的 `MISF_OPEN_KEPT_BACK=1`／`details` 擷取報告與詳細情況視窗，確認版面。`.\package.ps1` 成功，`dist\MISF\misf.exe` 與 `target\release\misf.exe` 雜湊相同。
+- 未驗證：在真實主機上走完「升級 → 報告 → 勾選 → dist-upgrade」；Esc／點外面不關閉只依程式判斷，沒有實際操作；沒有新增 UI 測試（測試由他人負責）。
+
 ## 2026-11-17（新增 docs/test 測試清單，分支 `feat/WYSIWYG-Terminal`，基於 `546e058`）
 
 - 使用者要求 `docs/test/` 下每個套件管理器一份清單（`apt-test.md`、`dnf-test.md`、`pacman-test.md`、`apk-test.md`），列出測試項目與所在檔案，另有總覽 `README.md` 說明怎麼只跑一部分。

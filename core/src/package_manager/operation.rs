@@ -185,9 +185,7 @@ impl Run<'_> {
 
     /// What `dist-upgrade` would install, upgrade and remove; nothing is changed.
     async fn simulate(&mut self, command: &str) -> Option<UpgradePlan> {
-        let (code, output) = self
-            .optional("dist-upgrade 模擬（不會變更系統）", command)
-            .await?;
+        let (code, output) = self.optional(super::apt::SIMULATION_TITLE, command).await?;
         if code != 0 {
             return None;
         }

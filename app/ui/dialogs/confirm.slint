@@ -21,12 +21,26 @@ export global UpgradeState {
     callback cancel();
 }
 
+// A host the dist-upgrade report offers, with its simulation in one line.
+export struct KeptBackHost {
+    name: string,
+    summary: string,
+    // The simulation removes packages, or showed nothing to do.
+    warn: bool,
+    chosen: bool,
+}
+
 export global KeptBackState {
     in property <bool> shown;
     in property <string> title;
-    in property <[InfoLine]> lines;
-    callback dist-upgrade();
-    callback close();
+    in property <[KeptBackHost]> hosts;
+    in property <string> run-label;
+    in property <bool> can-run;
+    in-out property <bool> acknowledged;
+    callback toggle(index: int);
+    callback details();
+    callback run();
+    callback cancel();
 }
 
 export global RebootState {
@@ -112,9 +126,10 @@ export component UpgradeDialog inherits Modal {
     }
 }
 
+// Asks which hosts get a dist-upgrade. Only its buttons close it: a click outside or
+// Escape does nothing, so the report is not lost by accident.
 export component KeptBackDialog inherits Modal {
-    panel-width: 680px;
-    dismissed => { KeptBackState.close(); }
+    panel-width: 640px;
     Heading {
         text: KeptBackState.title;
     }
@@ -122,32 +137,57 @@ export component KeptBackDialog inherits Modal {
         text: T.get("kept_back.description");
     }
     ScrollView {
-        vertical-stretch: 1;
-        min-height: 120px;
-        preferred-height: lines.preferred-height;
-        content-height: lines.preferred-height;
+        max-height: 220px;
+        preferred-height: hosts.preferred-height;
+        content-height: hosts.preferred-height;
         content-width: self.visible-width;
-        lines := InfoLines {
+        hosts := VerticalLayout {
             width: parent.width - 14px;
-            lines: KeptBackState.lines;
+            spacing: 10px;
+            for host[index] in KeptBackState.hosts: VerticalLayout {
+                spacing: 2px;
+                CheckBox {
+                    text: host.name;
+                    checked: host.chosen;
+                    enabled: !Shell.busy;
+                    toggled => { KeptBackState.toggle(index); }
+                }
+                HorizontalLayout {
+                    padding-left: 28px;
+                    Text {
+                        text: host.summary;
+                        wrap: word-wrap;
+                        min-height: self.preferred-height;
+                        color: host.warn ? Theme.warning : Theme.muted;
+                    }
+                }
+            }
         }
     }
     Notice {
         text: T.get("kept_back.risk");
     }
+    CheckBox {
+        text: T.get("upgrade.ack");
+        checked <=> KeptBackState.acknowledged;
+    }
     HorizontalLayout {
         spacing: 10px;
         alignment: start;
         ColorButton {
-            text: T.get("kept_back.dist_upgrade");
+            text: KeptBackState.run-label;
             fill: Theme.red;
-            enabled: !Shell.busy;
-            clicked => { KeptBackState.dist-upgrade(); }
+            enabled: !Shell.busy && KeptBackState.acknowledged && KeptBackState.can-run;
+            clicked => { KeptBackState.run(); }
         }
         Button {
-            text: T.get("common.close");
+            text: T.get("kept_back.details");
+            clicked => { KeptBackState.details(); }
+        }
+        Button {
+            text: T.get("common.cancel");
             enabled: !Shell.busy;
-            clicked => { KeptBackState.close(); }
+            clicked => { KeptBackState.cancel(); }
         }
     }
 }

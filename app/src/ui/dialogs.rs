@@ -2,11 +2,13 @@
 //! deleting a host, naming a group, and errors.
 
 use super::{
-    App, AppWindow, BatchFailureState, Ctx, DeleteState, ErrorState, GroupState, KeptBackState,
-    RebootState, TrustState, UpgradeState,
+    App, AppWindow, BatchFailureState, Ctx, DeleteState, ErrorState, GroupState, KeptBackDetails,
+    KeptBackHost, KeptBackState, KeptBackWindow, RebootState, TrustState, UpgradeState,
+    app::{KeptBack, UpgradeConfirm},
     format::{Kind, Line, manager_label},
-    info_lines, texts,
+    info_lines, sync_rows, texts,
 };
+use crate::i18n::Translator;
 use misf_core::{
     audit::{Action, Outcome},
     batch,
@@ -34,11 +36,35 @@ impl App {
         self.log(Action::UpgradeCancel, Outcome::Cancelled);
     }
 
-    /// Offers a dist-upgrade of every host the report lists.
-    pub fn dist_upgrade_kept_back(&mut self) {
-        let ids: Vec<String> = self.kept_back_report.drain(..).map(|k| k.id).collect();
+    /// Ticks or unticks a host in the dist-upgrade report.
+    pub fn toggle_kept_back(&mut self, index: usize) {
+        if let Some(entry) = self.kept_back_report.get_mut(index) {
+            entry.chosen = !entry.chosen;
+        }
+    }
+
+    /// Runs the dist-upgrade on the ticked hosts; the report itself is the confirmation.
+    pub fn run_kept_back(&mut self) {
+        let ids: Vec<String> = (self.kept_back_report.iter())
+            .filter(|k| k.chosen)
+            .map(|k| k.id.clone())
+            .collect();
+        if ids.is_empty() {
+            return;
+        }
+        self.kept_back_report.clear();
         let batch = ids.len() > 1;
-        self.prompt_upgrade(ids, batch, package_manager::Mode::DistUpgrade);
+        self.upgrade_confirm = Some(UpgradeConfirm {
+            ids,
+            batch,
+            mode: package_manager::Mode::DistUpgrade,
+        });
+        self.confirm_upgrade();
+    }
+
+    pub fn cancel_kept_back(&mut self) {
+        self.kept_back_report.clear();
+        self.log(Action::UpgradeCancel, Outcome::Cancelled);
     }
 
     pub fn reboot_step(&mut self, next: bool) {
@@ -124,49 +150,103 @@ fn package_line(p: &Package) -> String {
     }
 }
 
-fn kept_back_lines(app: &App) -> Vec<Line> {
-    let t = app.t();
-    let mut lines = Vec::new();
-    for entry in &app.kept_back_report {
+/// What the report says under a host's name: the simulation in one line.
+fn kept_back_summary(t: Translator, entry: &KeptBack) -> String {
+    match &entry.plan {
+        Some(plan) if entry.has_plan() => t.format(
+            "kept_back.summary",
+            &[
+                ("kept", entry.packages.len().to_string()),
+                ("install", plan.install.len().to_string()),
+                ("upgrade", plan.upgrade.len().to_string()),
+                ("remove", plan.remove.len().to_string()),
+            ],
+        ),
+        _ => t.format(
+            "kept_back.no_plan",
+            &[("kept", entry.packages.len().to_string())],
+        ),
+    }
+}
+
+/// The details window: per host, the kept-back packages, the simulated changes and the
+/// simulation's own output.
+fn kept_back_details(t: Translator, report: &[KeptBack]) -> Vec<Line> {
+    let mut lines = vec![Line::new(Kind::Muted, t.get("kept_back.commands"))];
+    let commands = package_manager::manager_commands(
+        package_manager::Manager::Apt,
+        false,
+        package_manager::Mode::DistUpgrade,
+    );
+    lines.extend(commands.into_iter().map(|c| Line::new(Kind::Mono, c)));
+    for entry in report {
         lines.push(Line::new(Kind::Gap, ""));
         lines.push(Line::new(Kind::Title, entry.name.clone()));
         lines.push(Line::new(
             Kind::Body,
             t.format(
                 "kept_back.packages",
-                &[("packages", entry.packages.join(", "))],
+                &[
+                    ("count", entry.packages.len().to_string()),
+                    ("packages", entry.packages.join(", ")),
+                ],
             ),
         ));
-        let Some(plan) = &entry.plan else {
-            lines.push(Line::new(Kind::Muted, t.get("kept_back.no_plan")));
-            continue;
-        };
-        let count = |list: &[Package]| [("count", list.len().to_string())];
-        for (title, list, kind) in [
-            (
-                t.format("kept_back.install", &count(&plan.install)),
-                &plan.install,
-                Kind::Body,
-            ),
-            (
-                t.format("kept_back.upgrade", &count(&plan.upgrade)),
-                &plan.upgrade,
-                Kind::Body,
-            ),
-            (
-                t.format("kept_back.remove", &count(&plan.remove)),
-                &plan.remove,
-                Kind::Error,
-            ),
-        ] {
-            if list.is_empty() {
-                continue;
+        match &entry.plan {
+            Some(plan) if entry.has_plan() => {
+                let count = |list: &[Package]| [("count", list.len().to_string())];
+                for (title, list, kind) in [
+                    (
+                        t.format("kept_back.install", &count(&plan.install)),
+                        &plan.install,
+                        Kind::Body,
+                    ),
+                    (
+                        t.format("kept_back.upgrade", &count(&plan.upgrade)),
+                        &plan.upgrade,
+                        Kind::Body,
+                    ),
+                    (
+                        t.format("kept_back.remove", &count(&plan.remove)),
+                        &plan.remove,
+                        Kind::Error,
+                    ),
+                ] {
+                    if list.is_empty() {
+                        continue;
+                    }
+                    lines.push(Line::new(kind, title));
+                    lines.extend(list.iter().map(|p| Line::new(Kind::Mono, package_line(p))));
+                }
             }
-            lines.push(Line::new(kind, title));
-            lines.extend(list.iter().map(|p| Line::new(Kind::Mono, package_line(p))));
+            _ => lines.push(Line::new(Kind::Warning, t.get("kept_back.no_change"))),
         }
+        lines.push(Line::new(Kind::Muted, t.get("kept_back.simulation")));
+        lines.push(Line::new(
+            Kind::Mono,
+            if entry.simulation.is_empty() {
+                t.get("kept_back.no_output").to_owned()
+            } else {
+                entry.simulation.clone()
+            },
+        ));
     }
     lines
+}
+
+/// Fills the details window from the open report and shows it.
+pub fn show_kept_back_details(app: &App, details: &KeptBackWindow) {
+    let t = app.t();
+    let state = details.global::<KeptBackDetails>();
+    state.set_heading(
+        t.format(
+            "kept_back.title",
+            &[("count", app.kept_back_report.len().to_string())],
+        )
+        .into(),
+    );
+    state.set_lines(info_lines(kept_back_details(t, &app.kept_back_report)));
+    let _ = details.show();
 }
 
 pub fn push(app: &mut App, w: &AppWindow) {
@@ -230,7 +310,9 @@ pub fn push(app: &mut App, w: &AppWindow) {
 
     let kept = w.global::<KeptBackState>();
     kept.set_shown(!app.kept_back_report.is_empty());
-    if !app.kept_back_report.is_empty() {
+    if app.kept_back_report.is_empty() {
+        kept.set_acknowledged(false);
+    } else {
         kept.set_title(
             t.format(
                 "kept_back.title",
@@ -238,7 +320,22 @@ pub fn push(app: &mut App, w: &AppWindow) {
             )
             .into(),
         );
-        kept.set_lines(info_lines(kept_back_lines(app)));
+        let rows: Vec<KeptBackHost> = (app.kept_back_report.iter())
+            .map(|entry| KeptBackHost {
+                name: entry.name.clone().into(),
+                summary: kept_back_summary(t, entry).into(),
+                warn: !entry.has_plan()
+                    || entry.plan.as_ref().is_some_and(|p| !p.remove.is_empty()),
+                chosen: entry.chosen,
+            })
+            .collect();
+        sync_rows(kept.get_hosts(), rows, |model| kept.set_hosts(model));
+        let chosen = (app.kept_back_report.iter()).filter(|k| k.chosen).count();
+        kept.set_can_run(chosen > 0);
+        kept.set_run_label(
+            t.format("kept_back.dist_upgrade", &[("count", chosen.to_string())])
+                .into(),
+        );
     }
 
     let reboot = w.global::<RebootState>();
@@ -340,9 +437,19 @@ pub fn wire(ctx: &Ctx, w: &AppWindow) {
 
     let kept = w.global::<KeptBackState>();
     let c = ctx.clone();
-    kept.on_dist_upgrade(move || c.update(App::dist_upgrade_kept_back));
+    kept.on_toggle(move |index| c.update(|app| app.toggle_kept_back(index as usize)));
     let c = ctx.clone();
-    kept.on_close(move || c.update(|app| app.kept_back_report.clear()));
+    kept.on_run(move || {
+        c.update_with(|app, w| {
+            if w.global::<KeptBackState>().get_acknowledged() {
+                app.run_kept_back();
+            }
+        })
+    });
+    let c = ctx.clone();
+    kept.on_cancel(move || c.update(App::cancel_kept_back));
+    let c = ctx.clone();
+    kept.on_details(move || c.show_kept_back_details());
 
     let reboot = w.global::<RebootState>();
     let c = ctx.clone();

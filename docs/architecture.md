@@ -1,6 +1,6 @@
 # MISF Management Terminal 架構
 
-> 最後修改：2026-11-17 ｜ 基於 commit：`eebbd7a`
+> 最後修改：2026-11-17 ｜ 基於 commit：`fae9a89`
 
 > [!WARNING]
 > **本專案仍處於開發階段，請勿用於正式環境。** 相關安全保護機制尚未完善。
@@ -104,7 +104,7 @@ UI 與 CLI 都送出 `{"action": …}` JSON 給 `Session::handle`。CLI 從 stdi
 
 - `apt-get upgrade` 不安裝新套件也不移除套件，所以需要新套件的更新（例如核心的 `linux-generic` 需要新的 `linux-image-*`）會被列在「The following packages have been kept back:」，退出碼仍為 0。MISF 解析這份清單存入 `CheckResult.kept_back`（扣除 phasing 延後的套件）。
 - 有 kept back 時，接著執行唯讀的 `apt::SIMULATE`（`apt-get -s dist-upgrade`，不取鎖、不需 sudo、不變更系統），解析 `Inst`／`Remv` 行為 `UpgradePlan`：新安裝、升級（舊→新版本）與移除。模擬失敗只讓 `plan` 為空。
-- 操作結束時（單台升級或整個批次結束後），UI 彈出報告，列出需要 dist-upgrade 的主機、被保留的套件與模擬出的變動，並可直接對這些主機開啟 dist-upgrade 確認。
+- 升級（`operation: "upgrade"`）結束時（單台，或整個批次結束後），UI 彈出報告：每台需要 dist-upgrade 的主機一個勾選框與一行模擬摘要；模擬沒有變動（`plan` 為空）的主機預設不勾選。報告本身就是 dist-upgrade 的確認（顯示風險與「我了解」勾選），只能以「執行」或「取消」關閉；勾選一台時以單台、多台時以批次執行。「詳細情況」開啟獨立視窗（`KeptBackWindow`），列出被保留的套件、模擬的每個變動、從保存的執行輸出取出的 `apt::SIMULATION_TITLE` 段落，以及 dist-upgrade 的命令。dist-upgrade 的結果不再彈出報告；仍有 kept back 時只在狀態列列出主機。
 - `dist_upgrade` 請求（單台與批次 `operation: "dist_upgrade"`）只有 APT 有命令，其他套件管理器在任何套件命令前就失敗。確認視窗列出實際命令、較強的風險說明，以及各主機上次模擬的新裝／升級／移除數量與將移除的套件。稽核動作為 `dist_upgrade`、`batch_dist_upgrade`。
 
 ### 重啟提示與重新開機（只限 APT）

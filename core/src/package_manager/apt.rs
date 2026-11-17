@@ -16,6 +16,8 @@ pub const DIST_UPGRADE: &str = "LC_ALL=C DEBIAN_FRONTEND=noninteractive NEEDREST
 pub const SUDO_DIST_UPGRADE: &str = "LC_ALL=C sudo -S -p '__MISF_SUDO_PROMPT__' -- env LC_ALL=C DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l apt-get -y -q=1 -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold dist-upgrade";
 /// `-s` only prints what dist-upgrade would do; it takes no lock and needs no root.
 pub const SIMULATE: &str = "LC_ALL=C apt-get -s -q=1 dist-upgrade";
+/// The heading of SIMULATE's output in the saved transcript.
+pub const SIMULATION_TITLE: &str = "dist-upgrade 模擬（不會變更系統）";
 /// Run by a check: what `upgrade` would do, read for the updates a phased rollout
 /// defers on this host. Like SIMULATE, it takes no lock, needs no root, changes nothing.
 pub const PREVIEW: &str = "LC_ALL=C apt-get -s -q=1 upgrade";

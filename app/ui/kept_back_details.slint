@@ -1,0 +1,54 @@
+// The dist-upgrade report's details in a window of their own: for each host, the kept-back
+// packages, what the simulation would install, upgrade and remove, and its raw output.
+// Noto Sans TC (SIL OFL 1.1), embedded so every system draws the same text.
+import "../../assets/fonts/NotoSansTC-VariableFont_wght.ttf";
+import { Button, ScrollView } from "std-widgets.slint";
+import { Theme, T, AppearanceSync } from "theme.slint";
+import { InfoLine, InfoLines } from "result_panel.slint";
+
+export global KeptBackDetails {
+    in property <string> heading;
+    in property <[InfoLine]> lines;
+    callback close();
+}
+
+export component KeptBackWindow inherits Window {
+    title: T.get("kept_back.details_title");
+    icon: @image-url("../../assets/icons/misf-256.png");
+    min-width: 480px;
+    min-height: 320px;
+    preferred-width: 760px;
+    preferred-height: 600px;
+    background: Theme.background;
+    default-font-size: 14px;
+    default-font-family: Theme.font-family;
+    default-font-weight: Theme.font-weight;
+    AppearanceSync { }
+    VerticalLayout {
+        padding: 16px;
+        spacing: 10px;
+        Text {
+            text: KeptBackDetails.heading;
+            font-size: 19px;
+            font-weight: 700;
+            color: Theme.ink;
+            wrap: word-wrap;
+        }
+        ScrollView {
+            vertical-stretch: 1;
+            content-width: self.visible-width;
+            content-height: max(self.visible-height, page.preferred-height);
+            page := InfoLines {
+                width: parent.width - 14px;
+                lines: KeptBackDetails.lines;
+            }
+        }
+        HorizontalLayout {
+            alignment: end;
+            Button {
+                text: T.get("common.close");
+                clicked => { KeptBackDetails.close(); }
+            }
+        }
+    }
+}

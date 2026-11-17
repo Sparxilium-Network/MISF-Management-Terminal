@@ -31,21 +31,43 @@ impl App {
         self.log(Action::UpgradePrompt, Outcome::Succeeded);
     }
 
-    /// Remembers which of these hosts' upgrades kept packages back, to report them.
+    /// Remembers which of these hosts' upgrades kept packages back, to report them. A
+    /// dist-upgrade is not reported again: it is what the report offers, so packages it
+    /// still left are only named in the status line.
     pub fn report_kept_back(&mut self, ids: Vec<String>) {
-        let report: Vec<KeptBack> = ids
-            .iter()
-            .filter_map(|id| {
-                let host = self.hosts.iter().find(|h| h.id == *id)?;
-                let check = host.last_check.as_ref()?;
-                (check.is_upgrade() && !check.kept_back.is_empty()).then(|| KeptBack {
-                    id: host.id.clone(),
-                    name: host.name.clone(),
-                    packages: check.kept_back.clone(),
-                    plan: check.plan.clone(),
-                })
-            })
-            .collect();
+        let t = self.t();
+        let mut still = Vec::new();
+        let mut report = Vec::new();
+        for id in &ids {
+            let Some(host) = self.hosts.iter().find(|h| h.id == *id) else {
+                continue;
+            };
+            let Some(check) = host.last_check.as_ref() else {
+                continue;
+            };
+            if check.kept_back.is_empty() {
+                continue;
+            }
+            match check.operation.as_str() {
+                "upgrade" => {
+                    let mut entry = KeptBack {
+                        id: host.id.clone(),
+                        name: host.name.clone(),
+                        packages: check.kept_back.clone(),
+                        plan: check.plan.clone(),
+                        simulation: simulation_output(&check.output),
+                        chosen: false,
+                    };
+                    entry.chosen = entry.has_plan();
+                    report.push(entry);
+                }
+                "dist_upgrade" => still.push(host.name.clone()),
+                _ => {}
+            }
+        }
+        if !still.is_empty() {
+            self.set_status(t.format("kept_back.still", &[("hosts", still.join(", "))]));
+        }
         if report.is_empty() {
             return;
         }
@@ -56,6 +78,7 @@ impl App {
             "",
         );
         self.kept_back_report = report;
+        self.log(Action::UpgradePrompt, Outcome::Succeeded);
     }
 
     /// Whether the advanced menu's item can run on this host.
@@ -415,4 +438,22 @@ pub fn wire(ctx: &Ctx, w: &AppWindow) {
             app.log(Action::PackageSearch, Outcome::Succeeded);
         })
     });
+}
+
+/// The `apt-get -s dist-upgrade` part of a saved transcript: from its heading to the next.
+pub fn simulation_output(transcript: &str) -> String {
+    let title = format!("* {} *", package_manager::apt::SIMULATION_TITLE);
+    let mut lines = transcript.lines().skip_while(|line| *line != title);
+    // The heading line and the rule under it.
+    lines.next();
+    lines.next();
+    let heading_rule = |line: &str| line.len() >= 4 && line.chars().all(|c| c == '*');
+    let section: Vec<&str> = lines.take_while(|line| !heading_rule(line)).collect();
+    section
+        .join(
+            "
+",
+        )
+        .trim()
+        .to_owned()
 }
