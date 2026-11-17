@@ -1,5 +1,12 @@
 # 全工作區檢查結果
 
+## 2026-11-18（主機頁「其他操作」選單，分支 `feat/WYSIWYG-Terminal`，基於 `b4afaf8`）
+
+- 使用者要求：主機指紋、重新載入、刪除主機、編輯主機收進「其他操作」選單，放在「進階操作」右側。
+- 實作：`host_page.slint` 抽出共用 `MenuFrame`，新增 `MoreMenu`；`HostState.more-open`／`more-toggled`、`App.more_open`（鎖定與無主機時關閉）。標題列的編輯與刪除按鈕、動作列的主機指紋與重新載入按鈕移除。新增語系鍵 `more.button`、`host.delete`；擷取旗標 `MISF_OPEN_MENU=more`。
+- 檢查：fmt、Clippy（`-D warnings`）通過；`cargo test --workspace` 通過（22、37、72、33）。以 `MISF_OPEN_MENU=more` 擷取確認版面。
+- 未驗證：選單項目只依擷取畫面與程式確認，沒有新增 UI 測試（測試由他人負責）。
+
 ## 2026-11-18（以含分階段推送的模擬判斷連帶保留，分支 `feat/WYSIWYG-Terminal`，基於 `7678ab9`）
 
 - 使用者以 `temp/misf-log-20261118-004128.txt` 回報數字仍不一致（agent-claude-vm 69／53）。log 顯示 `apt-get -s dist-upgrade` 仍把 16 個 Plasma 套件列為 kept back，沒有列為延後，所以 `3f6ce34`、`7678ab9` 的判斷從未成立。

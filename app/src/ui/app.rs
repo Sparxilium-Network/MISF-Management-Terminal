@@ -324,6 +324,8 @@ pub struct App {
     pub batch_popup: bool,
     /// Whether the host page's advanced menu is open.
     pub advanced_open: bool,
+    /// Whether the host page's more menu (fingerprint, reload, edit, delete) is open.
+    pub more_open: bool,
     /// The last user input, or the last moment auto-lock could not apply; idle time counts
     /// from here.
     pub last_activity: Instant,
@@ -416,6 +418,7 @@ impl App {
             batch_selected: BTreeSet::new(),
             batch_popup: false,
             advanced_open: false,
+            more_open: false,
             last_activity: Instant::now(),
             batch_manager: String::new(),
             upgrade_confirm: None,
@@ -1187,6 +1190,7 @@ impl App {
         self.kept_back_report.clear();
         self.batch_popup = false;
         self.advanced_open = false;
+        self.more_open = false;
         self.drag = None;
         self.ssh_keys.clear();
         self.history.clear();

@@ -374,6 +374,15 @@ fn capture(ctx: &Ctx) {
                 {
                     open_sample_menu(&c, &main);
                 }
+                if std::env::var("MISF_OPEN_MENU").as_deref() == Ok("more")
+                    && let Some(main) = c.main.upgrade()
+                {
+                    c.update(|app| app.more_open = true);
+                    let host = main.global::<HostState>();
+                    // The button sets these when clicked; here, its place in the 1280×820 capture.
+                    host.set_menu_x(676.0);
+                    host.set_menu_y(283.0);
+                }
             }
             if started.elapsed().as_secs_f32() < 2.0 || c.app.borrow().busy {
                 return;

@@ -1,6 +1,6 @@
 # 原始碼檔案說明
 
-> 最後修改：2026-11-17 ｜ 基於 commit：`3f6ce34`
+> 最後修改：2026-11-18 ｜ 基於 commit：`b4afaf8`
 
 每個 `.rs` 檔案負責什麼。整體設計與資料流見 [架構](architecture.md)，建置與慣例見 [開發說明](PROJECT-DEV.md)。新增、改名或刪除 `.rs` 檔案時，請一併更新本文件。
 
@@ -108,7 +108,7 @@ Workspace 有四個 crate：`core`（`misf-core`，核心函式庫與 JSON CLI�
 | `app/src/ui/terminal.rs` | 底部終端機面板（互動 shell 分頁接在操作分頁之後，`Terminal::shells`，`current` 跨兩者計算；`App::open_shell`／`shell_opened`／`shell_ended`，結束時以 `Action::ShellClose` 記稽核；`type_into_shell` 在忙碌或鎖定時拒絕輸入；視窗大小變更送給所有開啟中的 shell；模擬器解析與繪製以 `catch_unwind` 包住，出錯只讓該 shell 失敗；`clear_host_cache` 以 `end_shells` 結束 shell、記稽核並清空終端機；worker 崩潰時 `fail_shells`）：`Terminal` 保存最近一次檢查、升級或重新開機的每台主機分頁（`TabState`：等待、執行中、完成、失敗、略過）與各自的行（每台最多 `MAX_LINES` 行，超過時一次捨棄最舊的 2000 行）。`App::send` 依請求開新的一輪並把 `App::tool` 切到終端機；`App::process_events` 每輪最多處理 `EVENT_BUDGET` 個事件（shell 輸出依位元組計），剩下的由 `drain_events` 以計時器接續；`Event::Terminal` 加入行，`BatchHost`／`Done`／worker 崩潰收尾。`push` 對同一個 `VecModel` 只追加新行，換分頁或捨棄舊行時才重建；`wire` 也處理 `ToolWindow`（`App::toggle_tool`；共用高度存在偏好設定的 `tool_height`）。 |
 | `app/src/ui/shell.rs` | 自繪標題列（`WindowChrome`：拖曳移動與邊緣縮放交給 winit 的 `drag_window`／`drag_resize_window`，關閉按鈕送出與系統關閉相同的 `CloseRequested`）、狀態列與其「過往操作」清單（`App::history`，經 `set_status`／`set_host_status`／`note_error` 記錄，進度訊息不記），主機／批次分頁切換；關閉主視窗時一併結束程式，操作進行中先以 `CloseDialog` 詢問。 |
 | `app/src/ui/sidebar.rs` | 側欄主機清單：分類與收合、搜尋、卡片內容與高度、拖曳排序（`Layout` 計算放置位置，`arrange` 送出新順序）、分類名稱對話框。 |
-| `app/src/ui/host_page.rs` | 主機頁與結果分頁：測試連線、指紋、檢查、「進階操作」選單（升級、dist-upgrade、重新開機，依主機能力停用）、升級提示、「需要 dist-upgrade」報告。 |
+| `app/src/ui/host_page.rs` | 主機頁與結果分頁：測試連線、指紋、檢查、「進階操作」選單（升級、dist-upgrade、重新開機，依主機能力停用）、「其他操作」選單（主機指紋、重新載入、編輯、刪除）、升級提示、「需要 dist-upgrade」報告。 |
 | `app/src/ui/batch.rs` | 批次作業：套件管理器選擇、可選主機、表格排序與分組標題、欄寬拖曳、雙擊或右鍵開主機頁、右鍵在套件明細工具視窗（`Tool::Packages`）或視窗中顯示套件，視窗內有上一台／下一台。 |
 | `app/src/ui/editor.rs` | 主機編輯對話框與 SSH 金鑰管理對話框；從檔案匯入私鑰在借用狀態之外開啟原生檔案視窗。 |
 | `app/src/ui/vault.rs` | LUKSbox 狀態、解鎖／建立／金鑰槽管理對話框與密碼檢查、預設解鎖方式、明文副本與結構升級詢問、加密備份。 |

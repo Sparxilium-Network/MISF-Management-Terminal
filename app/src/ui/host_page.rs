@@ -137,9 +137,11 @@ pub fn push(app: &mut App, w: &AppWindow) {
     let host = app.current().cloned();
     if host.is_none() {
         app.advanced_open = false;
+        app.more_open = false;
     }
     state.set_has_host(host.is_some());
     state.set_advanced_open(app.advanced_open);
+    state.set_more_open(app.more_open);
     state.set_delete_hint(hint(
         t.get("hint.delete_title"),
         &[],
@@ -419,6 +421,8 @@ pub fn wire(ctx: &Ctx, w: &AppWindow) {
     state.on_add_first(move || c.update(|app| app.open_editor(None)));
     let c = ctx.clone();
     state.on_advanced_toggled(move |open| c.update(|app| app.advanced_open = open));
+    let c = ctx.clone();
+    state.on_more_toggled(move |open| c.update(|app| app.more_open = open));
     let c = ctx.clone();
     state.on_advanced(move |item| {
         let item = match item {

@@ -7,7 +7,7 @@ import { Theme, T, AppearanceSync } from "theme.slint";
 import { HintData, Tip, Clip, ClipboardSink, TipOverlay, MenuLine, PopMenu, MenuOverlay, ColorButton, TextButton, Tabs, Card, Modal, Notice, Body } from "widgets.slint";
 import { Shell, HistoryLine } from "shell.slint";
 import { Sidebar, SidebarState, SidebarRow } from "sidebar.slint";
-import { HostPage, HostState, AdvancedMenu } from "host_page.slint";
+import { HostPage, HostState, AdvancedMenu, MoreMenu } from "host_page.slint";
 import { ResultPanel, ResultState, InfoLine } from "result_panel.slint";
 import { BatchPage, BatchState, DetailHeading, ManagerChoice, BatchColumnView, BatchCell, BatchRowView } from "batch_page.slint";
 import { EditorDialog, EditorState } from "dialogs/editor.slint";
@@ -494,6 +494,22 @@ export component AppWindow inherits Window {
             }
         }
         AdvancedMenu {
+            x: min(HostState.menu-x, root.width - self.width - 8px);
+            y: HostState.menu-y;
+        }
+    }
+    if HostState.more-open: Rectangle {
+        width: root.width;
+        height: root.height;
+        // A left click outside the menu closes it; right-clicks open the items' copy menus.
+        TouchArea {
+            pointer-event(event) => {
+                if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                    HostState.more-toggled(false);
+                }
+            }
+        }
+        MoreMenu {
             x: min(HostState.menu-x, root.width - self.width - 8px);
             y: HostState.menu-y;
         }

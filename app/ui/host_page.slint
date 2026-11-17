@@ -27,8 +27,9 @@ export global HostState {
     in property <string> kept-back;
     in property <string> phased;
     in property <string> restart;
-    // The advanced menu, drawn by the window above everything at (menu-x, menu-y).
+    // The advanced and more menus, drawn by the window above everything at (menu-x, menu-y).
     in-out property <bool> advanced-open;
+    in-out property <bool> more-open;
     in-out property <length> menu-x;
     in-out property <length> menu-y;
     callback delete();
@@ -39,6 +40,7 @@ export global HostState {
     callback reload();
     callback add-first();
     callback advanced-toggled(open: bool);
+    callback more-toggled(open: bool);
     // 0 upgrade, 1 dist-upgrade, 2 reboot.
     callback advanced(item: int);
 }
@@ -64,8 +66,8 @@ component Stat inherits Card {
     }
 }
 
-// The menu's items; the window places it below the button.
-export component AdvancedMenu inherits Rectangle {
+// A drop-down menu's frame; the window places it below its button.
+component MenuFrame inherits Rectangle {
     width: 240px;
     height: items.preferred-height;
     background: Theme.surface;
@@ -78,44 +80,96 @@ export component AdvancedMenu inherits Rectangle {
     items := VerticalLayout {
         padding: 6px;
         spacing: 2px;
-        HintArea {
-            hint: HostState.upgrade-hint;
-            active: HostState.upgrade-enabled;
-            disabled-text: T.get("apt.upgrade_needs_detect");
-            TextButton {
-                text: HostState.upgrade-label;
-                color: Theme.error;
-                enabled: HostState.upgrade-enabled;
-                horizontal-stretch: 1;
-                clicked => { HostState.advanced(0); }
+        @children
+    }
+}
+
+// The advanced menu's items.
+export component AdvancedMenu inherits MenuFrame {
+    HintArea {
+        hint: HostState.upgrade-hint;
+        active: HostState.upgrade-enabled;
+        disabled-text: T.get("apt.upgrade_needs_detect");
+        TextButton {
+            text: HostState.upgrade-label;
+            color: Theme.error;
+            enabled: HostState.upgrade-enabled;
+            horizontal-stretch: 1;
+            clicked => { HostState.advanced(0); }
+        }
+    }
+    HintArea {
+        hint: HostState.dist-hint;
+        active: HostState.dist-enabled;
+        disabled-text: T.get("apt.dist_upgrade_needs_apt");
+        TextButton {
+            text: T.get("apt.dist_upgrade");
+            color: Theme.error;
+            enabled: HostState.dist-enabled;
+            horizontal-stretch: 1;
+            clicked => { HostState.advanced(1); }
+        }
+    }
+    Rectangle {
+        height: 1px;
+        background: Theme.border;
+    }
+    HintArea {
+        hint: HostState.reboot-hint;
+        active: HostState.reboot-enabled;
+        disabled-text: T.get("reboot.needs_apt");
+        TextButton {
+            text: T.get("reboot.button");
+            color: Theme.error;
+            enabled: HostState.reboot-enabled;
+            horizontal-stretch: 1;
+            clicked => { HostState.advanced(2); }
+        }
+    }
+}
+
+// The more menu: the host's other actions.
+export component MoreMenu inherits MenuFrame {
+    HintArea {
+        hint: HostState.probe-hint;
+        TextButton {
+            text: T.get("host.fingerprint");
+            horizontal-stretch: 1;
+            clicked => {
+                HostState.more-toggled(false);
+                HostState.probe();
             }
         }
-        HintArea {
-            hint: HostState.dist-hint;
-            active: HostState.dist-enabled;
-            disabled-text: T.get("apt.dist_upgrade_needs_apt");
-            TextButton {
-                text: T.get("apt.dist_upgrade");
-                color: Theme.error;
-                enabled: HostState.dist-enabled;
-                horizontal-stretch: 1;
-                clicked => { HostState.advanced(1); }
-            }
+    }
+    TextButton {
+        text: T.get("common.reload");
+        horizontal-stretch: 1;
+        clicked => {
+            HostState.more-toggled(false);
+            HostState.reload();
         }
-        Rectangle {
-            height: 1px;
-            background: Theme.border;
+    }
+    TextButton {
+        text: T.get("host.edit");
+        horizontal-stretch: 1;
+        clicked => {
+            HostState.more-toggled(false);
+            HostState.edit();
         }
-        HintArea {
-            hint: HostState.reboot-hint;
-            active: HostState.reboot-enabled;
-            disabled-text: T.get("reboot.needs_apt");
-            TextButton {
-                text: T.get("reboot.button");
-                color: Theme.error;
-                enabled: HostState.reboot-enabled;
-                horizontal-stretch: 1;
-                clicked => { HostState.advanced(2); }
+    }
+    Rectangle {
+        height: 1px;
+        background: Theme.border;
+    }
+    HintArea {
+        hint: HostState.delete-hint;
+        TextButton {
+            text: T.get("host.delete");
+            color: Theme.error;
+            horizontal-stretch: 1;
+            clicked => {
+                HostState.more-toggled(false);
+                HostState.delete();
             }
         }
     }
@@ -129,31 +183,12 @@ export component HostPage inherits VerticalLayout {
         font-weight: 700;
         color: Theme.muted;
     }
-    HorizontalLayout {
-        spacing: 10px;
-        Text {
-            text: HostState.has-host ? HostState.name : T.get("host.first_title");
-            font-size: 29px;
-            font-weight: 700;
-            color: Theme.ink;
-            overflow: elide;
-            horizontal-stretch: 1;
-        }
-        Button {
-            text: T.get("host.edit");
-            enabled: HostState.has-host;
-            clicked => { HostState.edit(); }
-        }
-        HintArea {
-            hint: HostState.delete-hint;
-            active: HostState.has-host;
-            TextButton {
-                text: T.get("common.delete");
-                color: Theme.error;
-                enabled: HostState.has-host;
-                clicked => { HostState.delete(); }
-            }
-        }
+    Text {
+        text: HostState.has-host ? HostState.name : T.get("host.first_title");
+        font-size: 29px;
+        font-weight: 700;
+        color: Theme.ink;
+        overflow: elide;
     }
     if !HostState.has-host: VerticalLayout {
         spacing: 10px;
@@ -210,13 +245,6 @@ export component HostPage inherits VerticalLayout {
                 }
             }
             HintArea {
-                hint: HostState.probe-hint;
-                Button {
-                    text: T.get("host.fingerprint");
-                    clicked => { HostState.probe(); }
-                }
-            }
-            HintArea {
                 hint: HostState.check-hint;
                 ColorButton {
                     text: HostState.check-label;
@@ -234,9 +262,16 @@ export component HostPage inherits VerticalLayout {
                     HostState.advanced-toggled(!HostState.advanced-open);
                 }
             }
-            Button {
-                text: T.get("common.reload");
-                clicked => { HostState.reload(); }
+            ColorButton {
+                text: T.get("more.button");
+                fill: Theme.navy-selected;
+                arrow: true;
+                open: HostState.more-open;
+                clicked => {
+                    HostState.menu-x = self.absolute-position.x;
+                    HostState.menu-y = self.absolute-position.y + self.height + 4px;
+                    HostState.more-toggled(!HostState.more-open);
+                }
             }
         }
         Text {
