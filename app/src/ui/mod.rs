@@ -383,6 +383,11 @@ fn capture(ctx: &Ctx) {
                     host.set_menu_x(676.0);
                     host.set_menu_y(283.0);
                 }
+                if std::env::var("MISF_OPEN_SEARCH").as_deref() == Ok("1")
+                    && let Some(main) = c.main.upgrade()
+                {
+                    main.global::<ResultState>().set_search_open(true);
+                }
             }
             if started.elapsed().as_secs_f32() < 2.0 || c.app.borrow().busy {
                 return;

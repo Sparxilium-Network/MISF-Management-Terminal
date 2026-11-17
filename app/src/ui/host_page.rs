@@ -317,7 +317,8 @@ fn push_results(app: &mut App, w: &AppWindow, host: Option<&Host>) {
     let (message, failed, packages, headers) = if app.tab == 1 {
         let message = match upgrade {
             Some(r) if r.status == "success" && r.upgraded.is_empty() => t.get("apt.upgraded_none"),
-            Some(r) if r.status == "success" => t.get("apt.upgraded_description"),
+            // The table speaks for itself.
+            Some(r) if r.status == "success" => "",
             Some(r) => r.error.as_str(),
             None => t.get("apt.upgrade_not_run"),
         };
@@ -336,7 +337,7 @@ fn push_results(app: &mut App, w: &AppWindow, host: Option<&Host>) {
         let message = match result {
             Some(r) if r.status == "success" => match (r.is_upgrade(), r.packages.is_empty()) {
                 (false, true) => t.get("apt.up_to_date"),
-                (false, false) => t.get("apt.available_description"),
+                (false, false) => "",
                 (true, true) => t.get("apt.upgrade_clean"),
                 (true, false) => t.get("apt.held_back"),
             },
