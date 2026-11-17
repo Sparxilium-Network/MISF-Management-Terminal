@@ -1,5 +1,12 @@
 # 全工作區檢查結果
 
+## 2026-11-18（rusqlite 0.42.0，Dependabot PR #7，於 `main`）
+
+- 使用者要求套用 PR #7 並合併到主分支：`main`（`47a9b18`）先快轉到 `feat/WYSIWYG-Terminal`（`21a90e7`），再於 `main` 手動套用與 PR 相同的變更（`core/Cargo.toml`、`Cargo.lock` 中 rusqlite 0.41.1 → 0.42.0、libsqlite3-sys 0.39.1 → 0.40.0），沒有其他鎖檔變動；`cargo metadata --locked` 通過；重跑 `./licenses.ps1`。
+- 檢查：fmt、Clippy（`--all-features --locked -D warnings`）通過；`cargo test --locked --workspace` 通過（22、37、72、33）；`cargo deny check licenses` 通過。
+- `cargo deny check advisories` 失敗：新公告 RUSTSEC-2026-0543（chrono 不再維護，沒有可升級版本），與這次升級無關（還原變更後同樣失敗）。chrono 由 Slint 1.18.1、`misf`、`misf-core` 使用。待使用者決定是否在 `deny.toml` 加入附理由的忽略。
+- 未驗證：rusqlite 0.42 對既有加密主機庫的實際讀寫只靠測試（含 sqlite／vault 測試），沒有用真實主機庫開啟。
+
 ## 2026-11-18（主機頁卡片合成一張、可在偏好設定選項目，分支 `feat/WYSIWYG-Terminal`，基於 `eb2215f`）
 
 - 使用者要求：刪除「主機總覽」小字；右上角卡片合成一張；偏好設定可自訂顯示項目。
