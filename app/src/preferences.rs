@@ -432,6 +432,70 @@ impl Default for HostFields {
     }
 }
 
+/// What the host page's summary card, top right, shows.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HostStats {
+    pub pending: bool,
+    pub phased: bool,
+    pub status: bool,
+    pub last_check: bool,
+    /// The `user@address:port · system · manager · login` line under the card.
+    pub connection: bool,
+}
+
+impl HostStats {
+    const CODES: [&'static str; 5] = ["pending", "phased", "status", "last_check", "connection"];
+
+    /// Each item with its label, for the settings checkboxes.
+    pub fn each(&mut self, t: Translator) -> [(&mut bool, &'static str); 5] {
+        [
+            (&mut self.pending, t.get("apt.pending")),
+            (&mut self.phased, t.get("apt.phased_count")),
+            (&mut self.status, t.get("apt.status")),
+            (&mut self.last_check, t.get("apt.last_check")),
+            (&mut self.connection, t.get("host_stats.connection")),
+        ]
+    }
+
+    fn flags(self) -> [bool; 5] {
+        [
+            self.pending,
+            self.phased,
+            self.status,
+            self.last_check,
+            self.connection,
+        ]
+    }
+
+    fn from_json(value: &serde_json::Value) -> Option<Self> {
+        let codes: Vec<&str> = value
+            .as_array()?
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .collect();
+        let has = |code| codes.contains(&code);
+        Some(Self {
+            pending: has("pending"),
+            phased: has("phased"),
+            status: has("status"),
+            last_check: has("last_check"),
+            connection: has("connection"),
+        })
+    }
+}
+
+impl Default for HostStats {
+    fn default() -> Self {
+        Self {
+            pending: true,
+            phased: true,
+            status: true,
+            last_check: true,
+            connection: true,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Default, PartialEq)]
 pub struct Preferences {
     pub language: Language,
@@ -442,6 +506,7 @@ pub struct Preferences {
     pub host_detail: HostDetail,
     /// The fields kept for [`HostDetail::Custom`], even while another level is chosen.
     pub host_fields: HostFields,
+    pub host_stats: HostStats,
     pub batch_order: BatchOrder,
     pub batch_columns: BatchColumns,
     pub density: Density,
@@ -512,6 +577,7 @@ impl Preferences {
                 .and_then(|code| HostDetail::ALL.into_iter().find(|d| d.code() == code))
                 .unwrap_or_default(),
             host_fields: HostFields::from_json(&value["host_list"]["fields"]).unwrap_or_default(),
+            host_stats: HostStats::from_json(&value["host_page"]["stats"]).unwrap_or_default(),
             density: value["host_list"]["density"]
                 .as_str()
                 .and_then(|code| Density::ALL.into_iter().find(|d| d.code() == code))
@@ -565,6 +631,13 @@ impl Preferences {
                 "density": self.density.code(),
                 "ungrouped_at": self.ungrouped_at,
                 "ungrouped_collapsed": self.ungrouped_collapsed,
+            },
+            "host_page": {
+                "stats": HostStats::CODES
+                    .into_iter()
+                    .zip(self.host_stats.flags())
+                    .filter_map(|(code, shown)| shown.then_some(code))
+                    .collect::<Vec<_>>(),
             },
             "batch_order": self.batch_order.code(),
             "batch_columns": self.batch_columns.to_json(),

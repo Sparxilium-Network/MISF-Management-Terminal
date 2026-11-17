@@ -381,7 +381,7 @@ fn capture(ctx: &Ctx) {
                     let host = main.global::<HostState>();
                     // The button sets these when clicked; here, its place in the 1280×820 capture.
                     host.set_menu_x(676.0);
-                    host.set_menu_y(251.0);
+                    host.set_menu_y(227.0);
                 }
                 if std::env::var("MISF_OPEN_SEARCH").as_deref() == Ok("1")
                     && let Some(main) = c.main.upgrade()
@@ -585,7 +585,7 @@ fn open_sample_menu(ctx: &Ctx, main: &AppWindow) {
     let host = main.global::<HostState>();
     // The button sets these when clicked; here, its place in the 1280×820 capture.
     host.set_menu_x(566.0);
-    host.set_menu_y(251.0);
+    host.set_menu_y(227.0);
     let line = MenuLine {
         title: ctx.t().get("hint.copy_commands").into(),
         enabled: true,

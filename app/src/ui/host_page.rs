@@ -279,6 +279,12 @@ pub fn push(app: &mut App, w: &AppWindow) {
             .unwrap_or_default()
             .into(),
     );
+    let shown = app.preferences.host_stats;
+    state.set_show_pending(shown.pending);
+    state.set_show_phased(shown.phased);
+    state.set_show_status(shown.status);
+    state.set_show_last_check(shown.last_check);
+    state.set_show_connection(shown.connection);
     state.set_phased_count(
         successful
             .map_or("—".into(), |r| r.phased.len().to_string())

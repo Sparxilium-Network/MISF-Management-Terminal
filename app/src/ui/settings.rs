@@ -127,6 +127,15 @@ impl App {
         self.preferences_changed(before);
     }
 
+    pub fn set_host_stat(&mut self, index: usize, shown: bool) {
+        let before = self.preferences;
+        let t = self.t();
+        if let Some((flag, _)) = self.preferences.host_stats.each(t).into_iter().nth(index) {
+            *flag = shown;
+        }
+        self.preferences_changed(before);
+    }
+
     pub fn set_batch_column(&mut self, index: usize, shown: bool) {
         // The host column is always shown.
         if index == 0 || index >= BatchColumn::ALL.len() {
@@ -233,6 +242,12 @@ pub fn push(app: &mut App, w: &SettingsWindow) {
         fields.iter().map(|(shown, _)| **shown).collect::<Vec<_>>(),
     )));
     state.set_host_field_labels(texts(fields.iter().map(|(_, label)| *label)));
+    let mut stats = prefs.host_stats;
+    let stats = stats.each(t);
+    state.set_host_stats(ModelRc::new(VecModel::from(
+        stats.iter().map(|(shown, _)| **shown).collect::<Vec<_>>(),
+    )));
+    state.set_host_stat_labels(texts(stats.iter().map(|(_, label)| *label)));
     state.set_unlock_methods(texts(UnlockMethod::ALL.iter().map(|m| m.label(t))));
     state.set_unlock_method(position(
         UnlockMethod::ALL
@@ -304,6 +319,10 @@ pub fn wire(ctx: &Ctx, w: &SettingsWindow) {
     let c = ctx.clone();
     state.on_host_field(move |index, shown| {
         c.update(|app| app.set_host_field(index.max(0) as usize, shown))
+    });
+    let c = ctx.clone();
+    state.on_host_stat(move |index, shown| {
+        c.update(|app| app.set_host_stat(index.max(0) as usize, shown))
     });
     let c = ctx.clone();
     state.on_batch_column(move |index, shown| {

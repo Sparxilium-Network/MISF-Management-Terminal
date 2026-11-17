@@ -28,6 +28,12 @@ export global HostState {
     // The deferred packages: their count for the card, the sentence naming them for its hint.
     in property <string> phased;
     in property <string> phased-count;
+    // Which of the summary card's items, and the connection line under it, are shown.
+    in property <bool> show-pending: true;
+    in property <bool> show-phased: true;
+    in property <bool> show-status: true;
+    in property <bool> show-last-check: true;
+    in property <bool> show-connection: true;
     in property <string> restart;
     // The advanced and more menus, drawn by the window above everything at (menu-x, menu-y).
     in-out property <bool> advanced-open;
@@ -47,15 +53,21 @@ export global HostState {
     callback advanced(item: int);
 }
 
-// A small card in the header's top-right corner.
-component Stat inherits Card {
+// One item of the summary card in the header's top-right corner; `divider` draws a line
+// on its left, after an earlier item.
+component Stat inherits HorizontalLayout {
     in property <string> title;
     in property <string> value;
+    in property <bool> divider;
     horizontal-stretch: 1;
-    min-width: max(96px, layout.preferred-width);
-    layout := VerticalLayout {
-        padding-left: 12px;
-        padding-right: 12px;
+    if root.divider: Rectangle {
+        width: 1px;
+        background: Theme.border;
+    }
+    VerticalLayout {
+        min-width: 80px;
+        padding-left: 14px;
+        padding-right: 14px;
         padding-top: 9px;
         padding-bottom: 9px;
         spacing: 3px;
@@ -182,13 +194,6 @@ export component MoreMenu inherits MenuFrame {
     }
 }
 
-component Overview inherits Text {
-    text: T.get("app.host_overview");
-    font-size: 10px;
-    font-weight: 700;
-    color: Theme.muted;
-}
-
 component HostName inherits Text {
     font-size: 29px;
     font-weight: 700;
@@ -201,11 +206,7 @@ export component HostPage inherits VerticalLayout {
     if !HostState.has-host: VerticalLayout {
         spacing: 10px;
         alignment: start;
-        VerticalLayout {
-            spacing: 4px;
-            Overview { }
-            HostName { text: T.get("host.first_title"); }
-        }
+        HostName { text: T.get("host.first_title"); }
         Text {
             text: T.get("host.intro");
             color: Theme.muted;
@@ -248,7 +249,6 @@ export component HostPage inherits VerticalLayout {
             spacing: 4px;
             alignment: start;
             horizontal-stretch: 1;
-            Overview { }
             HostName { text: HostState.name; }
             HorizontalLayout {
                 spacing: 10px;
@@ -303,32 +303,37 @@ export component HostPage inherits VerticalLayout {
                 spacing: 8px;
                 alignment: start;
                 horizontal-stretch: 0;
-                HorizontalLayout {
-                    spacing: 8px;
-                    Stat {
-                        title: T.get("apt.pending");
-                        value: HostState.pending;
-                    }
-                    // The deferred packages' names show on hover.
-                    HintArea {
-                        plain: HostState.phased;
-                        delay: 0.5s;
-                        horizontal-stretch: 1;
-                        Stat {
-                            title: T.get("apt.phased_count");
-                            value: HostState.phased-count;
+                // One card; Preferences choose its items.
+                if HostState.show-pending || HostState.show-phased || HostState.show-status || HostState.show-last-check: Card {
+                    HorizontalLayout {
+                        if HostState.show-pending: Stat {
+                            title: T.get("apt.pending");
+                            value: HostState.pending;
+                        }
+                        // The deferred packages' names show on hover.
+                        if HostState.show-phased: HintArea {
+                            plain: HostState.phased;
+                            delay: 0.5s;
+                            horizontal-stretch: 1;
+                            Stat {
+                                title: T.get("apt.phased_count");
+                                value: HostState.phased-count;
+                                divider: HostState.show-pending;
+                            }
+                        }
+                        if HostState.show-status: Stat {
+                            title: T.get("apt.status");
+                            value: HostState.status;
+                            divider: HostState.show-pending || HostState.show-phased;
+                        }
+                        if HostState.show-last-check: Stat {
+                            title: T.get("apt.last_check");
+                            value: HostState.last-check;
+                            divider: HostState.show-pending || HostState.show-phased || HostState.show-status;
                         }
                     }
-                    Stat {
-                        title: T.get("apt.status");
-                        value: HostState.status;
-                    }
-                    Stat {
-                        title: T.get("apt.last_check");
-                        value: HostState.last-check;
-                    }
                 }
-                Text {
+                if HostState.show-connection: Text {
                     text: HostState.summary;
                     color: Theme.muted;
                     font-size: 12px;

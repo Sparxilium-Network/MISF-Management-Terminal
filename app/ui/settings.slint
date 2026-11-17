@@ -50,6 +50,9 @@ export global SettingsState {
     in property <int> host-detail;
     in property <[bool]> host-fields;
     in property <[string]> host-field-labels;
+    // What the host page's summary card shows.
+    in property <[bool]> host-stats;
+    in property <[string]> host-stat-labels;
     in property <int> unlock-method;
     in property <[string]> unlock-methods;
     in property <bool> auto-lock;
@@ -71,6 +74,7 @@ export global SettingsState {
     // Each preference change: which one, and its new index or value.
     callback preference(key: string, value: int);
     callback host-field(index: int, shown: bool);
+    callback host-stat(index: int, shown: bool);
     callback batch-column(index: int, shown: bool);
     callback reset-widths();
 }
@@ -330,6 +334,20 @@ component PreferencesPage inherits VerticalLayout {
                     text: label;
                     checked: SettingsState.host-fields[i];
                     toggled => { SettingsState.host-field(i, self.checked); }
+                }
+            }
+        }
+        SectionTitle {
+            text: T.get("settings.section_host_page");
+        }
+        FormRow {
+            label: T.get("host_stats.title");
+            VerticalLayout {
+                spacing: 6px;
+                for label[i] in SettingsState.host-stat-labels: CheckBox {
+                    text: label;
+                    checked: SettingsState.host-stats[i];
+                    toggled => { SettingsState.host-stat(i, self.checked); }
                 }
             }
         }
