@@ -25,7 +25,9 @@ export global HostState {
     in property <string> status;
     in property <string> last-check;
     in property <string> kept-back;
+    // The deferred packages: their count for the card, the sentence naming them for its hint.
     in property <string> phased;
+    in property <string> phased-count;
     in property <string> restart;
     // The advanced and more menus, drawn by the window above everything at (menu-x, menu-y).
     in-out property <bool> advanced-open;
@@ -45,21 +47,26 @@ export global HostState {
     callback advanced(item: int);
 }
 
+// A small card in the header's top-right corner.
 component Stat inherits Card {
     in property <string> title;
     in property <string> value;
     horizontal-stretch: 1;
-    VerticalLayout {
-        padding: 18px;
-        spacing: 6px;
+    min-width: max(96px, layout.preferred-width);
+    layout := VerticalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        padding-top: 9px;
+        padding-bottom: 9px;
+        spacing: 3px;
         Text {
             text: root.title;
-            font-size: 12px;
+            font-size: 11px;
             color: Theme.muted;
         }
         Text {
             text: root.value;
-            font-size: 22px;
+            font-size: 18px;
             font-weight: 700;
             color: Theme.ink;
         }
@@ -175,24 +182,30 @@ export component MoreMenu inherits MenuFrame {
     }
 }
 
+component Overview inherits Text {
+    text: T.get("app.host_overview");
+    font-size: 10px;
+    font-weight: 700;
+    color: Theme.muted;
+}
+
+component HostName inherits Text {
+    font-size: 29px;
+    font-weight: 700;
+    color: Theme.ink;
+    overflow: elide;
+}
+
 export component HostPage inherits VerticalLayout {
     spacing: 4px;
-    Text {
-        text: T.get("app.host_overview");
-        font-size: 10px;
-        font-weight: 700;
-        color: Theme.muted;
-    }
-    Text {
-        text: HostState.has-host ? HostState.name : T.get("host.first_title");
-        font-size: 29px;
-        font-weight: 700;
-        color: Theme.ink;
-        overflow: elide;
-    }
     if !HostState.has-host: VerticalLayout {
         spacing: 10px;
         alignment: start;
+        VerticalLayout {
+            spacing: 4px;
+            Overview { }
+            HostName { text: T.get("host.first_title"); }
+        }
         Text {
             text: T.get("host.intro");
             color: Theme.muted;
@@ -228,82 +241,106 @@ export component HostPage inherits VerticalLayout {
     if HostState.has-host: VerticalLayout {
         spacing: 8px;
         vertical-stretch: 1;
-        Text {
-            text: HostState.summary;
-            color: Theme.muted;
-            wrap: word-wrap;
-        }
+        // Left: name, actions and fingerprint. Top right: the cards and the connection.
         HorizontalLayout {
-            spacing: 10px;
+            spacing: 20px;
+            VerticalLayout {
+            spacing: 4px;
             alignment: start;
-            padding-top: 4px;
-            HintArea {
-                hint: HostState.test-hint;
-                Button {
-                    text: T.get("host.test");
-                    clicked => { HostState.test(); }
+            horizontal-stretch: 1;
+            Overview { }
+            HostName { text: HostState.name; }
+            HorizontalLayout {
+                spacing: 10px;
+                alignment: start;
+                padding-top: 4px;
+                HintArea {
+                    hint: HostState.test-hint;
+                    Button {
+                        text: T.get("host.test");
+                        clicked => { HostState.test(); }
+                    }
                 }
-            }
-            HintArea {
-                hint: HostState.check-hint;
+                HintArea {
+                    hint: HostState.check-hint;
+                    ColorButton {
+                        text: HostState.check-label;
+                        clicked => { HostState.check(); }
+                    }
+                }
+                advanced := ColorButton {
+                    text: T.get("advanced.button");
+                    fill: Theme.red;
+                    arrow: true;
+                    open: HostState.advanced-open;
+                    clicked => {
+                        HostState.menu-x = self.absolute-position.x;
+                        HostState.menu-y = self.absolute-position.y + self.height + 4px;
+                        HostState.advanced-toggled(!HostState.advanced-open);
+                    }
+                }
                 ColorButton {
-                    text: HostState.check-label;
-                    clicked => { HostState.check(); }
+                    text: T.get("more.button");
+                    fill: Theme.navy-selected;
+                    arrow: true;
+                    open: HostState.more-open;
+                    clicked => {
+                        HostState.menu-x = self.absolute-position.x;
+                        HostState.menu-y = self.absolute-position.y + self.height + 4px;
+                        HostState.more-toggled(!HostState.more-open);
+                    }
                 }
             }
-            advanced := ColorButton {
-                text: T.get("advanced.button");
-                fill: Theme.red;
-                arrow: true;
-                open: HostState.advanced-open;
-                clicked => {
-                    HostState.menu-x = self.absolute-position.x;
-                    HostState.menu-y = self.absolute-position.y + self.height + 4px;
-                    HostState.advanced-toggled(!HostState.advanced-open);
+            Text {
+                text: HostState.fingerprint;
+                font-size: 11px;
+                color: Theme.muted;
+                wrap: word-wrap;
+                min-height: self.preferred-height;
+            }
+            }
+            VerticalLayout {
+                spacing: 8px;
+                alignment: start;
+                horizontal-stretch: 0;
+                HorizontalLayout {
+                    spacing: 8px;
+                    Stat {
+                        title: T.get("apt.pending");
+                        value: HostState.pending;
+                    }
+                    // The deferred packages' names show on hover.
+                    HintArea {
+                        plain: HostState.phased;
+                        delay: 0.5s;
+                        horizontal-stretch: 1;
+                        Stat {
+                            title: T.get("apt.phased_count");
+                            value: HostState.phased-count;
+                        }
+                    }
+                    Stat {
+                        title: T.get("apt.status");
+                        value: HostState.status;
+                    }
+                    Stat {
+                        title: T.get("apt.last_check");
+                        value: HostState.last-check;
+                    }
                 }
-            }
-            ColorButton {
-                text: T.get("more.button");
-                fill: Theme.navy-selected;
-                arrow: true;
-                open: HostState.more-open;
-                clicked => {
-                    HostState.menu-x = self.absolute-position.x;
-                    HostState.menu-y = self.absolute-position.y + self.height + 4px;
-                    HostState.more-toggled(!HostState.more-open);
+                Text {
+                    text: HostState.summary;
+                    color: Theme.muted;
+                    font-size: 12px;
+                    horizontal-alignment: right;
+                    wrap: word-wrap;
+                    min-height: self.preferred-height;
                 }
-            }
-        }
-        Text {
-            text: HostState.fingerprint;
-            font-size: 11px;
-            color: Theme.muted;
-            wrap: word-wrap;
-        }
-        HorizontalLayout {
-            spacing: 10px;
-            padding-top: 4px;
-            Stat {
-                title: T.get("apt.pending");
-                value: HostState.pending;
-            }
-            Stat {
-                title: T.get("apt.status");
-                value: HostState.status;
-            }
-            Stat {
-                title: T.get("apt.last_check");
-                value: HostState.last-check;
             }
         }
         if HostState.kept-back != "": Text {
             text: HostState.kept-back;
             color: Theme.warning;
-            wrap: word-wrap;
-        }
-        if HostState.phased != "": Text {
-            text: HostState.phased;
-            color: Theme.muted;
             wrap: word-wrap;
         }
         if HostState.restart != "": Text {

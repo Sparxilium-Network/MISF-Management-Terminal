@@ -70,6 +70,7 @@
   "host.first_trust": "首次連線前需確認 SSH 主機指紋",
   "host.fingerprint_value": "SSH 指紋  {fingerprint}",
   "apt.pending": "待更新套件",
+  "apt.phased_count": "延後套件",
   "apt.status": "檢查狀態",
   "apt.complete": "檢查完成",
   "apt.unsupported": "不支援的系統",

@@ -70,6 +70,7 @@
   "host.first_trust": "Verify the SSH host fingerprint before the first connection",
   "host.fingerprint_value": "SSH fingerprint  {fingerprint}",
   "apt.pending": "Available updates",
+  "apt.phased_count": "Phased",
   "apt.status": "Check status",
   "apt.complete": "Complete",
   "apt.unsupported": "Unsupported system",

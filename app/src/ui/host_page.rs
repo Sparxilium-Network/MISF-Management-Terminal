@@ -279,6 +279,11 @@ pub fn push(app: &mut App, w: &AppWindow) {
             .unwrap_or_default()
             .into(),
     );
+    state.set_phased_count(
+        successful
+            .map_or("—".into(), |r| r.phased.len().to_string())
+            .into(),
+    );
     state.set_phased(
         result
             .filter(|r| r.status == "success" && !r.phased.is_empty())
