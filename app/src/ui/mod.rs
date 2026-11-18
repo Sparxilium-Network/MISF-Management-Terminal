@@ -397,6 +397,30 @@ fn capture(ctx: &Ctx) {
                     host.set_menu_x(676.0);
                     host.set_menu_y(227.0);
                 }
+                if std::env::var("MISF_OPEN_MENU").as_deref() == Ok("keys")
+                    && let Some(main) = c.main.upgrade()
+                {
+                    let t = c.t();
+                    let lines: Vec<MenuLine> = [
+                        (t.get("shell.send_ctrl_c"), "ctrl-c"),
+                        (t.get("shell.send_ctrl_v"), "ctrl-v"),
+                        (t.get("shell.send_shift_insert"), "shift-insert"),
+                    ]
+                    .into_iter()
+                    .map(|(title, key)| MenuLine {
+                        title: title.into(),
+                        enabled: true,
+                        action: "shell-send".into(),
+                        arg: key.into(),
+                    })
+                    .collect();
+                    // Under the wrench in the 1280×820 capture.
+                    main.global::<PopMenu>().invoke_open(
+                        ModelRc::new(VecModel::from(lines)),
+                        1196.0,
+                        536.0,
+                    );
+                }
                 if std::env::var("MISF_OPEN_SEARCH").as_deref() == Ok("1")
                     && let Some(main) = c.main.upgrade()
                 {

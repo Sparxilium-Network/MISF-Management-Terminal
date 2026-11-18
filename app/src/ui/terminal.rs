@@ -839,6 +839,14 @@ pub fn wire(ctx: &Ctx, w: &AppWindow) {
         })
     });
     let c = ctx.clone();
+    state.on_shell_send(move |name| {
+        if let Some(bytes) = remote_shell::kept_key_bytes(&name) {
+            c.update(|app| {
+                app.type_into_shell(bytes.to_vec());
+            });
+        }
+    });
+    let c = ctx.clone();
     state.on_shell_resized(move |cols, rows| {
         let (Ok(cols), Ok(rows)) = (u16::try_from(cols), u16::try_from(rows)) else {
             return;

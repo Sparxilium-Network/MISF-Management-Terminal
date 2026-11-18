@@ -355,6 +355,17 @@ pub fn key_bytes(
     Some(bytes)
 }
 
+/// The bytes of a key MISF keeps for itself, sent from the wrench menu by name.
+pub fn kept_key_bytes(name: &str) -> Option<&'static [u8]> {
+    match name {
+        "ctrl-c" => Some(b"\x03"),
+        "ctrl-v" => Some(b"\x16"),
+        // xterm's Insert with Shift.
+        "shift-insert" => Some(b"\x1b[2;2~"),
+        _ => None,
+    }
+}
+
 /// Pasted text as a terminal sends it: line ends as Enter, wrapped for programs that
 /// asked for bracketed paste so they do not run it line by line.
 pub fn paste_bytes(text: &str, bracketed: bool) -> Vec<u8> {

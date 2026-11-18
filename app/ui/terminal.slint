@@ -3,7 +3,7 @@
 // terminal emulator in Rust.
 import { ListView, ScrollView } from "std-widgets.slint";
 import { Theme, T } from "theme.slint";
-import { TextButton, HintArea } from "widgets.slint";
+import { TextButton, HintArea, PopMenu } from "widgets.slint";
 import { ToolWindow, DockHandle, DockTitle } from "tool_window.slint";
 
 export struct TerminalTab {
@@ -76,6 +76,9 @@ export global TerminalState {
     // A key typed into the shell; true when it was sent.
     callback shell-key(text: string, control: bool, alt: bool, shift: bool) -> bool;
     callback shell-paste(text: string);
+    // A key MISF keeps for itself (e.g. Ctrl+V pastes), sent to the shell from the
+    // wrench menu: `ctrl-c`, `ctrl-v` or `shift-insert`.
+    callback shell-send(key: string);
     callback shell-resized(cols: int, rows: int);
     // Lines to scroll back (positive) or forward.
     callback shell-scrolled(lines: int);
@@ -380,6 +383,53 @@ export component TerminalPanel inherits Rectangle {
                     font-size: 12px;
                     enabled: TerminalState.can-open-shell;
                     clicked => { TerminalState.open-shell(); }
+                }
+            }
+            // Sends the keys MISF keeps for copying and pasting.
+            wrench := Rectangle {
+                horizontal-stretch: 0;
+                width: 28px;
+                property <bool> enabled: TerminalState.shell-view && TerminalState.shell-typing;
+                accessible-role: button;
+                accessible-label: T.get("shell.keys");
+                accessible-enabled: self.enabled;
+                HintArea {
+                    width: parent.width;
+                    height: parent.height;
+                    plain: T.get("shell.keys_hint");
+                    active: wrench.enabled;
+                    disabled-text: T.get("shell.keys_disabled");
+                    delay: 0.5s;
+                    wrench-touch := TouchArea {
+                        enabled: wrench.enabled;
+                        mouse-cursor: wrench.enabled ? pointer : default;
+                        clicked => {
+                            PopMenu.open([
+                                { title: T.get("shell.send_ctrl_c"), enabled: true, action: "shell-send", arg: "ctrl-c" },
+                                { title: T.get("shell.send_ctrl_v"), enabled: true, action: "shell-send", arg: "ctrl-v" },
+                                { title: T.get("shell.send_shift_insert"), enabled: true, action: "shell-send", arg: "shift-insert" },
+                            ], self.absolute-position.x, self.absolute-position.y + self.height);
+                        }
+                    }
+                }
+                Rectangle {
+                    x: 2px;
+                    y: (parent.height - 24px) / 2;
+                    width: 24px;
+                    height: 24px;
+                    border-radius: 4px;
+                    background: wrench-touch.has-hover && wrench.enabled ? Theme.selection.with-alpha(0.55) : transparent;
+                    // A wrench, after Material's "build" icon.
+                    Path {
+                        x: 4px;
+                        y: 4px;
+                        width: 16px;
+                        height: 16px;
+                        viewbox-width: 24;
+                        viewbox-height: 24;
+                        commands: "M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4z";
+                        fill: wrench.enabled ? (wrench-touch.has-hover ? Theme.ink : Theme.muted) : Theme.muted.with-alpha(0.4);
+                    }
                 }
             }
             TextButton {

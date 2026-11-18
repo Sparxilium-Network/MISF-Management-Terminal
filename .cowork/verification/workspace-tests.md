@@ -1,5 +1,14 @@
 # 全工作區檢查結果
 
+## 2026-11-18（終端機扳手：傳送被攔下的按鍵）
+
+- 「開啟 Shell」右側新增扳手，選單可把 Ctrl+C、Ctrl+V、Shift+Insert 送給 shell。
+- `cargo fmt --all -- --check`、`cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`：通過。
+- `cargo test --locked --workspace`：全部通過（22、37、72、33 項）。
+- 截圖（`MISF_OPEN_TERMINAL=shell`、`MISF_OPEN_MENU=keys`）：扳手與選單顯示正確。
+- `.\package.ps1`：release 建置成功，但 `dist\MISF\misf.exe` 正在執行而無法覆蓋，尚未打包這一版。
+- 尚未在真實主機確認遠端收到這些按鍵。
+
 ## 2026-11-18（終端機滑鼠選取、Ctrl+C 複製、Ctrl+V 貼上）
 
 - shell 分頁：拖曳、雙擊、三擊以格、字、行選取；有選取時 Ctrl+C／Ctrl+Shift+C／右鍵複製，無選取時 Ctrl+C 照常送出、右鍵貼上；Ctrl+V 改為貼上。執行紀錄分頁以整行選取。

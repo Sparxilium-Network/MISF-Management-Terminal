@@ -1,6 +1,6 @@
 # 原始碼檔案說明
 
-> 最後修改：2026-11-18 ｜ 基於 commit：`9c949dc`
+> 最後修改：2026-11-18 ｜ 基於 commit：`5f16b15`
 
 每個 `.rs` 檔案負責什麼。整體設計與資料流見 [架構](architecture.md)，建置與慣例見 [開發說明](PROJECT-DEV.md)。新增、改名或刪除 `.rs` 檔案時，請一併更新本文件。
 
@@ -122,7 +122,7 @@ Workspace 有四個 crate：`core`（`misf-core`，核心函式庫與 JSON CLI�
 | `app/ui/widgets.slint` | 共用元件：懸停提示 `HintArea`（1.5 秒後顯示命令、效果與風險；右鍵開啟 `menu` 或複製命令）、自繪右鍵選單（`MenuLine`、`PopMenu`、`MenuArea`、`MenuOverlay`：外觀與進階選單一致，不用 Slint 內建的 `ContextMenuArea`，因其外觀無法套用 Theme；`MenuArea` 疊在控制項上方，只在 `right-down` 為真時啟用，因為控制項的 `TouchArea` 會抓住所有按下事件，停用的 `TouchArea` 才會讓事件穿過）、提示框、剪貼簿、彩色按鈕、三態勾選框、對話框外框等。 |
 | `app/ui/title_bar.slint` | 自繪標題列的零件：`WindowChrome`（是否最大化與拖曳、縮放、最小化、最大化、關閉的回呼）、可拖曳且雙擊最大化的 `DragArea`、選單式文字命令 `MenuItem`、視窗按鈕 `CaptionButtons`、四邊四角的縮放把手與 1px 外框 `WindowEdges`（最大化時不顯示）。 |
 | `app/ui/tool_window.slint` | IDE 式工具視窗：`ToolWindow`（目前開啟的工具視窗與共用高度）、視窗最左側的圖示直條 `ToolStripe`（終端機、套件明細、過往操作）、可拖曳的上緣 `DockHandle` 與標題列 `DockTitle`（含收合鈕）。 |
-| `app/ui/terminal.slint` | 終端機工具視窗 `TerminalPanel` 與 `TerminalState`：每台主機一個分頁（狀態圓點；shell 分頁另有 >_ 與關閉鈕）、「開啟 Shell」、「複製」；`ShellScreen` 以等寬字型量出格寬，依面板大小回報行列數，逐列畫出 `ShellRow`／`ShellRun` 與游標，`FocusScope` 接收按鍵（Ctrl+V／Ctrl+Shift+V／Shift+Insert 或無選取時的右鍵經隱藏的多行 `TextInput` 貼上，保留換行；有選取時 Ctrl+C 或右鍵複製）；滑鼠拖曳、雙擊、三擊以格、字、行選取，範圍由 `terminal.rs` 的 `Selection` 記錄並以 vt100 的 `contents_between` 取出文字，執行紀錄分頁則以整行選取，滾輪捲動歷史；以及固定行高的 `ListView`（不換行、過長省略）；捲到底時跟著新輸出捲動，往上捲就停止跟隨。 |
+| `app/ui/terminal.slint` | 終端機工具視窗 `TerminalPanel` 與 `TerminalState`：每台主機一個分頁（狀態圓點；shell 分頁另有 >_ 與關閉鈕）、「開啟 Shell」、扳手（以共用右鍵選單 `PopMenu` 的 `shell-send` 動作把 MISF 攔下的 Ctrl+C／Ctrl+V／Shift+Insert 送給 shell，位元組由 `remote_shell::kept_key_bytes` 決定）、「複製」；`ShellScreen` 以等寬字型量出格寬，依面板大小回報行列數，逐列畫出 `ShellRow`／`ShellRun` 與游標，`FocusScope` 接收按鍵（Ctrl+V／Ctrl+Shift+V／Shift+Insert 或無選取時的右鍵經隱藏的多行 `TextInput` 貼上，保留換行；有選取時 Ctrl+C 或右鍵複製）；滑鼠拖曳、雙擊、三擊以格、字、行選取，範圍由 `terminal.rs` 的 `Selection` 記錄並以 vt100 的 `contents_between` 取出文字，執行紀錄分頁則以整行選取，滾輪捲動歷史；以及固定行高的 `ListView`（不換行、過長省略）；捲到底時跟著新輸出捲動，往上捲就停止跟隨。 |
 | `app/ui/sidebar.slint`、`host_page.slint`、`result_panel.slint`、`batch_page.slint`、`settings.slint`、`shell.slint` | 各頁畫面與其 global。 |
 | `app/ui/kept_back_details.slint` | dist-upgrade 報告的「詳細情況」獨立視窗（`KeptBackWindow`）與其 global `KeptBackDetails`；由 `ui/mod.rs` 的 `Ctx` 持有，內容由 `ui/dialogs.rs` 填入。 |
 | `app/ui/dialogs/*.slint` | 主機編輯、SSH 金鑰、主機庫、確認類與簡短對話框。 |
