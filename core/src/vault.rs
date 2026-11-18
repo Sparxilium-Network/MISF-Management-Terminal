@@ -223,11 +223,11 @@ impl VaultFile {
         result
     }
 
-    fn add_passkey(&mut self, hello: bool, pin: Option<&str>) -> Result<usize> {
+    fn add_passkey(&mut self, pin: Option<&str>) -> Result<usize> {
         ensure!(!self.poisoned, "先前儲存失敗；請鎖定後重新解鎖");
         ensure!(self.slots().len() < 8, "所有金鑰槽均已使用");
         check_environment()?;
-        let mut auth = crate::passkey::authenticator(hello)?;
+        let mut auth = crate::passkey::authenticator()?;
         let index = crate::passkey::enroll(self.vfs.container_mut(), &mut auth, pin)?;
         if let Err(error) = self.vfs.container_mut().persist_header() {
             self.poisoned = true;
@@ -450,10 +450,9 @@ impl StorageSession {
                 let name = slot_name(&request)?;
                 let pin = take_pin(&mut request)?;
                 require_hardware_pin(&pin)?;
-                let hello = request["hello"].as_bool().unwrap_or(false);
                 progress("請在系統視窗或安全金鑰上完成 Passkey 註冊與兩次驗證…");
                 let index = self.with_vault(|vault| {
-                    let index = vault.add_passkey(hello, pin.as_deref().map(String::as_str))?;
+                    let index = vault.add_passkey(pin.as_deref().map(String::as_str))?;
                     vault.name_slot(index, &name)?;
                     Ok(index)
                 })?;
@@ -464,8 +463,7 @@ impl StorageSession {
                 check_environment()?;
                 let pin = take_pin(&mut request)?;
                 require_hardware_pin(&pin)?;
-                let mut auth =
-                    crate::passkey::authenticator(request["hello"].as_bool().unwrap_or(false))?;
+                let mut auth = crate::passkey::authenticator()?;
                 progress("請在系統視窗或安全金鑰上完成 Passkey 驗證…");
                 let vault = VaultFile::from_container(crate::passkey::open(
                     &self.plain_path.with_extension("lbx"),

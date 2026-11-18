@@ -73,11 +73,14 @@ fn native_error(operation: &str, api: u32, version: u32, error: windows::core::E
     ))
 }
 
-fn make_options(version: u32, attachment: u32) -> WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS {
+/// Only roaming security keys: platform authenticators such as Windows Hello are not offered.
+const ATTACHMENT: u32 = WEBAUTHN_AUTHENTICATOR_ATTACHMENT_CROSS_PLATFORM;
+
+fn make_options(version: u32) -> WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS {
     WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS {
         dwVersion: version,
         dwTimeoutMilliseconds: 60_000,
-        dwAuthenticatorAttachment: attachment,
+        dwAuthenticatorAttachment: ATTACHMENT,
         dwUserVerificationRequirement: WEBAUTHN_USER_VERIFICATION_REQUIREMENT_REQUIRED,
         dwAttestationConveyancePreference: WEBAUTHN_ATTESTATION_CONVEYANCE_PREFERENCE_NONE,
         // PRF is a first-class option starting at make-options v6.
@@ -87,20 +90,14 @@ fn make_options(version: u32, attachment: u32) -> WEBAUTHN_AUTHENTICATOR_MAKE_CR
 }
 
 pub(crate) struct WindowsAuthenticator {
-    attachment: u32,
     api: u32,
     versions: Versions,
 }
 impl WindowsAuthenticator {
-    pub(crate) fn new(hello: bool) -> Result<Self> {
+    pub(crate) fn new() -> Result<Self> {
         // Capability query only; does not start authentication or enumerate credentials.
         let api = unsafe { WebAuthNGetApiVersionNumber() };
         Ok(Self {
-            attachment: if hello {
-                WEBAUTHN_AUTHENTICATOR_ATTACHMENT_PLATFORM
-            } else {
-                WEBAUTHN_AUTHENTICATOR_ATTACHMENT_CROSS_PLATFORM
-            },
             api,
             versions: versions(api)?,
         })
@@ -129,7 +126,6 @@ impl Drop for Assertion {
 /// All pointer backing storage stays alive until `invoke` returns; no self-referential
 /// structure is moved after its addresses have been taken.
 fn with_assertion_request<T>(
-    attachment: u32,
     version: u32,
     rp: &str,
     requests: &[HmacSecretRequest<'_>],
@@ -202,7 +198,7 @@ fn with_assertion_request<T>(
     let options = WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS {
         dwVersion: version,
         dwTimeoutMilliseconds: 60_000,
-        dwAuthenticatorAttachment: attachment,
+        dwAuthenticatorAttachment: ATTACHMENT,
         dwUserVerificationRequirement: WEBAUTHN_USER_VERIFICATION_REQUIREMENT_REQUIRED,
         pAllowCredentialList: &mut allow,
         pHmacSecretSaltValues: &mut values,
@@ -253,7 +249,7 @@ impl Fido2Authenticator for WindowsAuthenticator {
             cbExtension: size_of::<BOOL>() as u32,
             pvExtension: (&mut enabled as *mut BOOL).cast(),
         };
-        let mut options = make_options(self.versions.make, self.attachment);
+        let mut options = make_options(self.versions.make);
         if self.versions.make < 6 {
             options.Extensions = WEBAUTHN_EXTENSIONS {
                 cExtensions: 1,
@@ -328,63 +324,55 @@ impl Fido2Authenticator for WindowsAuthenticator {
         _pin: Option<&str>,
     ) -> Result<(usize, HmacSecret)> {
         let rp_id = HSTRING::from(rp);
-        with_assertion_request(
-            self.attachment,
-            self.versions.get,
-            rp,
-            requests,
-            |client, options| {
-                // SAFETY: with_assertion_request keeps every pointer backing buffer live.
-                let pointer = unsafe {
-                    WebAuthNAuthenticatorGetAssertion(
-                        GetForegroundWindow(),
-                        PCWSTR(rp_id.as_ptr()),
-                        client,
-                        Some(options),
-                    )
-                }
-                .map_err(|error| {
-                    native_error("Passkey verification", self.api, self.versions.get, error)
+        with_assertion_request(self.versions.get, rp, requests, |client, options| {
+            // SAFETY: with_assertion_request keeps every pointer backing buffer live.
+            let pointer = unsafe {
+                WebAuthNAuthenticatorGetAssertion(
+                    GetForegroundWindow(),
+                    PCWSTR(rp_id.as_ptr()),
+                    client,
+                    Some(options),
+                )
+            }
+            .map_err(|error| {
+                native_error("Passkey verification", self.api, self.versions.get, error)
+            })?;
+            let owned = Assertion(
+                NonNull::new(pointer).ok_or_else(|| fail("WebAuthn returned a null assertion"))?,
+            );
+            // SAFETY: the owned OS allocation is live for this whole scope.
+            let assertion = unsafe { owned.0.as_ref() };
+            if assertion.dwVersion < 3 || assertion.pHmacSecret.is_null() {
+                return Err(Error::NoHmacSecret);
+            }
+            let credential = &assertion.Credential;
+            if credential.pbId.is_null()
+                || credential.cbId == 0
+                || credential.cbId as usize > FIDO2_CRED_ID_MAX
+            {
+                return Err(fail("Invalid credential in WebAuthn assertion"));
+            }
+            // SAFETY: native output pointers come from the OS allocation; lengths bounded.
+            let id =
+                unsafe { std::slice::from_raw_parts(credential.pbId, credential.cbId as usize) };
+            let index = requests
+                .iter()
+                .position(|r| r.cred_id == id)
+                .ok_or_else(|| {
+                    fail("WebAuthn selected a credential outside the requested keyslots")
                 })?;
-                let owned = Assertion(
-                    NonNull::new(pointer)
-                        .ok_or_else(|| fail("WebAuthn returned a null assertion"))?,
-                );
-                // SAFETY: the owned OS allocation is live for this whole scope.
-                let assertion = unsafe { owned.0.as_ref() };
-                if assertion.dwVersion < 3 || assertion.pHmacSecret.is_null() {
-                    return Err(Error::NoHmacSecret);
-                }
-                let credential = &assertion.Credential;
-                if credential.pbId.is_null()
-                    || credential.cbId == 0
-                    || credential.cbId as usize > FIDO2_CRED_ID_MAX
-                {
-                    return Err(fail("Invalid credential in WebAuthn assertion"));
-                }
-                // SAFETY: native output pointers come from the OS allocation; lengths bounded.
-                let id = unsafe {
-                    std::slice::from_raw_parts(credential.pbId, credential.cbId as usize)
-                };
-                let index = requests
-                    .iter()
-                    .position(|r| r.cred_id == id)
-                    .ok_or_else(|| {
-                        fail("WebAuthn selected a credential outside the requested keyslots")
-                    })?;
-                // SAFETY: pHmacSecret is available since assertion v3, checked above.
-                let output = unsafe { &*assertion.pHmacSecret };
-                if output.cbFirst != 32 || output.pbFirst.is_null() {
-                    return Err(Error::NoHmacSecret);
-                }
-                let mut secret = zeroize::Zeroizing::new([0u8; 32]);
-                // SAFETY: OS owns a live cbFirst-byte output, validated to exactly 32 bytes.
-                unsafe {
-                    ptr::copy_nonoverlapping(output.pbFirst, secret.as_mut_ptr(), 32);
-                }
-                Ok((index, HmacSecret(*secret)))
-            },
-        )
+            // SAFETY: pHmacSecret is available since assertion v3, checked above.
+            let output = unsafe { &*assertion.pHmacSecret };
+            if output.cbFirst != 32 || output.pbFirst.is_null() {
+                return Err(Error::NoHmacSecret);
+            }
+            let mut secret = zeroize::Zeroizing::new([0u8; 32]);
+            // SAFETY: OS owns a live cbFirst-byte output, validated to exactly 32 bytes.
+            unsafe {
+                ptr::copy_nonoverlapping(output.pbFirst, secret.as_mut_ptr(), 32);
+            }
+            Ok((index, HmacSecret(*secret)))
+        })
     }
 }
 
@@ -414,7 +402,7 @@ mod tests {
         for (api, make, get) in [(4, 5, 6), (5, 5, 6), (6, 6, 6), (7, 7, 7), (9, 7, 7)] {
             let selected = versions(api).unwrap();
             assert_eq!((selected.make, selected.get), (make, get));
-            let options = make_options(make, WEBAUTHN_AUTHENTICATOR_ATTACHMENT_PLATFORM);
+            let options = make_options(make);
             assert_eq!(
                 options.dwUserVerificationRequirement,
                 WEBAUTHN_USER_VERIFICATION_REQUIREMENT_REQUIRED
@@ -438,62 +426,51 @@ mod tests {
                     prehash_salt: true,
                 })
                 .collect();
-            with_assertion_request(
-                WEBAUTHN_AUTHENTICATOR_ATTACHMENT_CROSS_PLATFORM,
-                7,
-                RP_ID,
-                &requests,
-                |client, options| {
-                    // SAFETY: this test callback runs while the request backing storage is live.
-                    unsafe {
-                        let json = std::slice::from_raw_parts(
-                            client.pbClientDataJSON,
-                            client.cbClientDataJSON as usize,
-                        );
-                        assert_eq!(
-                            serde_json::from_slice::<serde_json::Value>(json).unwrap()["type"],
-                            "webauthn.get"
-                        );
-                        assert_eq!(
-                            options.dwUserVerificationRequirement,
-                            WEBAUTHN_USER_VERIFICATION_REQUIREMENT_REQUIRED
-                        );
-                        assert_eq!(
-                            options.dwFlags & WEBAUTHN_AUTHENTICATOR_HMAC_SECRET_VALUES_FLAG,
-                            0
-                        );
-                        assert_eq!((*options.pAllowCredentialList).cCredentials as usize, count);
-                        let values = &*options.pHmacSecretSaltValues;
-                        if count == 1 {
-                            assert!(!values.pGlobalHmacSalt.is_null());
-                            assert_eq!(values.cCredWithHmacSecretSaltList, 0);
-                        } else {
-                            assert!(values.pGlobalHmacSalt.is_null());
-                            let bindings = std::slice::from_raw_parts(
-                                values.pCredWithHmacSecretSaltList,
-                                count,
+            with_assertion_request(7, RP_ID, &requests, |client, options| {
+                // SAFETY: this test callback runs while the request backing storage is live.
+                unsafe {
+                    let json = std::slice::from_raw_parts(
+                        client.pbClientDataJSON,
+                        client.cbClientDataJSON as usize,
+                    );
+                    assert_eq!(
+                        serde_json::from_slice::<serde_json::Value>(json).unwrap()["type"],
+                        "webauthn.get"
+                    );
+                    assert_eq!(
+                        options.dwUserVerificationRequirement,
+                        WEBAUTHN_USER_VERIFICATION_REQUIREMENT_REQUIRED
+                    );
+                    assert_eq!(
+                        options.dwFlags & WEBAUTHN_AUTHENTICATOR_HMAC_SECRET_VALUES_FLAG,
+                        0
+                    );
+                    assert_eq!((*options.pAllowCredentialList).cCredentials as usize, count);
+                    let values = &*options.pHmacSecretSaltValues;
+                    if count == 1 {
+                        assert!(!values.pGlobalHmacSalt.is_null());
+                        assert_eq!(values.cCredWithHmacSecretSaltList, 0);
+                    } else {
+                        assert!(values.pGlobalHmacSalt.is_null());
+                        let bindings =
+                            std::slice::from_raw_parts(values.pCredWithHmacSecretSaltList, count);
+                        for (index, binding) in bindings.iter().enumerate() {
+                            assert_eq!(
+                                std::slice::from_raw_parts(
+                                    binding.pbCredID,
+                                    binding.cbCredID as usize
+                                ),
+                                ids[index]
                             );
-                            for (index, binding) in bindings.iter().enumerate() {
-                                assert_eq!(
-                                    std::slice::from_raw_parts(
-                                        binding.pbCredID,
-                                        binding.cbCredID as usize
-                                    ),
-                                    ids[index]
-                                );
-                                assert_eq!(
-                                    std::slice::from_raw_parts(
-                                        (*binding.pHmacSecretSalt).pbFirst,
-                                        32
-                                    ),
-                                    salts[index]
-                                );
-                            }
+                            assert_eq!(
+                                std::slice::from_raw_parts((*binding.pHmacSecretSalt).pbFirst, 32),
+                                salts[index]
+                            );
                         }
                     }
-                    Ok(())
-                },
-            )
+                }
+                Ok(())
+            })
             .unwrap();
         }
     }

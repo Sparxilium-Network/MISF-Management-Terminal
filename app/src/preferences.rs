@@ -142,24 +142,16 @@ pub enum UnlockMethod {
     /// The password field; a passkey is one click away.
     #[default]
     Password,
-    /// Starts Windows Hello right away. Other platforms never load it, since it is not in
-    /// [`UnlockMethod::ALL`] there, and fall back to the password.
-    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-    WindowsHello,
     /// Starts a FIDO2 security key right away.
     SecurityKey,
 }
 
 impl UnlockMethod {
-    #[cfg(target_os = "windows")]
-    pub const ALL: &[Self] = &[Self::Password, Self::WindowsHello, Self::SecurityKey];
-    #[cfg(not(target_os = "windows"))]
     pub const ALL: &[Self] = &[Self::Password, Self::SecurityKey];
 
     fn code(self) -> &'static str {
         match self {
             Self::Password => "password",
-            Self::WindowsHello => "windows_hello",
             Self::SecurityKey => "security_key",
         }
     }
@@ -167,7 +159,6 @@ impl UnlockMethod {
     pub fn label(self, t: Translator) -> &'static str {
         match self {
             Self::Password => t.get("auth.password"),
-            Self::WindowsHello => "Windows Hello",
             Self::SecurityKey => t.get("unlock_method.security_key"),
         }
     }

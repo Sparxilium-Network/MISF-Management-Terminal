@@ -86,7 +86,6 @@ pub enum Action {
     VaultDeletePlaintext,
     FormEdit,
     ValidationRejected,
-    PasskeyMethod,
     /// An interactive shell was opened on a host; what is typed in it is never logged.
     ShellOpen,
     /// An interactive shell ended, closed by the user or not.

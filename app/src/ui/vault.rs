@@ -62,18 +62,15 @@ impl App {
         if std::mem::replace(&mut self.default_unlock_started, true) || !self.passkey_allowed {
             return;
         }
-        let hello = match self.preferences.unlock_method {
-            UnlockMethod::Password => return,
-            UnlockMethod::WindowsHello => true,
-            UnlockMethod::SecurityKey => false,
-        };
+        if self.preferences.unlock_method != UnlockMethod::SecurityKey {
+            return;
+        }
         let Some(dialog) = self.vault_dialog.as_mut() else {
             return;
         };
         dialog.mode = VaultMode::Passkey;
-        dialog.hello = hello;
         if cfg!(target_os = "windows") {
-            self.send(json!({"action":"vault_unlock_passkey","hello":hello,"name":"","pin":""}));
+            self.send(json!({"action":"vault_unlock_passkey","name":"","pin":""}));
         }
     }
 
@@ -85,7 +82,6 @@ impl App {
             password: String::new(),
             confirmation: String::new(),
             error: String::new(),
-            hello: cfg!(target_os = "windows"),
             acknowledged: false,
         });
         self.reload.vault = true;
@@ -139,7 +135,7 @@ impl App {
             } else {
                 "vault_add_passkey"
             };
-            json!({"action":action,"hello":dialog.hello,"name":dialog.name,"pin":std::mem::take(&mut dialog.password)})
+            json!({"action":action,"name":dialog.name,"pin":std::mem::take(&mut dialog.password)})
         } else if dialog.mode == VaultMode::Manage {
             return;
         } else {
@@ -308,7 +304,6 @@ pub fn push(app: &mut App, w: &AppWindow) {
             state.set_locked(app.locked);
             state.set_plaintext_exists(app.plaintext_exists);
             state.set_windows(cfg!(target_os = "windows"));
-            state.set_hello(dialog.hello);
             let slot = match dialog.mode {
                 VaultMode::Revoke(slot) | VaultMode::Rename(slot) => Some(slot),
                 _ => None,
@@ -371,18 +366,6 @@ pub fn wire(ctx: &Ctx, w: &AppWindow) {
     state.on_revoke(move |slot| c.update(|app| app.vault_revoke(slot.max(0) as usize)));
     let c = ctx.clone();
     state.on_backup(move || choose_backup(&c));
-    let c = ctx.clone();
-    state.on_hello_chosen(move |hello| {
-        c.update_with(|app, w| {
-            pull(app, w);
-            if let Some(dialog) = &mut app.vault_dialog
-                && dialog.hello != hello
-            {
-                dialog.hello = hello;
-                app.log(Action::PasskeyMethod, Outcome::Succeeded);
-            }
-        })
-    });
     let plaintext = w.global::<PlaintextState>();
     let c = ctx.clone();
     plaintext.on_keep(move || c.update(|app| app.respond_plaintext_delete(false)));

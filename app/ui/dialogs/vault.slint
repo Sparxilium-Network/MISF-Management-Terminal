@@ -23,7 +23,6 @@ export global VaultState {
     in property <bool> plaintext-exists;
     // The passkey method choice exists only on Windows.
     in property <bool> windows;
-    in property <bool> hello;
     // The slot being renamed or revoked, and the revoke question.
     in property <string> slot-label;
     in property <string> revoke-prompt;
@@ -42,7 +41,6 @@ export global VaultState {
     callback rename(slot: int);
     callback revoke(slot: int);
     callback backup();
-    callback hello-chosen(hello: bool);
 }
 
 export component VaultDialog inherits Modal {
@@ -183,20 +181,6 @@ export component VaultDialog inherits Modal {
         spacing: 8px;
         Body {
             text: T.get("passkey.description");
-        }
-        if VaultState.windows: HorizontalLayout {
-            spacing: 16px;
-            alignment: start;
-            CheckBox {
-                text: "Windows Hello";
-                checked: VaultState.hello;
-                toggled => { VaultState.hello-chosen(true); }
-            }
-            CheckBox {
-                text: T.get("passkey.security_key");
-                checked: !VaultState.hello;
-                toggled => { VaultState.hello-chosen(false); }
-            }
         }
         if !VaultState.locked: Field {
             label: T.get("vault.slot_name");

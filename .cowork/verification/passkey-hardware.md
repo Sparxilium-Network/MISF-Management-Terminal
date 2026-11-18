@@ -4,4 +4,5 @@
 - 2026-10-29：使用者回報修正版實測成功。未記錄確切裝置型號／韌體及全部測試步驟，因此不推論所有 OpenSK、其他 USB 金鑰或 Windows Hello 均已驗證。
 - 2026-10-30 依賴更新（FIDO2 p256 0.14 等）後未重新操作實體驗證器。
 - Linux libfido2 路徑未在實體裝置驗證。
+- 2026-11-18：移除 Windows Hello 支援；Windows 的 WebAuthn 請求固定為 cross-platform（只接受外接安全金鑰）。改動後未重新操作實體驗證器。
 - 測試程序：`docs/passkey-testing.md`。

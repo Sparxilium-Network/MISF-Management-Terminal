@@ -346,12 +346,6 @@ export component Sidebar inherits Rectangle {
             enabled: !SidebarState.locked && !root.busy;
             clicked => { SidebarState.add-host(); }
         }
-        Rectangle { height: 8px; }
-        Text {
-            text: T.get("app.local_mode");
-            font-size: 11px;
-            color: Theme.sidebar-muted;
-        }
     }
     // Rows ignore input while work runs, as everything else here does.
     if root.busy: TouchArea { }

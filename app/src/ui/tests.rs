@@ -178,11 +178,9 @@ fn preferred_passkey_starts_once_when_the_vault_is_locked_at_launch() {
     app.received("storage_status", locked.clone());
     let dialog = app.vault_dialog.as_ref().unwrap();
     assert_eq!(dialog.mode, VaultMode::Passkey);
-    assert!(!dialog.hello);
     if cfg!(target_os = "windows") {
         let request = commands.recv().unwrap();
         assert_eq!(request["action"], "vault_unlock_passkey");
-        assert_eq!(request["hello"], false);
     }
     // Locking again later shows the plain dialog instead of prompting by surprise.
     app.busy = false;

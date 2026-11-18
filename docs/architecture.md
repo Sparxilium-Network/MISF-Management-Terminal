@@ -1,6 +1,6 @@
 # MISF Management Terminal 架構
 
-> 最後修改：2026-11-18 ｜ 基於 commit：`7678ab9`
+> 最後修改：2026-11-18 ｜ 基於 commit：`83e6d98`
 
 > [!WARNING]
 > **本專案仍處於開發階段，請勿用於正式環境。** 相關安全保護機制尚未完善。
@@ -193,7 +193,7 @@ UI 每台主機一個分頁，最多保留約 10,000 行；終端機只保存在
 
 使用 LUKSbox v0.6.1 固定 commit 的 core／format／VFS（AES-256-GCM-SIV、Argon2id 256 MiB／t=3／p=4），以函式庫直接讀寫，不掛載磁碟。密碼與 Passkey 合計最多 8 個金鑰槽，可命名、撤銷（不能撤銷最後一槽）與匯出加密備份；備份經現有 Container handle 複製密文，不覆寫既有檔案。
 
-Passkey 只使用 `Fido2HmacSecret` 包裝槽。Windows 透過 `windows_passkey.rs` 呼叫 webauthn.dll（Hello 或外接安全金鑰），每次使用新的 32-byte challenge 與合法 client JSON，依 API 版本選擇 options 並保持 UV Required；Linux 透過 libfido2 與當次 PIN 操作 CTAP2 裝置。註冊後兩次讀取 PRF 一致才寫入 header；credential ID 與 salt 隨槽保存，PIN 與 PRF 不落地，PRF 放入 zeroizing 容器。
+Passkey 只使用 `Fido2HmacSecret` 包裝槽。Windows 透過 `windows_passkey.rs` 呼叫 webauthn.dll，attachment 固定為 cross-platform，只接受外接安全金鑰、不提供 Windows Hello 等平台驗證器（一般權限的程式無法直接以 HID 存取 FIDO 裝置，因此 Windows 仍須經 webauthn.dll），每次使用新的 32-byte challenge 與合法 client JSON，依 API 版本選擇 options 並保持 UV Required；Linux 透過 libfido2 與當次 PIN 操作 CTAP2 裝置。註冊後兩次讀取 PRF 一致才寫入 header；credential ID 與 salt 隨槽保存，PIN 與 PRF 不落地，PRF 放入 zeroizing 容器。
 
 ## 操作日誌與 debug 模式
 

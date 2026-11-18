@@ -249,7 +249,6 @@ pub struct VaultDialog {
     pub password: String,
     pub confirmation: String,
     pub error: String,
-    pub hello: bool,
     pub acknowledged: bool,
 }
 

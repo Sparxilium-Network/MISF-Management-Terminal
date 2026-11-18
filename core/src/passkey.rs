@@ -9,18 +9,17 @@ use luksbox_fido2::{Fido2Authenticator, HmacSecretRequest, RP_ID};
 use luksbox_format::{Container, UnlockMaterial};
 use std::{io::Read, path::Path};
 
-pub(crate) fn authenticator(hello: bool) -> Result<NativeAuthenticator> {
+pub(crate) fn authenticator() -> Result<NativeAuthenticator> {
     ensure!(
         std::env::var_os("LUKSBOX_FIDO2_DEBUG").is_none(),
         "Remove LUKSBOX_FIDO2_DEBUG; raw authenticator diagnostics are not allowed"
     );
     #[cfg(target_os = "windows")]
     {
-        Ok(NativeAuthenticator::new(hello)?)
+        Ok(NativeAuthenticator::new()?)
     }
     #[cfg(not(target_os = "windows"))]
     {
-        ensure!(!hello, "Windows Hello is only available on Windows");
         Ok(NativeAuthenticator::new())
     }
 }

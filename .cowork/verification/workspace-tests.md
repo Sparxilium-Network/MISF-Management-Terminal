@@ -1,5 +1,12 @@
 # 全工作區檢查結果
 
+## 2026-11-18（移除 Windows Hello 與側欄底部文字，於 `main`）
+
+- Windows WebAuthn 固定 cross-platform attachment；移除 Hello 選項、`windows_hello` 預設解鎖方式、請求的 `hello` 欄位、`passkey_method` 稽核動作，以及 `app.local_mode`、`passkey.security_key` 字串。
+- `cargo fmt --all -- --check`、`cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`：通過。
+- `cargo test --locked --workspace`：全部通過（22、37、72、33 項）。
+- 依賴未變動。尚未用實體安全金鑰重新註冊與解鎖。
+
 ## 2026-11-18（rusqlite 0.43.0，Dependabot PR #7 更新後，於 `main`）
 
 - PR #7 在 0.42.0 推送後被 Dependabot 改為 0.42.0 → 0.43.0；在 `main` 手動套用相同變更（`core/Cargo.toml`、`Cargo.lock` 只有 rusqlite），`cargo metadata --locked` 通過；重跑 `./licenses.ps1`。
