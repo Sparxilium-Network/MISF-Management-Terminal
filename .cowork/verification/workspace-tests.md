@@ -1,5 +1,13 @@
 # 全工作區檢查結果
 
+## 2026-11-18（終端機貼上保留換行、Shift+Insert）
+
+- 隱藏的貼上 `TextInput` 改為多行，Slint 不再把多行剪貼簿內容的換行換成空白；Shift+Insert 也能貼上。
+- `cargo fmt --all -- --check`、`cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`：通過。
+- `cargo test --locked --workspace`：全部通過（22、37、72、33 項）。
+- `.\package.ps1`：成功；`dist\MISF\misf.exe` 與 `target\release\misf.exe` 雜湊相同（6B0745EB…A240）。
+- 尚未在真實主機的 shell 實測多行貼上。
+
 ## 2026-11-18（chrono 停止維護公告暫時忽略）
 
 - 擁有者決定暫時忽略 RUSTSEC-2026-0543（chrono 不再維護、無修補版本），在 `deny.toml` 加入附原因的例外，並在 `docs/dependency-updates.md` 說明等待 chrono 棄用與替代方案後再處理。

@@ -178,8 +178,10 @@ component ShellScreen inherits Rectangle {
         visible: false;
     }
     // Pasting goes through a hidden text field, the one way to read the clipboard.
+    // Multi-line, or Slint turns the pasted line breaks into spaces.
     paster := TextInput {
         visible: false;
+        single-line: false;
         width: 0px;
         height: 0px;
         changed text => {
@@ -194,7 +196,8 @@ component ShellScreen inherits Rectangle {
             if (!TerminalState.shell-typing) {
                 return reject;
             }
-            if (event.modifiers.control && event.modifiers.shift && (event.text == "v" || event.text == "V")) {
+            if ((event.modifiers.control && event.modifiers.shift && (event.text == "v" || event.text == "V"))
+                || (event.modifiers.shift && !event.modifiers.control && event.text == Key.Insert)) {
                 paster.paste();
                 return accept;
             }
