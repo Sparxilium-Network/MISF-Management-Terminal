@@ -1,5 +1,15 @@
 # 全工作區檢查結果
 
+## 2026-11-18（rusqlite 0.43.0，Dependabot PR #7 更新後，於 `main`）
+
+- PR #7 在 0.42.0 推送後被 Dependabot 改為 0.42.0 → 0.43.0；在 `main` 手動套用相同變更（`core/Cargo.toml`、`Cargo.lock` 只有 rusqlite），`cargo metadata --locked` 通過；重跑 `./licenses.ps1`。
+- 0.43.0 起空白或只有註解的 SQL 會回傳錯誤：程式中的 SQL 都是非空字面值且不含註解，不受影響。
+- `cargo fmt --all -- --check`、`cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`：通過。
+- `cargo deny --locked check`：`advisories ok, bans ok, licenses ok, sources ok`。
+- `cargo test --locked --workspace`：全部通過（22、37、72、33 項）。
+- `.\package.ps1`：成功；`dist\MISF\misf.exe` 與 `target\release\misf.exe` 時間 2026-11-18 20:54:58、雜湊相同（441DA3D4…DEFA7）。
+- 尚未用真實的加密主機庫開啟測試。
+
 ## 2026-11-18（終端機扳手：傳送被攔下的按鍵）
 
 - 「開啟 Shell」右側新增扳手，選單可把 Ctrl+C、Ctrl+V、Shift+Insert 送給 shell。
