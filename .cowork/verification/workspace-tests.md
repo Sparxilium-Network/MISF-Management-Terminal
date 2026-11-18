@@ -1,5 +1,11 @@
 # 全工作區檢查結果
 
+## 2026-11-18（chrono 停止維護公告暫時忽略）
+
+- 擁有者決定暫時忽略 RUSTSEC-2026-0543（chrono 不再維護、無修補版本），在 `deny.toml` 加入附原因的例外，並在 `docs/dependency-updates.md` 說明等待 chrono 棄用與替代方案後再處理。
+- `cargo deny --locked check`：`advisories ok, bans ok, licenses ok, sources ok`。
+- 沒有程式碼變動，未重跑測試與打包。
+
 ## 2026-11-18（rusqlite 0.42.0，Dependabot PR #7，於 `main`）
 
 - 使用者要求套用 PR #7 並合併到主分支：`main`（`47a9b18`）先快轉到 `feat/WYSIWYG-Terminal`（`21a90e7`），再於 `main` 手動套用與 PR 相同的變更（`core/Cargo.toml`、`Cargo.lock` 中 rusqlite 0.41.1 → 0.42.0、libsqlite3-sys 0.39.1 → 0.40.0），沒有其他鎖檔變動；`cargo metadata --locked` 通過；重跑 `./licenses.ps1`。

@@ -14,6 +14,9 @@ ignore = [
     { id = "RUSTSEC-2026-0371", reason = "zbus_names merged into zbus 6; via AccessKit AT-SPI, Linux accessibility only" },
     { id = "RUSTSEC-2026-0370", reason = "zvariant merged into zbus 6; via AccessKit AT-SPI, Linux accessibility only" },
     { id = "RUSTSEC-2026-0372", reason = "zvariant_derive merged into zbus 6; via AccessKit AT-SPI, Linux accessibility only" },
+    # chrono is also used directly by misf and misf-core, so this one is temporary: see
+    # docs/dependency-updates.md. Remove once Slint drops chrono and MISF has moved off it.
+    { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained, no fix; via Slint and used by misf/misf-core, temporary until a replacement" },
 ]
 
 [licenses]

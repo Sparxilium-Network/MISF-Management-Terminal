@@ -1,6 +1,6 @@
 # 依賴更新與安全公告
 
-> 最後修改：2026-11-12 ｜ 基於 commit：`b64f596`
+> 最後修改：2026-11-18 ｜ 基於 commit：`2ebd7e8`
 
 依賴的實際版本以已提交的 `Cargo.lock` 為準；建置與發布一律使用 `--locked`，不在建置時改變依賴。Dependabot 每日檢查 Actions 與 Cargo 依賴並提出更新 PR，通過驗證及合併後才進入發布。實際更新時的操作步驟見 [更新依賴的步驟](update-dependency.md)；本文件記錄背景與限制。
 
@@ -37,6 +37,16 @@ AES／Argon2 等 API 世代，上游容器原始碼維持原樣，沒有改寫�
 | RUSTSEC-2026-0441 | `pin-utils` | Slint 的 `spin_on` | 所有平台；建置期與 Skia 繪圖的小工具 |
 | RUSTSEC-2026-0192 | `ttf-parser` | winit → `sctk-adwaita` | 只有 Linux Wayland 的視窗標題列 |
 | RUSTSEC-2026-0371／0370／0372 | `zbus_names`、`zvariant`、`zvariant_derive` | winit → AccessKit → AT-SPI | 只有 Linux 輔助功能；已併入 zbus 6 |
+
+### chrono（RUSTSEC-2026-0543，暫時忽略）
+
+[RUSTSEC-2026-0543](https://rustsec.org/advisories/RUSTSEC-2026-0543) 表示 `chrono` 不再維護，所有版本都受影響，沒有修補版本。它和上表不同：除了 Slint 1.18.1 間接引入，`misf`（`app/Cargo.toml`）與 `misf-core`（`core/Cargo.toml`）也直接使用 `chrono` 處理時間。
+
+擁有者於 2026-11-18 決定在 `deny.toml` 暫時忽略這則公告，等待 `chrono` 正式棄用、生態系出現明確的替代方案後再處理。這只是暫時例外，不是長期接受：
+
+- 只要 Slint 還引入 `chrono`，本專案自己改用其他時間套件也無法讓這則公告消失，所以先不改程式。
+- 之後若 Slint 移除 `chrono`，或 `chrono` 被正式標記棄用並有建議的替代套件，就評估把 `misf` 與 `misf-core` 的時間處理換掉；換掉並確認 `cargo tree --locked -i chrono` 已找不到套件後，移除 `deny.toml` 的例外。
+- 若期間出現 `chrono` 的安全漏洞公告（不只是停止維護），不適用這個例外，要另外評估。
 
 ## 維護檢查
 
