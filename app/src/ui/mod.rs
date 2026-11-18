@@ -349,6 +349,20 @@ fn capture(ctx: &Ctx) {
                     if std::env::var("MISF_OPEN_TERMINAL").as_deref() == Ok("shell") {
                         sample_shell(app);
                     }
+                    // A selection from the middle of one line into the next, once the
+                    // panel has reported its size (a resize clears a selection).
+                    if std::env::var("MISF_OPEN_SELECTION").as_deref() == Ok("1") {
+                        let c = c.clone();
+                        slint::Timer::single_shot(
+                            std::time::Duration::from_millis(500),
+                            move || {
+                                c.update(|app| {
+                                    app.terminal.press(4, 4, std::time::Instant::now());
+                                    app.terminal.drag(5, 9);
+                                });
+                            },
+                        );
+                    }
                     if matches!(
                         std::env::var("MISF_OPEN_KEPT_BACK").as_deref(),
                         Ok("1" | "details")

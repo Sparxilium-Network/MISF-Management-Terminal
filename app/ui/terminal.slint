@@ -46,6 +46,18 @@ export global TerminalState {
     in property <[TerminalLine]> lines;
     callback select(index: int);
     callback copy();
+    // Text selected with the mouse: its first and last cell (the last included). A run's
+    // tab selects whole lines.
+    in property <bool> selection-shown;
+    in property <int> selection-first-row;
+    in property <int> selection-first-col;
+    in property <int> selection-last-row;
+    in property <int> selection-last-col;
+    // The left button went down on, or dragged to, a row and cell.
+    callback select-press(row: int, col: int);
+    callback select-drag(row: int, col: int);
+    // Copies the selection; false when there is none.
+    callback copy-selection() -> bool;
     // Shells.
     in property <bool> can-open-shell;
     in property <string> open-shell-hint;
@@ -170,6 +182,12 @@ component ShellScreen inherits Rectangle {
     }
     changed cols => { self.report(); }
     changed rows => { self.report(); }
+    pure function row-at(y: length) -> int {
+        floor((y - root.pad) / root.row-height)
+    }
+    pure function col-at(x: length) -> int {
+        floor((x - root.pad) / root.cell)
+    }
     clip: true;
     probe := Text {
         text: "MMMMMMMMMM";
@@ -193,10 +211,18 @@ component ShellScreen inherits Rectangle {
     }
     keys := FocusScope {
         key-pressed(event) => {
+            // Ctrl+C copies a selection, as Windows terminals do; with none it reaches
+            // the shell.
+            if (event.modifiers.control && !event.modifiers.alt && (event.text == "c" || event.text == "C")
+                && TerminalState.selection-shown) {
+                TerminalState.copy-selection();
+                return accept;
+            }
             if (!TerminalState.shell-typing) {
                 return reject;
             }
-            if ((event.modifiers.control && event.modifiers.shift && (event.text == "v" || event.text == "V"))
+            // Ctrl+V and Ctrl+Shift+V paste, so ^V never reaches the shell.
+            if ((event.modifiers.control && !event.modifiers.alt && (event.text == "v" || event.text == "V"))
                 || (event.modifiers.shift && !event.modifiers.control && event.text == Key.Insert)) {
                 paster.paste();
                 return accept;
@@ -208,7 +234,25 @@ component ShellScreen inherits Rectangle {
         }
         TouchArea {
             mouse-cursor: text;
-            clicked => { keys.focus(); }
+            // Left: select by dragging, a word on a double click, a line on a triple.
+            // Right: copy the selection, or paste when there is none.
+            pointer-event(event) => {
+                if (event.kind == PointerEventKind.down) {
+                    keys.focus();
+                    if (event.button == PointerEventButton.left) {
+                        TerminalState.select-press(root.row-at(self.mouse-y), root.col-at(self.mouse-x));
+                    } else if (event.button == PointerEventButton.right) {
+                        if (!TerminalState.copy-selection() && TerminalState.shell-typing) {
+                            paster.paste();
+                        }
+                    }
+                }
+            }
+            moved => {
+                if (self.pressed) {
+                    TerminalState.select-drag(root.row-at(self.mouse-y), root.col-at(self.mouse-x));
+                }
+            }
             scroll-event(event) => {
                 TerminalState.shell-scrolled(event.delta-y > 0 ? 3 : -3);
                 accept
@@ -247,6 +291,16 @@ component ShellScreen inherits Rectangle {
                 height: 1px;
                 background: parent.ink;
             }
+        }
+        // Over the text, so coloured cells show it too.
+        if TerminalState.selection-shown && r >= TerminalState.selection-first-row
+            && r <= TerminalState.selection-last-row: Rectangle {
+            property <int> from: r == TerminalState.selection-first-row ? TerminalState.selection-first-col : 0;
+            property <int> to: r == TerminalState.selection-last-row ? TerminalState.selection-last-col + 1 : root.cols;
+            x: self.from * root.cell;
+            width: max(0, self.to - self.from) * root.cell;
+            height: root.row-height;
+            background: Theme.blue.with-alpha(0.3);
         }
     }
     if TerminalState.cursor-shown: Rectangle {
@@ -348,23 +402,58 @@ export component TerminalPanel inherits Rectangle {
                 font-size: 12px;
                 color: Theme.muted;
             }
+            // Takes Ctrl+C for a selection in a run's tab.
+            log-keys := FocusScope {
+                width: 0px;
+                height: 0px;
+                key-pressed(event) => {
+                    if (event.modifiers.control && !event.modifiers.alt && (event.text == "c" || event.text == "C")
+                        && TerminalState.copy-selection()) {
+                        return accept;
+                    }
+                    reject
+                }
+            }
             list := ListView {
                 visible: !TerminalState.shell-view;
                 // Scrolled away from the end: stop following until back at it.
                 changed content-y => {
                     root.follow = self.content-y <= root.bottom + 2px;
                 }
-                for line in TerminalState.lines: Text {
+                for line[i] in TerminalState.lines: Rectangle {
                     height: root.row-height;
-                    x: 8px;
-                    width: parent.width - 16px;
-                    text: line.text;
-                    font-family: Theme.mono-font;
-                    font-size: Theme.mono-size;
-                    font-weight: line.command ? 700 : 400;
-                    color: line.command ? Theme.blue : Theme.ink;
-                    vertical-alignment: center;
-                    overflow: elide;
+                    background: TerminalState.selection-shown && i >= TerminalState.selection-first-row
+                        && i <= TerminalState.selection-last-row ? Theme.selection : transparent;
+                    Text {
+                        x: 8px;
+                        width: parent.width - 16px;
+                        height: parent.height;
+                        text: line.text;
+                        font-family: Theme.mono-font;
+                        font-size: Theme.mono-size;
+                        font-weight: line.command ? 700 : 400;
+                        color: line.command ? Theme.blue : Theme.ink;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                    // Whole lines: drag across them, or double-click one. Right-click copies.
+                    TouchArea {
+                        pointer-event(event) => {
+                            if (event.kind == PointerEventKind.down) {
+                                log-keys.focus();
+                                if (event.button == PointerEventButton.left) {
+                                    TerminalState.select-press(i + floor(self.mouse-y / root.row-height), 0);
+                                } else if (event.button == PointerEventButton.right) {
+                                    TerminalState.copy-selection();
+                                }
+                            }
+                        }
+                        moved => {
+                            if (self.pressed) {
+                                TerminalState.select-drag(i + floor(self.mouse-y / root.row-height), 0);
+                            }
+                        }
+                    }
                 }
             }
             if TerminalState.shell-view: ShellScreen {

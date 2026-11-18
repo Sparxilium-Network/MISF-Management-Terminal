@@ -16,6 +16,7 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use std::{
     panic::{AssertUnwindSafe, catch_unwind},
     rc::Rc,
+    time::{Duration, Instant},
 };
 
 /// A shell's size before the panel has reported one.
@@ -24,6 +25,9 @@ const SHELL_SIZE: (u16, u16) = (100, 24);
 /// Lines kept per host; older ones are dropped in steps of [`TRIM`].
 pub const MAX_LINES: usize = 10_000;
 const TRIM: usize = 2_000;
+
+/// Presses this close together, on the same cell, count as a double or triple click.
+const MULTI_CLICK: Duration = Duration::from_millis(500);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TabState {
@@ -50,6 +54,45 @@ impl TabState {
 pub struct Line {
     pub text: String,
     pub command: bool,
+}
+
+/// A place on the shown text: a screen row and cell in a shell, a line in a run's tab.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Point {
+    pub row: usize,
+    pub col: usize,
+}
+
+/// What one, two or three clicks select: from a cell, by words, or by whole lines.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Unit {
+    Cell,
+    Word,
+    Line,
+}
+
+/// Text selected with the mouse, as a terminal does: dragging from the unit first
+/// pressed to the one under the pointer.
+#[derive(Clone, Copy, Debug)]
+pub struct Selection {
+    unit: Unit,
+    /// The first and last cell of the unit first pressed, and of the one under the pointer.
+    anchor: (Point, Point),
+    head: (Point, Point),
+    /// A single click that has not moved: selects nothing.
+    click: bool,
+    /// The tab and generation of its lines; once either changes it is gone.
+    view: (usize, u64),
+}
+
+impl Selection {
+    /// The first and last cell selected (the last included).
+    pub fn span(&self) -> (Point, Point) {
+        (
+            self.anchor.0.min(self.head.0),
+            self.anchor.1.max(self.head.1),
+        )
+    }
 }
 
 pub struct Tab {
@@ -80,6 +123,10 @@ pub struct Terminal {
     generation: u64,
     /// The tab and generation the view's lines were built from.
     synced: Option<(usize, u64)>,
+    /// Text selected with the mouse in the current tab.
+    selection: Option<Selection>,
+    /// The last press and how many came in a row, for double and triple clicks.
+    last_press: Option<(Instant, Point, u8)>,
 }
 
 impl Terminal {
@@ -205,6 +252,12 @@ impl Terminal {
         if failed {
             shell.break_down();
         }
+        // New output may scroll the text from under a selection; full-screen programs
+        // redraw in place, so theirs stays.
+        let alternate = !failed && shell.parser.screen().alternate_screen();
+        if !alternate && self.shell().is_some_and(|shell| shell.id == id) {
+            self.selection = None;
+        }
         self.screen_dirty = true;
         failed
     }
@@ -261,6 +314,157 @@ impl Terminal {
             self.current = self.current.min(last);
             self.screen_dirty = true;
         }
+    }
+
+    /// The current tab's selection, while its lines are the ones it was made on.
+    pub fn selection(&self) -> Option<Selection> {
+        let view = (self.current, self.generation);
+        self.selection.filter(|s| s.view == view && !s.click)
+    }
+
+    /// The rows the current tab shows and a shell's width in cells.
+    fn extent(&self) -> Option<(usize, usize)> {
+        if let Some(shell) = self.shell() {
+            let (rows, cols) = shell.parser.screen().size();
+            return Some((usize::from(rows.get()), usize::from(cols.get())));
+        }
+        let lines = self.tabs.get(self.current)?.lines.len();
+        (lines > 0).then_some((lines, 1))
+    }
+
+    /// The first and last cell of the unit at `point`. A run's tab selects whole lines.
+    fn unit_at(&self, unit: Unit, point: Point) -> (Point, Point) {
+        let Some(shell) = self.shell() else {
+            return (Point { col: 0, ..point }, Point { col: 0, ..point });
+        };
+        let screen = shell.parser.screen();
+        let cols = usize::from(screen.size().1.get());
+        let word_at = |col: usize| {
+            u16::try_from(point.row)
+                .ok()
+                .zip(u16::try_from(col).ok())
+                .and_then(|(row, col)| screen.cell(row, col))
+                .is_some_and(|cell| {
+                    cell.is_wide_continuation()
+                        || (cell.has_contents() && !cell.contents().trim().is_empty())
+                })
+        };
+        match unit {
+            Unit::Line => (
+                Point { col: 0, ..point },
+                Point {
+                    col: cols - 1,
+                    ..point
+                },
+            ),
+            Unit::Word if word_at(point.col) => {
+                let mut first = point.col;
+                while first > 0 && word_at(first - 1) {
+                    first -= 1;
+                }
+                let mut last = point.col;
+                while last + 1 < cols && word_at(last + 1) {
+                    last += 1;
+                }
+                (
+                    Point {
+                        col: first,
+                        ..point
+                    },
+                    Point { col: last, ..point },
+                )
+            }
+            Unit::Word | Unit::Cell => (point, point),
+        }
+    }
+
+    /// `row` and `col` as the view reported them, kept inside the shown text.
+    fn clamp(&self, row: i32, col: i32) -> Option<Point> {
+        let (rows, cols) = self.extent()?;
+        let clamp = |n: i32, size: usize| usize::try_from(n.max(0)).unwrap_or(0).min(size - 1);
+        Some(Point {
+            row: clamp(row, rows),
+            col: clamp(col, cols),
+        })
+    }
+
+    /// The left button went down on `row`, `col`: starts a selection there, by
+    /// cells, words or lines after one, two or three clicks.
+    pub fn press(&mut self, row: i32, col: i32, now: Instant) {
+        let Some(point) = self.clamp(row, col) else {
+            self.selection = None;
+            return;
+        };
+        let count = match self.last_press {
+            Some((at, last, count))
+                if last == point && now.saturating_duration_since(at) < MULTI_CLICK =>
+            {
+                count % 3 + 1
+            }
+            _ => 1,
+        };
+        self.last_press = Some((now, point, count));
+        let unit = match (count, self.shell().is_some()) {
+            (_, false) | (3, _) => Unit::Line,
+            (2, _) => Unit::Word,
+            _ => Unit::Cell,
+        };
+        let range = self.unit_at(unit, point);
+        self.selection = Some(Selection {
+            unit,
+            anchor: range,
+            head: range,
+            click: count == 1,
+            view: (self.current, self.generation),
+        });
+    }
+
+    /// The pointer moved to `row`, `col` with the button down; true when the
+    /// selection changed.
+    pub fn drag(&mut self, row: i32, col: i32) -> bool {
+        let Some(point) = self.clamp(row, col) else {
+            return false;
+        };
+        let Some(selection) = self.selection else {
+            return false;
+        };
+        let head = self.unit_at(selection.unit, point);
+        let click = selection.click && head == selection.anchor;
+        if head == selection.head && click == selection.click {
+            return false;
+        }
+        self.selection = Some(Selection {
+            head,
+            click,
+            ..selection
+        });
+        true
+    }
+
+    /// The selected text, if any.
+    pub fn selected_text(&self) -> Option<String> {
+        let (first, last) = self.selection()?.span();
+        if let Some(shell) = self.shell() {
+            let to_u16 = |n: usize| u16::try_from(n).unwrap_or(u16::MAX);
+            let text = shell.parser.screen().contents_between(
+                to_u16(first.row),
+                to_u16(first.col),
+                to_u16(last.row),
+                to_u16(last.col + 1),
+            );
+            return Some(text);
+        }
+        let lines = &self.tabs.get(self.current)?.lines;
+        let picked: Vec<&str> = (lines.iter().skip(first.row))
+            .take(last.row - first.row + 1)
+            .map(|line| line.text.as_str())
+            .collect();
+        Some(picked.join("\n"))
+    }
+
+    /// Forgets the selection, e.g. once it is copied.
+    pub fn clear_selection(&mut self) {
+        self.selection = None;
     }
 
     /// The current tab's text, for copying.
@@ -356,6 +560,7 @@ pub fn push(app: &mut App, w: &AppWindow) {
         .downcast_ref::<VecModel<TerminalLine>>()
         .expect("terminal lines are a VecModel");
     let broken = push_shell(terminal, &state, typing_allowed, t);
+    push_selection(terminal, &state);
     let current = terminal.tabs.get(terminal.current);
     let key = (terminal.current, terminal.generation);
     if terminal.synced != Some(key) {
@@ -370,6 +575,19 @@ pub fn push(app: &mut App, w: &AppWindow) {
     // and audited as usual.
     if let Some(id) = broken {
         app.worker.shells.send(id, Input::Close);
+    }
+}
+
+/// The current tab's selection, for the view to highlight.
+fn push_selection(terminal: &Terminal, state: &TerminalState) {
+    let span = terminal.selection().map(|s| s.span());
+    state.set_selection_shown(span.is_some());
+    if let Some((first, last)) = span {
+        let int = |n: usize| i32::try_from(n).unwrap_or(i32::MAX);
+        state.set_selection_first_row(int(first.row));
+        state.set_selection_first_col(int(first.col));
+        state.set_selection_last_row(int(last.row));
+        state.set_selection_last_col(int(last.col));
     }
 }
 
@@ -535,6 +753,7 @@ impl App {
         if self.busy || self.locked {
             return false;
         }
+        self.terminal.selection = None;
         let Some(shell) = self.terminal.shell_mut() else {
             return false;
         };
@@ -630,6 +849,7 @@ pub fn wire(ctx: &Ctx, w: &AppWindow) {
                 return;
             }
             app.terminal.size = Some(size);
+            app.terminal.selection = None;
             for shell in &mut app.terminal.shells {
                 shell.resize(size);
                 if shell.state == ShellState::Open {
@@ -651,8 +871,41 @@ pub fn wire(ctx: &Ctx, w: &AppWindow) {
             if let Some(shell) = app.terminal.shell_mut() {
                 shell.scroll(lines);
                 app.terminal.screen_dirty = true;
+                app.terminal.selection = None;
             }
         })
+    });
+    let c = ctx.clone();
+    state.on_select_press(move |row, col| {
+        c.update(|app| app.terminal.press(row, col, Instant::now()));
+    });
+    // Called on every pointer move while dragging: only the selection is redrawn.
+    let c = ctx.clone();
+    let main = w.as_weak();
+    state.on_select_drag(move |row, col| {
+        let Ok(mut app) = c.app.try_borrow_mut() else {
+            return;
+        };
+        if app.terminal.drag(row, col)
+            && let Some(main) = main.upgrade()
+        {
+            push_selection(&app.terminal, &main.global::<TerminalState>());
+        }
+    });
+    let c = ctx.clone();
+    let main = w.as_weak();
+    state.on_copy_selection(move || {
+        let Some(text) = c.app.borrow().terminal.selected_text() else {
+            return false;
+        };
+        if let Some(main) = main.upgrade() {
+            let clip = main.global::<Clip>();
+            clip.set_text(SharedString::from(text));
+            clip.set_serial(clip.get_serial() + 1);
+        }
+        // As terminals do, copying ends the selection.
+        c.update(|app| app.terminal.clear_selection());
+        true
     });
     let c = ctx.clone();
     let main = w.as_weak();

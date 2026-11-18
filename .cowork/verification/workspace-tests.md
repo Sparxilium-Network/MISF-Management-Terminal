@@ -1,5 +1,14 @@
 # 全工作區檢查結果
 
+## 2026-11-18（終端機滑鼠選取、Ctrl+C 複製、Ctrl+V 貼上）
+
+- shell 分頁：拖曳、雙擊、三擊以格、字、行選取；有選取時 Ctrl+C／Ctrl+Shift+C／右鍵複製，無選取時 Ctrl+C 照常送出、右鍵貼上；Ctrl+V 改為貼上。執行紀錄分頁以整行選取。
+- `cargo fmt --all -- --check`、`cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`：通過。
+- `cargo test --locked --workspace`：全部通過（22、37、72、33 項）。
+- 截圖（`MISF_OPEN_TERMINAL=shell`、`MISF_OPEN_SELECTION=1`）：跨兩行的選取反白位置正確。
+- `.\package.ps1`：成功；`dist\MISF\misf.exe` 與 `target\release\misf.exe` 雜湊相同（B23428F0…35D6）。
+- 尚未以真實滑鼠與真實主機實測：拖曳、雙擊／三擊、右鍵、複製到系統剪貼簿、執行紀錄分頁的選取。
+
 ## 2026-11-18（終端機貼上保留換行、Shift+Insert）
 
 - 隱藏的貼上 `TextInput` 改為多行，Slint 不再把多行剪貼簿內容的換行換成空白；Shift+Insert 也能貼上。
