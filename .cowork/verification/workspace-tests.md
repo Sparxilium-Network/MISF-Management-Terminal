@@ -6,7 +6,7 @@
 - `cargo fmt --all -- --check`、`cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`：通過。
 - `cargo test --locked --workspace`：全部通過（22、37、72、33 項）。
 - 截圖（`MISF_OPEN_TERMINAL=shell`、`MISF_OPEN_MENU=keys`）：扳手與選單顯示正確。
-- `.\package.ps1`：release 建置成功，但 `dist\MISF\misf.exe` 正在執行而無法覆蓋，尚未打包這一版。
+- `.\package.ps1`：第一次因 `dist\MISF\misf.exe` 正在執行而無法覆蓋；關閉後重新打包成功，與 `target\release\misf.exe` 時間 2026-11-18 20:06:36、雜湊相同（176C6F12…D7F2）。
 - 尚未在真實主機確認遠端收到這些按鍵。
 
 ## 2026-11-18（終端機滑鼠選取、Ctrl+C 複製、Ctrl+V 貼上）
