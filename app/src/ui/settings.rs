@@ -10,8 +10,8 @@ use super::{
 use crate::{
     i18n::{Language, Translator},
     preferences::{
-        AUTO_LOCK_DEFAULT, AUTO_LOCK_MAX, BatchColumn, BatchOrder, Density, HostDetail,
-        InterfaceFont, SETTINGS_DEFAULT, UnlockMethod,
+        AUTO_LOCK_DEFAULT, AUTO_LOCK_MAX, BATCH_PARALLEL_MAX, BatchColumn, BatchOrder, Density,
+        HostDetail, InterfaceFont, SETTINGS_DEFAULT, UnlockMethod,
     },
     theme::Appearance,
 };
@@ -111,6 +111,13 @@ impl App {
             }
             "batch_order" => {
                 prefs.batch_order = BatchOrder::ALL.get(index).copied().unwrap_or_default()
+            }
+            "batch_parallel" => {
+                prefs.batch_parallel = Some(
+                    u8::try_from(value)
+                        .unwrap_or(1)
+                        .clamp(1, BATCH_PARALLEL_MAX),
+                )
             }
             "language" => prefs.language = Language::from_index(value),
             _ => {}
@@ -259,6 +266,8 @@ pub fn push(app: &mut App, w: &SettingsWindow) {
         prefs.auto_lock_minutes.unwrap_or(AUTO_LOCK_DEFAULT),
     ));
     state.set_auto_lock_max(i32::from(AUTO_LOCK_MAX));
+    state.set_batch_parallel(i32::from(prefs.batch_parallel()));
+    state.set_batch_parallel_max(i32::from(BATCH_PARALLEL_MAX));
     state.set_batch_orders(texts(BatchOrder::ALL.map(|o| o.label(t))));
     state.set_batch_order(position(
         BatchOrder::ALL.iter().position(|o| *o == prefs.batch_order),

@@ -1,6 +1,6 @@
 # MISF Management Terminal 開發說明
 
-> 最後修改：2026-11-18 ｜ 基於 commit：`e48c67f`
+> 最後修改：2026-11-18 ｜ 基於 commit：`8df0b59`
 
 一般使用方式見 [README](../README.md) 與 [使用指南](user-guide.md)。本文件是開發文件的入口，給開發者與維護者，記錄建置、儲存格式、安全設計細節與測試方式。
 
@@ -81,7 +81,7 @@ Linux／macOS 可使用 `cargo run --locked -p misf`，須在對應平台建置�
 
 - 主機與憑證只存於 LUKSbox 容器 `hosts.lbx` 內的 SQLite 映像（檔頭 `user_version` 記錄結構版本，目前為 v6），不提供未加密模式；尚未建立容器時，所有主機請求都會被拒絕。舊版留下的未加密 `hosts.db` 只在 `vault_create` 時讀取並轉入，讀取時較舊版本會先在同目錄備份 `hosts.v<N>.bak.db`，再於單一交易內自動升級；較新版本、非 MISF、損壞或結構遭改動的資料庫一律拒絕開啟並保留原檔。每個版本的升級各自在 `core/src/db_upgrade/` 一個檔案。
 - 更早的 JSON 版本 `hosts.json` 同樣只在建立容器時匯入，原 JSON 保持不變。
-- 非敏感偏好存於未加密的 `ui-settings.json`（`version: 1`）：語言、外觀、主視窗大小與是否最大化、設定視窗大小，以及主機清單顯示 `host_list`（等級 `detail`、自訂 `fields`、密集度 `density`：`comfortable`／`compact`，以及「未分類」在分類間的位置 `ungrouped_at`，省略時排在最後；`ungrouped_collapsed` 為其收合狀態）、主機頁右上角顯示的項目 `host_page.stats`（`pending`／`phased`／`status`／`last_check`／`connection`；沒有這個鍵時全部顯示）、批次作業排序 `batch_order`（`sidebar`／`pending`／`recent`／`name`）、批次表格欄位 `batch_columns`（`shown` 為顯示的欄位代碼，主機欄一律顯示；`weights` 為各欄寬度比例，限制在 0.2–10；新增的 `restart` 欄在舊設定檔中預設顯示），預設解鎖方式 `unlock_method`（`password`／`security_key`；只在啟動時第一次遇到鎖定才自動開始；舊設定檔的 `windows_hello` 已不支援，讀取時視為 `password`）、自動鎖定分鐘數 `auto_lock_minutes`（1–1440；沒有這個鍵時為 15，`null` 為永不），以及底部工具視窗高度 `tool_height`。不保存憑證，主機庫鎖定時也能讀寫。
+- 非敏感偏好存於未加密的 `ui-settings.json`（`version: 1`）：語言、外觀、主視窗大小與是否最大化、設定視窗大小，以及主機清單顯示 `host_list`（等級 `detail`、自訂 `fields`、密集度 `density`：`comfortable`／`compact`，以及「未分類」在分類間的位置 `ungrouped_at`，省略時排在最後；`ungrouped_collapsed` 為其收合狀態）、主機頁右上角顯示的項目 `host_page.stats`（`pending`／`phased`／`status`／`last_check`／`connection`；沒有這個鍵時全部顯示）、批次作業排序 `batch_order`（`sidebar`／`pending`／`recent`／`name`）、批次表格欄位 `batch_columns`（`shown` 為顯示的欄位代碼，主機欄一律顯示；`weights` 為各欄寬度比例，限制在 0.2–10；新增的 `restart` 欄在舊設定檔中預設顯示），預設解鎖方式 `unlock_method`（`password`／`security_key`；只在啟動時第一次遇到鎖定才自動開始；舊設定檔的 `windows_hello` 已不支援，讀取時視為 `password`）、批次同時處理的主機數 `batch_parallel`（1–32；沒有這個鍵或為 `null` 時為 8，隨每個批次請求以 `parallel` 送出）、自動鎖定分鐘數 `auto_lock_minutes`（1–1440；沒有這個鍵時為 15，`null` 為永不），以及底部工具視窗高度 `tool_height`。不保存憑證，主機庫鎖定時也能讀寫。
 - 主機清單的分類、順序與收合狀態存於主機庫（`host_groups` 資料表與 `hosts.group_id`）。
 - 主機資料序列化內容（SQLite 映像）上限 1024 MiB（`MAX_DATABASE_BYTES`）；單一遠端命令輸出上限 32 MiB（`ssh.rs` 的 `LIMIT`），超過時中止該命令。兩者都寫在使用指南。容器建立時 metadata 區固定為 1 MiB，2026-11-14 實測可容納約 1.36 GiB 的單一檔案，反覆改寫十次仍可寫入；接近 1 GiB 時一次讀取約 2 秒、一次寫入約 5.5 秒（release，未含 SQLite 檢查）。每個請求仍會解密並檢查整個映像；批次開始時，稽核用的主機資料以同一次讀取取得，每台結果仍在完成時各自寫入。
 - 解鎖後，未加密的 `hosts.db`、`hosts.json` 與結構升級時留下的 `hosts.v<N>.bak.db` 依序逐一列出，每個檔案都要確認其完整路徑後才刪除。
@@ -102,7 +102,7 @@ Linux／macOS 可使用 `cargo run --locked -p misf`，須在對應平台建置�
 - pacman 的檢查不經 sudo：`checkupdates` 在暫存目錄同步私有資料庫，避免 `pacman -Sy` 造成的部分升級；它需要 pacman-contrib 與 fakeroot。只支援 Linux，BSD 與 YUM 已移除。
 - sudo 密碼以 SSH channel 標準輸入傳送，不放在命令列。PTY 預設開啟（類似 `ssh -t`）。
 - 只有 APT 經過實機測試；DNF 另有真實容器的自動測試（`sshtest/dnf/`，Rocky Linux／AlmaLinux 9 的 dnf 4；Fedora 的 dnf5 目前無法解析清單），pacman 與 apk 也各有真實容器的自動測試（`sshtest/pacman/`：Arch Linux；`sshtest/apk/`：Alpine 3.24 的 apk-tools 3），但都沒有在真實主機上試過。
-- 批次作業最多 8 台並行、單次最多 256 台，每台完成就儲存；某台失敗時暫停開始新主機並詢問中斷或繼續（中斷不會停下已在執行的主機）；核心拒絕混合套件管理器的批次，執行時偵測到的套件管理器若與紀錄不同，該主機失敗而不執行。
+- 批次作業同時處理的主機數由偏好設定決定（1–32，預設 8）、單次最多 256 台，每台完成就儲存；某台失敗時暫停開始新主機並詢問中斷或繼續（中斷不會停下已在執行的主機）；核心拒絕混合套件管理器的批次，執行時偵測到的套件管理器若與紀錄不同，該主機失敗而不執行。
 
 ## LUKSbox 加密儲存
 

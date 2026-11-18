@@ -1,6 +1,6 @@
 # 原始碼檔案說明
 
-> 最後修改：2026-11-18 ｜ 基於 commit：`5f16b15`
+> 最後修改：2026-11-18 ｜ 基於 commit：`8df0b59`
 
 每個 `.rs` 檔案負責什麼。整體設計與資料流見 [架構](architecture.md)，建置與慣例見 [開發說明](PROJECT-DEV.md)。新增、改名或刪除 `.rs` 檔案時，請一併更新本文件。
 
@@ -14,7 +14,7 @@ Workspace 有四個 crate：`core`（`misf-core`，核心函式庫與 JSON CLI�
 | --- | --- |
 | `core/src/lib.rs` | crate 根：宣告模組、禁止 `unsafe`（只有 Windows WebAuthn 例外）。`dispatch` 處理已解鎖後的主機請求：`list`、`save`、`delete`、`convert_storage`、金鑰與分類、`arrange`、`probe`、`trust`、`test`、`check`／`upgrade`／`dist_upgrade`、`batch`（交給 `batch.rs`）、`reboot`（交給 `reboot.rs`），並負責儲存時沿用伺服器端欄位。`dispatch_with` 另外接收批次觀察者。 |
 | `core/src/reboot.rs` | 重新開機：固定命令 `shutdown -r +1`（root 直接、一般帳號經 sudo），只限已偵測為 APT 的主機；回傳主機的回覆。 |
-| `core/src/batch.rs` | 批次作業：ID 去重與上限、拒絕混合套件管理器、最多 8 台並行；每台完成即儲存並呼叫 `Observer::finished`，失敗時呼叫 `Observer::failed` 並在得到 `Decision`（繼續／中斷）前不開始新主機；收到 `Cancel` 時中止執行中的工作，已完成的照常儲存，被中斷的升級以 `stopped_upgrade` 存為結果未知；回應含 `results`、未執行的 `skipped` 與執行中被中斷的 `cancelled`。`Unattended` 給 CLI 與測試用。 |
+| `core/src/batch.rs` | 批次作業：ID 去重與上限、拒絕混合套件管理器、依請求的 `parallel` 並行（1–`PARALLEL_MAX` 32，省略時 `PARALLEL` 8）；每台完成即儲存並呼叫 `Observer::finished`，失敗時呼叫 `Observer::failed` 並在得到 `Decision`（繼續／中斷）前不開始新主機；收到 `Cancel` 時中止執行中的工作，已完成的照常儲存，被中斷的升級以 `stopped_upgrade` 存為結果未知；回應含 `results`、未執行的 `skipped` 與執行中被中斷的 `cancelled`。`Unattended` 給 CLI 與測試用。 |
 | `core/src/cancel.rs` | `Cancel`：使用者中斷的訊號（`request`／`reset`／`requested`），`CANCELLABLE` 列出可中斷的請求。 |
 | `core/src/main.rs` | JSON CLI 執行檔：從 stdin 讀一個請求或請求陣列（上限 8 MiB，zeroize 緩衝），交給 `Session`，以 `progress`／`result`／`error` 行輸出 JSON。 |
 | `core/src/session.rs` | GUI 與 CLI 共用的入口 `Session`：每個請求先寫稽核開始紀錄、套用 debug 限制（只允許 loopback SSH、禁止真實 Passkey、備份限測試目錄），再交給 `StorageSession`，最後記錄結果。`set_cancel` 接收中斷訊號：單台的檢查、升級、dist-upgrade 與測試連線在這裡以 `select!` 中斷（`stopped` 產生回應，升級存為結果未知），批次交給 `batch::run`；中斷記為 `cancelled`。 |

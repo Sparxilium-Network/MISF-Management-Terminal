@@ -24,7 +24,7 @@ impl App {
             return;
         };
         if confirm.batch {
-            self.send(json!({"action":"batch","operation":confirm.mode.id(),"ids":confirm.ids}));
+            self.send(json!({"action":"batch","operation":confirm.mode.id(),"ids":confirm.ids,"parallel":self.preferences.batch_parallel()}));
         } else {
             self.selected = confirm.ids[0].clone();
             self.start_connection_action(confirm.mode.id());

@@ -15,8 +15,11 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-/// Hosts contacted at once by a batch; the rest wait for a free slot.
+/// Hosts contacted at once by a batch when the request names no number; the rest wait
+/// for a free slot.
 pub(crate) const PARALLEL: usize = 8;
+/// The most hosts a request may ask to contact at once.
+pub(crate) const PARALLEL_MAX: usize = 32;
 const LIMIT: usize = 256;
 
 /// What to do with the hosts not yet started after one failed.
@@ -60,6 +63,18 @@ pub(crate) fn ids(request: &Value) -> Result<Vec<String>> {
     Ok(ids)
 }
 
+/// How many hosts the request contacts at once: `parallel`, or [`PARALLEL`] without it.
+fn parallel(request: &Value) -> Result<usize> {
+    let Some(value) = request.get("parallel").filter(|value| !value.is_null()) else {
+        return Ok(PARALLEL);
+    };
+    value
+        .as_u64()
+        .and_then(|count| usize::try_from(count).ok())
+        .filter(|count| (1..=PARALLEL_MAX).contains(count))
+        .with_context(|| format!("同時處理的主機數必須是 1 到 {PARALLEL_MAX}"))
+}
+
 pub(crate) async fn run(
     request: &Value,
     store: &Store,
@@ -71,6 +86,7 @@ pub(crate) async fn run(
     let Some(mode) = request["operation"].as_str().and_then(Mode::from_id) else {
         anyhow::bail!("不支援的批次操作");
     };
+    let parallel = parallel(request)?;
     let database = store.read()?;
     let hosts = ids(request)?
         .iter()
@@ -102,7 +118,7 @@ pub(crate) async fn run(
             asking = Some(observer.failed(&id, &result));
         }
         // A pending question holds back new hosts, never the ones already running.
-        while asking.is_none() && !aborted && tasks.len() < PARALLEL {
+        while asking.is_none() && !aborted && tasks.len() < parallel {
             let Some(host) = waiting.pop_front() else {
                 break;
             };

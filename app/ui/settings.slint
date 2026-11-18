@@ -59,6 +59,8 @@ export global SettingsState {
     in property <int> auto-lock-minutes;
     in property <int> auto-lock-max;
     in property <int> batch-order;
+    in property <int> batch-parallel;
+    in property <int> batch-parallel-max;
     // The column switches, three to a line.
     in property <[[ColumnToggle]]> batch-columns;
     in property <int> language;
@@ -397,6 +399,30 @@ component PreferencesPage inherits VerticalLayout {
     }
     if SettingsState.page == 3: VerticalLayout {
         spacing: 10px;
+        SectionTitle {
+            text: T.get("batch_parallel.title");
+        }
+        FormRow {
+            label: T.get("batch_parallel.title");
+            SpinBox {
+                width: 110px;
+                minimum: 1;
+                maximum: SettingsState.batch-parallel-max;
+                value: SettingsState.batch-parallel;
+                edited(value) => { SettingsState.preference("batch_parallel", value); }
+            }
+            Text {
+                text: T.get("batch_parallel.hosts");
+                color: Theme.ink;
+                vertical-alignment: center;
+            }
+        }
+        HorizontalLayout {
+            padding-left: 16px;
+            Note {
+                text: T.get("batch_parallel.hint");
+            }
+        }
         SectionTitle {
             text: T.get("settings.section_batch_order");
         }

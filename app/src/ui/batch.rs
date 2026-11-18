@@ -193,7 +193,7 @@ impl App {
         }
         match mode {
             package_manager::Mode::Check => {
-                self.send(json!({"action":"batch","operation":"check","ids":selected}))
+                self.send(json!({"action":"batch","operation":"check","ids":selected,"parallel":self.preferences.batch_parallel()}))
             }
             mode => self.prompt_upgrade(selected, true, mode),
         }

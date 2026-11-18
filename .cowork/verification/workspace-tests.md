@@ -1,5 +1,11 @@
 # 全工作區檢查結果
 
+## 2026-11-18（批次同時處理的主機數可設定，於 `main`）
+
+- `cargo fmt --all -- --check`、`cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`：通過。
+- `cargo test --locked --workspace`：全部通過（22、37、72、33 項）。
+- 擷取版 `MISF_OPEN_SETTINGS=batch` 截圖確認「同時處理的主機數」欄位與說明；尚未對真實主機以非 8 的數字執行批次。
+
 ## 2026-11-18（側欄 + 選單取代「新增主機」與「新增分類」，於 `main`）
 
 - `cargo fmt --all -- --check`、`cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`：通過。

@@ -511,6 +511,8 @@ pub struct Preferences {
     /// The height of the tool window under the pages (terminal or history) in logical
     /// pixels, as last dragged; `None` is [`TOOL_HEIGHT`].
     pub tool_height: Option<f32>,
+    /// Hosts a batch contacts at once; `None` is [`BATCH_PARALLEL_DEFAULT`].
+    pub batch_parallel: Option<u8>,
 }
 
 /// The tool window's first height.
@@ -518,12 +520,22 @@ pub const TOOL_HEIGHT: f32 = 240.0;
 /// The tool window heights a saved file may hold.
 const TOOL_HEIGHTS: std::ops::RangeInclusive<f64> = 80.0..=4000.0;
 
+/// Hosts a batch contacts at once unless set otherwise; the core's own default.
+pub const BATCH_PARALLEL_DEFAULT: u8 = 8;
+/// The most hosts a batch may contact at once; the core rejects more.
+pub const BATCH_PARALLEL_MAX: u8 = 32;
+
 /// The longest idle time the auto-lock setting accepts, one day.
 pub const AUTO_LOCK_MAX: u16 = 24 * 60;
 /// The idle time first offered when auto-lock is turned on.
 pub const AUTO_LOCK_DEFAULT: u16 = 15;
 
 impl Preferences {
+    /// Hosts a batch contacts at once.
+    pub fn batch_parallel(&self) -> u8 {
+        self.batch_parallel.unwrap_or(BATCH_PARALLEL_DEFAULT)
+    }
+
     /// What host cards show at the chosen level.
     pub fn host_card_fields(&self) -> HostFields {
         match self.host_detail {
@@ -596,6 +608,10 @@ impl Preferences {
                     .and_then(|minutes| u16::try_from(minutes).ok())
                     .filter(|minutes| (1..=AUTO_LOCK_MAX).contains(minutes)),
             },
+            batch_parallel: value["batch_parallel"]
+                .as_u64()
+                .and_then(|count| u8::try_from(count).ok())
+                .filter(|count| (1..=BATCH_PARALLEL_MAX).contains(count)),
             tool_height: value["tool_height"]
                 .as_f64()
                 .filter(|height| TOOL_HEIGHTS.contains(height))
@@ -635,6 +651,7 @@ impl Preferences {
             "unlock_method": self.unlock_method.code(),
             "auto_lock_minutes": self.auto_lock_minutes,
             "tool_height": self.tool_height,
+            "batch_parallel": self.batch_parallel,
         });
         if let Some(window) = self.window {
             value["window"] = json!({

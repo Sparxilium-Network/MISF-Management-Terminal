@@ -1,6 +1,6 @@
 # MISF Management Terminal 架構
 
-> 最後修改：2026-11-18 ｜ 基於 commit：`83e6d98`
+> 最後修改：2026-11-18 ｜ 基於 commit：`8df0b59`
 
 > [!WARNING]
 > **本專案仍處於開發階段，請勿用於正式環境。** 相關安全保護機制尚未完善。
@@ -119,7 +119,7 @@ UI 與 CLI 都送出 `{"action": …}` JSON 給 `Session::handle`。CLI 從 stdi
 
 ## 批次作業
 
-`{"action":"batch","operation":"check"|"upgrade"|"dist_upgrade","ids":[…]}` 去除重複 ID 後讀取主機快照，最多 256 台，以 Tokio JoinSet 最多 8 台並行。任何 ID 不存在、套件管理器未偵測或彼此不同時整批拒絕。
+`{"action":"batch","operation":"check"|"upgrade"|"dist_upgrade","ids":[…],"parallel":n}` 去除重複 ID 後讀取主機快照，最多 256 台，以 Tokio JoinSet 同時執行 `parallel` 台（1–32，省略時 8；超出範圍整批拒絕）。任何 ID 不存在、套件管理器未偵測或彼此不同時整批拒絕。
 
 每台主機一完成就寫回主機庫，再透過 `batch::Observer::finished` 回報；中途關閉程式也保留已完成的主機。某台結果不是 `success`（含工作異常結束，記為失敗）時呼叫 `Observer::failed`，在得到 `Decision` 之前不開始新主機，但已在執行的主機繼續跑完並照常儲存與回報；等待期間的其他失敗排隊依序詢問。`Abort` 後不再開始任何主機，已在執行的不會中途停止（可能正在安裝套件），回應的 `skipped` 列出未執行的主機 ID，稽核日誌記為 `cancelled`。某台結果無法儲存時同樣停止開始新主機，等執行中的跑完後回傳錯誤。
 
