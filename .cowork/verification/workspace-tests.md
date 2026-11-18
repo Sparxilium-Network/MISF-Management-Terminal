@@ -1,5 +1,11 @@
 # 全工作區檢查結果
 
+## 2026-11-18（側欄 + 選單取代「新增主機」與「新增分類」，於 `main`）
+
+- `cargo fmt --all -- --check`、`cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`：通過。
+- `cargo test --locked --workspace`：全部通過（22、37、72、33 項）。
+- 擷取版 `MISF_OPEN_MENU=add` 截圖確認 + 位於「主機清單」右側、底部大按鈕已移除；尚未用滑鼠實際點選。
+
 ## 2026-11-18（移除 Windows Hello 與側欄底部文字，於 `main`）
 
 - Windows WebAuthn 固定 cross-platform attachment；移除 Hello 選項、`windows_hello` 預設解鎖方式、請求的 `hello` 欄位、`passkey_method` 稽核動作，以及 `app.local_mode`、`passkey.security_key` 字串。

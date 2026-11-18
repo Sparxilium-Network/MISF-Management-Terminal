@@ -397,6 +397,29 @@ fn capture(ctx: &Ctx) {
                     host.set_menu_x(676.0);
                     host.set_menu_y(227.0);
                 }
+                if std::env::var("MISF_OPEN_MENU").as_deref() == Ok("add")
+                    && let Some(main) = c.main.upgrade()
+                {
+                    let t = c.t();
+                    let lines: Vec<MenuLine> = [
+                        (t.get("host.add"), "add-host"),
+                        (t.get("group.add_title"), "add-group"),
+                    ]
+                    .into_iter()
+                    .map(|(title, action)| MenuLine {
+                        title: title.into(),
+                        enabled: true,
+                        action: action.into(),
+                        arg: "".into(),
+                    })
+                    .collect();
+                    // Under the sidebar's + button in the 1280×820 capture.
+                    main.global::<PopMenu>().invoke_open(
+                        ModelRc::new(VecModel::from(lines)),
+                        274.0,
+                        254.0,
+                    );
+                }
                 if std::env::var("MISF_OPEN_MENU").as_deref() == Ok("keys")
                     && let Some(main) = c.main.upgrade()
                 {

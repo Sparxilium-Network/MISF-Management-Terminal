@@ -360,6 +360,10 @@ export component AppWindow inherits Window {
             SidebarState.rename-group(line.arg);
         } else if (line.action == "delete-group") {
             SidebarState.delete-group(line.arg);
+        } else if (line.action == "add-host") {
+            SidebarState.add-host();
+        } else if (line.action == "add-group") {
+            SidebarState.add-group();
         } else if (line.action == "shell-send") {
             TerminalState.shell-send(line.arg);
         }
