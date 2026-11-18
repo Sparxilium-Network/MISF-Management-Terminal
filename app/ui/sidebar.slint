@@ -63,28 +63,36 @@ component RowArea inherits TouchArea {
     in property <length> view-height;
     in property <length> view-width;
     property <bool> dragging;
+    // Only the left button drags: `moved` also fires while another button is held, and
+    // that button's release would never end the drag.
+    property <bool> left-down;
     callback tapped();
     mouse-cursor: pointer;
     pointer-event(event) => {
-        if (event.button != PointerEventButton.left) {
+        if (event.button != PointerEventButton.left && event.kind != PointerEventKind.cancel) {
             return;
         }
         if (event.kind == PointerEventKind.down) {
             self.dragging = false;
+            self.left-down = true;
         } else if (event.kind == PointerEventKind.up) {
+            self.left-down = false;
             if (self.dragging) {
                 self.dragging = false;
                 SidebarState.drag-end();
             } else if (self.has-hover) {
                 root.tapped();
             }
-        } else if (event.kind == PointerEventKind.cancel && self.dragging) {
-            self.dragging = false;
-            SidebarState.drag-cancel();
+        } else if (event.kind == PointerEventKind.cancel) {
+            self.left-down = false;
+            if (self.dragging) {
+                self.dragging = false;
+                SidebarState.drag-cancel();
+            }
         }
     }
     moved => {
-        if (SidebarState.searching) {
+        if (SidebarState.searching || !self.left-down) {
             return;
         }
         if (!self.dragging && abs(self.mouse-y - self.pressed-y) + abs(self.mouse-x - self.pressed-x) > 5px) {

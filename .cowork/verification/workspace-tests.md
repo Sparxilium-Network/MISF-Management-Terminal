@@ -1,5 +1,12 @@
 # 全工作區檢查結果
 
+## 2026-11-19（側欄右鍵拖曳卡住修正，於 `main`）
+
+- 原因：`RowArea` 的 `moved` 在按住右鍵時也會觸發並開始拖曳，但右鍵放開被忽略，拖曳標籤一直留著。改為只有左鍵按下時才拖曳，取消事件不論按鍵都會結束拖曳。
+- `cargo fmt --all -- --check`、`cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`：通過。
+- `cargo test --locked --workspace`：全部通過（22、37、72、33 項）。
+- 尚未用滑鼠實際右鍵拖動確認。
+
 ## 2026-11-18（批次同時處理的主機數可設定，於 `main`）
 
 - `cargo fmt --all -- --check`、`cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`：通過。
