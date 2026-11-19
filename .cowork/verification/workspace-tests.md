@@ -1,5 +1,13 @@
 # 全工作區檢查結果
 
+## 2026-11-20（russh 0.65.2，Dependabot PR #9，於 `main`）
+
+- 在 `main` 手動套用 PR #9 的變更：只有 `Cargo.lock` 的 russh 0.65.1 → 0.65.2、ssh-key 0.7.0-rc.11 → 0.7.0-rc.12、ctutils 0.4.7 → 0.4.8（`core` 的版本需求 `0.65.0` 已涵蓋）；`cargo metadata --locked` 通過；重跑 `./licenses.ps1`。
+- `cargo fmt --all -- --check`、`cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`：通過。
+- `cargo deny --locked check`：`advisories ok, bans ok, licenses ok, sources ok`。
+- `cargo test --locked --workspace`：全部通過（22、37、72、33 項），含以模擬 SSH 伺服器跑的連線、sudo、升級與互動 shell 流程。
+- 尚未對真實主機連線測試；Docker 測試未執行。
+
 ## 2026-11-20（APT 鎖檢查、沒輸出提醒與套件鎖診斷，於 `main`）
 
 - 來源：argus-game／argus-data 實際案例。`ubuntu-drivers-common` 的 postinst 等 `gpu-manager.service` 重啟，gpu-manager 卡在 D 狀態（`drm_modeset_lock`）；MISF 30 分鐘逾時切斷連線後，遠端外層 sudo 父程序變成 1，apt-get 與 needrestart 卡在寫入沒人讀的 PTY（`n_tty_write`），APT 鎖一直不放；最後靠 `systemctl cancel` 與 `pkill -x apt-get` 解除。
