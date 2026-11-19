@@ -1,5 +1,14 @@
 # 全工作區檢查結果
 
+## 2026-11-20（APT 快照標記只認整行，於 `main`）
+
+- 問題：快照命令自己的 `sh -c` 命令列（含三個標記）出現在 `ps` 清單裡，`split_once` 誤把它當成區段分隔，`dpkg --audit` 區段變成非空，所有 APT 主機都被判為「有套件只設定到一半」而拒絕檢查／升級。
+- 修正：`apt_lock::sections` 改為只在「整行就是標記」的位置切開。
+- 以使用者紀錄檔 `misf-log-20261120-071105.txt` 中四台主機（muti-misc ×2、agent-codex-vm、muti-misc-HeavyLoad）的快照重跑 `diagnose`：皆為 `busy=false`、無佔用者、audit 為空（暫時範例程式，跑完已刪除）。
+- `cargo fmt --all -- --check`、`cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`：通過。
+- `cargo test --locked --workspace`：全部通過（22、37、72、33 項）。
+- 尚未對真實主機重新連線測試。
+
 ## 2026-11-20（russh 0.65.2，Dependabot PR #9，於 `main`）
 
 - 在 `main` 手動套用 PR #9 的變更：只有 `Cargo.lock` 的 russh 0.65.1 → 0.65.2、ssh-key 0.7.0-rc.11 → 0.7.0-rc.12、ctutils 0.4.7 → 0.4.8（`core` 的版本需求 `0.65.0` 已涵蓋）；`cargo metadata --locked` 通過；重跑 `./licenses.ps1`。

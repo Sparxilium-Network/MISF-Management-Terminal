@@ -124,11 +124,27 @@ impl Diagnosis {
     }
 }
 
+/// Splits `text` at the first line that is exactly `marker`. The snapshot's own `sh -c`
+/// command line also contains every marker and shows up in the `ps` list, so a marker
+/// counts only on a line of its own.
+fn split_at_line<'a>(text: &'a str, marker: &str) -> Option<(&'a str, &'a str)> {
+    text.match_indices(marker).find_map(|(at, _)| {
+        let before = &text[..at];
+        let after = &text[at + marker.len()..];
+        let line_start = before.is_empty() || before.ends_with('\n');
+        let rest = after
+            .strip_prefix("\r\n")
+            .or_else(|| after.strip_prefix('\n'))
+            .or_else(|| after.is_empty().then_some(after))?;
+        line_start.then_some((before, rest))
+    })
+}
+
 /// Splits [`SNAPSHOT`]'s output into its three parts.
 fn sections(output: &str) -> Option<(&str, &str, &str)> {
-    let (_, rest) = output.split_once(PS)?;
-    let (ps, rest) = rest.split_once(JOBS)?;
-    let (jobs, audit) = rest.split_once(AUDIT)?;
+    let (_, rest) = split_at_line(output, PS)?;
+    let (ps, rest) = split_at_line(rest, JOBS)?;
+    let (jobs, audit) = split_at_line(rest, AUDIT)?;
     Some((ps, jobs, audit))
 }
 
