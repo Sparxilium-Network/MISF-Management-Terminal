@@ -6,6 +6,7 @@
 - `cargo fmt --all -- --check`、`cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`：通過。
 - `cargo test --locked --workspace`：全部通過（22、37、72、33 項）。`core/tests/workflow.rs` 的模擬伺服器新增對 `apt_lock::SNAPSHOT` 的閒置回應，dist-upgrade 測試的預期命令序列加入 `SNAPSHOT`；i18n 測試的來源清單加入新檔案。新邏輯本身沒有新增單元測試（測試由他人撰寫）。
 - 擷取版 `MISF_OPEN_APT_LOCK=1`／`confirm` 以實際案例的程序樹截圖：診斷列出取消工作 181113 與重新開機，dpkg 仍在執行時不提供結束程序；確認步驟顯示完整命令與勾選。
+- `.\package.ps1`：第一次因 `dist\MISF\misf.exe` 正在執行而無法覆蓋；關閉後重新打包成功，與 `target\release\misf.exe` 時間 2026-11-20 01:54:15、雜湊相同（87BD7837…8F46）。
 - 尚未對真實主機執行；Docker 測試（`misf-sshtest`，需 Docker）未執行。
 
 ## 2026-11-19（rand 0.10.4，Dependabot PR #8，於 `main`）
