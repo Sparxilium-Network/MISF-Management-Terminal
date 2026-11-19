@@ -1,5 +1,12 @@
 # 全工作區檢查結果
 
+## 2026-11-19（rand 0.10.4，Dependabot PR #8，於 `main`）
+
+- 在 `main` 手動套用 PR #8 的變更：只有 `Cargo.lock` 的 rand 0.10.3 → 0.10.4（russh 與其 num-bigint、pageant 在執行時使用，`core` 測試也直接使用；`core` 的版本需求 `0.10.3` 已涵蓋）；`cargo metadata --locked` 通過；重跑 `./licenses.ps1`。
+- `cargo fmt --all -- --check`、`cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`：通過。
+- `cargo deny --locked check`：`advisories ok, bans ok, licenses ok, sources ok`。
+- `cargo test --locked --workspace`：全部通過（22、37、72、33 項）。
+
 ## 2026-11-19（側欄右鍵拖曳卡住修正，於 `main`）
 
 - 原因：`RowArea` 的 `moved` 在按住右鍵時也會觸發並開始拖曳，但右鍵放開被忽略，拖曳標籤一直留著。改為只有左鍵按下時才拖曳，取消事件不論按鍵都會結束拖曳。
