@@ -151,6 +151,7 @@ mod tests {
         }
         for source in [
             include_str!("ui/app.rs"),
+            include_str!("ui/apt_lock.rs"),
             include_str!("ui/batch.rs"),
             include_str!("ui/dialogs.rs"),
             include_str!("ui/editor.rs"),
@@ -171,6 +172,7 @@ mod tests {
             include_str!("../ui/result_panel.slint"),
             include_str!("../ui/batch_page.slint"),
             include_str!("../ui/settings.slint"),
+            include_str!("../ui/dialogs/apt_lock.slint"),
             include_str!("../ui/dialogs/editor.slint"),
             include_str!("../ui/dialogs/keys.slint"),
             include_str!("../ui/dialogs/vault.slint"),

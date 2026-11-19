@@ -1,6 +1,6 @@
 # MISF Management Terminal 架構
 
-> 最後修改：2026-11-18 ｜ 基於 commit：`8df0b59`
+> 最後修改：2026-11-20 ｜ 基於 commit：`454b72b`
 
 > [!WARNING]
 > **本專案仍處於開發階段，請勿用於正式環境。** 相關安全保護機制尚未完善。
@@ -96,7 +96,7 @@ UI 與 CLI 都送出 `{"action": …}` JSON 給 `Session::handle`。CLI 從 stdi
 | pacman | `checkupdates`（pacman-contrib，需 fakeroot）在 `/tmp/checkup-db-<UID>` 同步私有資料庫，再 `checkupdates --nosync`；退出碼 0／2 為成功；不經 sudo，不動系統資料庫 | `pacman -Syu --noconfirm --noprogressbar` | 未測試 |
 | apk | `apk update`，再 `apk list --upgradable`（不經 sudo） | `apk upgrade --no-progress` | 未測試 |
 
-- 索引更新失敗不讀套件清單，也不開始升級。APT 輸出含 `E:`、DNF 含 `Error:`／`Failed to download metadata`／`Ignoring repositories`、pacman 含 `==> ERROR:`（失敗時另提示需要 pacman-contrib 與 fakeroot）、apk 含 `ERROR:` 或打不開／抓不到／略過索引的 `WARNING:`（apk 此時仍以 0 結束），或非零退出碼，即為失敗。升級輸出中各管理器自己的錯誤行（APT `E:`、DNF `Error:`、pacman `error:`、apk `ERROR:`）即使退出碼為 0 也視為失敗，並提示遠端可能已部分升級。索引更新上限 5 分鐘，升級上限 30 分鐘。
+- 索引更新失敗不讀套件清單，也不開始升級。APT 輸出含 `E:`、DNF 含 `Error:`／`Failed to download metadata`／`Ignoring repositories`、pacman 含 `==> ERROR:`（失敗時另提示需要 pacman-contrib 與 fakeroot）、apk 含 `ERROR:` 或打不開／抓不到／略過索引的 `WARNING:`（apk 此時仍以 0 結束），或非零退出碼，即為失敗。升級輸出中各管理器自己的錯誤行（APT `E:`、DNF `Error:`、pacman `error:`、apk `ERROR:`）即使退出碼為 0 也視為失敗，並提示遠端可能已部分升級。索引更新上限 5 分鐘；升級沒有時間上限，10 分鐘沒有新輸出時提醒並（APT）唯讀讀取主機狀況。APT 執行前以 `apt_lock::SNAPSHOT` 確認沒有 apt／dpkg 在執行、也沒有設定到一半的套件。
 - 升級前後各讀一次待更新清單：`CheckResult.upgraded` 為升級後消失的套件，`packages` 為剩餘套件，`operation` 為 `check`／`upgrade`／`dist_upgrade`。APT 的 phasing 延後套件在載入時從保存的輸出解析（升級或檢查的模擬皆可），kept back 套件與 dist-upgrade 計畫只從升級類結果解析，皆不另存欄位。
 - 輸出統一換行、移除 ANSI 與終端控制字串後保存，UI 以可選取的等寬文字顯示。每個步驟以 `transcript::heading` 產生的星號框標題分段（更新套件索引、待更新套件、APT upgrade、dist-upgrade 模擬、重新啟動狀態），框寬依標題的顯示寬度（中文算兩格）。每台主機只保存最近一次檢查或升級。
 

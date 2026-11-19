@@ -17,9 +17,11 @@ export global HostState {
     in property <HintData> upgrade-hint;
     in property <HintData> dist-hint;
     in property <HintData> reboot-hint;
+    in property <HintData> diagnose-hint;
     in property <bool> upgrade-enabled;
     in property <bool> dist-enabled;
     in property <bool> reboot-enabled;
+    in property <bool> diagnose-enabled;
     in property <string> fingerprint;
     in property <string> pending;
     in property <string> status;
@@ -49,7 +51,7 @@ export global HostState {
     callback add-first();
     callback advanced-toggled(open: bool);
     callback more-toggled(open: bool);
-    // 0 upgrade, 1 dist-upgrade, 2 reboot.
+    // 0 upgrade, 1 dist-upgrade, 2 reboot, 3 APT lock diagnosis.
     callback advanced(item: int);
 }
 
@@ -143,6 +145,17 @@ export component AdvancedMenu inherits MenuFrame {
             enabled: HostState.reboot-enabled;
             horizontal-stretch: 1;
             clicked => { HostState.advanced(2); }
+        }
+    }
+    HintArea {
+        hint: HostState.diagnose-hint;
+        active: HostState.diagnose-enabled;
+        disabled-text: T.get("reboot.needs_apt");
+        TextButton {
+            text: T.get("apt_lock.button");
+            enabled: HostState.diagnose-enabled;
+            horizontal-stretch: 1;
+            clicked => { HostState.advanced(3); }
         }
     }
 }

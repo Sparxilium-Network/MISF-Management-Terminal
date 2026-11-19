@@ -1,6 +1,6 @@
 # 原始碼檔案說明
 
-> 最後修改：2026-11-18 ｜ 基於 commit：`8df0b59`
+> 最後修改：2026-11-20 ｜ 基於 commit：`454b72b`
 
 每個 `.rs` 檔案負責什麼。整體設計與資料流見 [架構](architecture.md)，建置與慣例見 [開發說明](PROJECT-DEV.md)。新增、改名或刪除 `.rs` 檔案時，請一併更新本文件。
 
@@ -13,6 +13,7 @@ Workspace 有四個 crate：`core`（`misf-core`，核心函式庫與 JSON CLI�
 | 檔案 | 作用 |
 | --- | --- |
 | `core/src/lib.rs` | crate 根：宣告模組、禁止 `unsafe`（只有 Windows WebAuthn 例外）。`dispatch` 處理已解鎖後的主機請求：`list`、`save`、`delete`、`convert_storage`、金鑰與分類、`arrange`、`probe`、`trust`、`test`、`check`／`upgrade`／`dist_upgrade`、`batch`（交給 `batch.rs`）、`reboot`（交給 `reboot.rs`），並負責儲存時沿用伺服器端欄位。`dispatch_with` 另外接收批次觀察者。 |
+| `core/src/apt_lock.rs` | APT 鎖：`SNAPSHOT`（唯讀列出程序、`systemctl list-jobs`、`dpkg --audit`）、`diagnose` 把 apt／dpkg 程序樹分成 MISF 留下（外層 sudo 的父程序為 1）、MISF 執行中、系統自動更新與其他，找出套件腳本在等的 systemd 工作與 D 狀態程序，產生 `Fix`（取消工作、結束 dpkg 已結束的 MISF 遺留程序、`dpkg --configure -a`、重新開機）；`busy_message` 給檢查／升級前的拒絕訊息；`diagnose_host`／`fix_host` 處理 `apt_diagnose`／`apt_fix`，後者執行前重新診斷並只執行仍存在的同一個處理方式。 |
 | `core/src/reboot.rs` | 重新開機：固定命令 `shutdown -r +1`（root 直接、一般帳號經 sudo），只限已偵測為 APT 的主機；回傳主機的回覆。 |
 | `core/src/batch.rs` | 批次作業：ID 去重與上限、拒絕混合套件管理器、依請求的 `parallel` 並行（1–`PARALLEL_MAX` 32，省略時 `PARALLEL` 8）；每台完成即儲存並呼叫 `Observer::finished`，失敗時呼叫 `Observer::failed` 並在得到 `Decision`（繼續／中斷）前不開始新主機；收到 `Cancel` 時中止執行中的工作，已完成的照常儲存，被中斷的升級以 `stopped_upgrade` 存為結果未知；回應含 `results`、未執行的 `skipped` 與執行中被中斷的 `cancelled`。`Unattended` 給 CLI 與測試用。 |
 | `core/src/cancel.rs` | `Cancel`：使用者中斷的訊號（`request`／`reset`／`requested`），`CANCELLABLE` 列出可中斷的請求。 |
@@ -112,6 +113,7 @@ Workspace 有四個 crate：`core`（`misf-core`，核心函式庫與 JSON CLI�
 | `app/src/ui/batch.rs` | 批次作業：套件管理器選擇、可選主機、表格排序與分組標題、欄寬拖曳、雙擊或右鍵開主機頁、右鍵在套件明細工具視窗（`Tool::Packages`）或視窗中顯示套件，視窗內有上一台／下一台。 |
 | `app/src/ui/editor.rs` | 主機編輯對話框與 SSH 金鑰管理對話框；從檔案匯入私鑰在借用狀態之外開啟原生檔案視窗。 |
 | `app/src/ui/vault.rs` | LUKSbox 狀態、解鎖／建立／金鑰槽管理對話框與密碼檢查、預設解鎖方式、明文副本與結構升級詢問、加密備份。 |
+| `app/src/ui/apt_lock.rs` | 套件鎖診斷視窗（`AptLockState`）：送出 `apt_diagnose`、顯示狀況與處理方式、確認步驟後送出 `apt_fix`，重新開機改開既有確認。 |
 | `app/src/ui/dialogs.rs` | 升級確認、「需要 dist-upgrade」報告、重新開機兩次確認、批次失敗詢問、主機指紋、刪除主機、分類名稱與錯誤對話框。 |
 | `app/src/ui/settings.rs` | 獨立的設定視窗：分類樹（`SettingsPage::PREFERENCES` 為「偏好設定」底下的外觀與主機清單／安全性／批次作業）、各偏好的套用與儲存、LOG 頁、關於頁（含主機庫的加密方式與檔案位置）。 |
 | `app/src/ui/remote_shell.rs` | 互動 shell 分頁的終端機模擬：每個 `ShellTab` 一個 `vt100::Parser`（5000 行歷史）；`rows` 把畫面轉成每列的樣式片段（同樣式相連、寬字元單獨一段以對齊兩格、純空白不畫）；`key_bytes` 把 Slint 按鍵轉成終端機位元組（方向鍵依 application cursor 模式、F1–F12、Ctrl 組合、Alt 前綴）；`paste_bytes` 處理換行與 bracketed paste。 |

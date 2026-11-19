@@ -333,6 +333,8 @@ pub struct App {
     pub upgrade_confirm: Option<UpgradeConfirm>,
     pub batch_failure: Option<BatchFailure>,
     pub reboot_confirm: Option<RebootConfirm>,
+    /// The APT lock diagnosis, open or being read.
+    pub apt_lock: Option<super::apt_lock::AptLock>,
     /// Hosts that need a dist-upgrade, reported once the operation that found them ends.
     pub kept_back_report: Vec<KeptBack>,
     /// This run's full log; memory only, gone when the app closes.
@@ -423,6 +425,7 @@ impl App {
             upgrade_confirm: None,
             batch_failure: None,
             reboot_confirm: None,
+            apt_lock: None,
             kept_back_report: Vec::new(),
             session_log: SessionLog::new(),
             logged_error: None,
@@ -736,6 +739,15 @@ impl App {
                     text,
                     command,
                 } => self.terminal.write(&host, &text, command),
+                Event::Notice { host, text } => {
+                    self.terminal.write(&host, &text, false);
+                    let first = text.lines().next().unwrap_or_default().to_owned();
+                    self.session_log.add("WARN", &first, "");
+                    let name = self.host_name(&host);
+                    self.set_status(
+                        t.format("status.host_line", &[("name", name), ("text", first)]),
+                    );
+                }
                 Event::ShellOutput { shell, data } => {
                     budget = budget.saturating_sub(data.len() / SHELL_BYTES_PER_EVENT);
                     // Output keeps the vault from locking under a running program.
@@ -1054,6 +1066,7 @@ impl App {
                     ],
                 ));
             }
+            "apt_diagnose" | "apt_fix" => self.received_apt(action, data),
             "reboot" => {
                 let name = self.current().map(|h| h.name.clone()).unwrap_or_default();
                 self.set_status(t.format("reboot.scheduled", &[("name", name)]));

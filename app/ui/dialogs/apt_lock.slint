@@ -1,0 +1,172 @@
+// The APT lock diagnosis: who holds apt/dpkg on a host, why it may be stuck, and the fixes
+// MISF offers. Each fix shows its command, effect and risk, and runs only after a second
+// step with an acknowledgement.
+import { Button, CheckBox, ScrollView } from "std-widgets.slint";
+import { Theme, T } from "../theme.slint";
+import { Modal, Heading, ColorButton, Notice, Body, Mono } from "../widgets.slint";
+import { Shell } from "../shell.slint";
+
+export struct AptFixView {
+    title: string,
+    why: string,
+    effect: string,
+    risk: string,
+    command: string,
+    // Opens the reboot confirmation instead of running a command here.
+    reboot: bool,
+}
+
+export global AptLockState {
+    in property <bool> shown;
+    in property <string> title;
+    // What the diagnosis found, one finding per line; empty when APT is free.
+    in property <string> findings;
+    in property <string> note;
+    in property <[AptFixView]> fixes;
+    // The fix being confirmed, or -1 for the list.
+    in property <int> step: -1;
+    in property <string> confirm-question;
+    in-out property <bool> acknowledged;
+    callback choose(index: int);
+    callback confirm();
+    callback back();
+    callback refresh();
+    callback cancel();
+}
+
+component FixCard inherits Rectangle {
+    in property <AptFixView> fix;
+    in property <int> index;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: Theme.border;
+    background: Theme.surface;
+    VerticalLayout {
+        padding: 10px;
+        spacing: 6px;
+        Text {
+            text: root.fix.title;
+            font-weight: 700;
+            color: Theme.ink;
+            wrap: word-wrap;
+        }
+        Body {
+            text: root.fix.why;
+        }
+        Body {
+            text: root.fix.effect;
+        }
+        Notice {
+            text: root.fix.risk;
+        }
+        if root.fix.command != "": Mono {
+            text: root.fix.command;
+            font-size: 11px;
+        }
+        HorizontalLayout {
+            alignment: start;
+            ColorButton {
+                text: root.fix.reboot ? T.get("apt_lock.open_reboot") : T.get("apt_lock.run");
+                fill: Theme.red;
+                enabled: !Shell.busy;
+                clicked => { AptLockState.choose(root.index); }
+            }
+        }
+    }
+}
+
+export component AptLockDialog inherits Modal {
+    panel-width: 640px;
+    dismissed => {
+        if (!Shell.busy) {
+            AptLockState.cancel();
+        }
+    }
+    Heading {
+        text: AptLockState.title;
+    }
+    if AptLockState.step < 0: VerticalLayout {
+        spacing: 8px;
+        if AptLockState.note != "": Notice {
+            text: AptLockState.note;
+        }
+        Text {
+            text: T.get("apt_lock.findings");
+            font-weight: 700;
+            color: Theme.ink;
+        }
+        Mono {
+            text: AptLockState.findings != "" ? AptLockState.findings : T.get("apt_lock.nothing");
+            font-size: 11px;
+        }
+        if AptLockState.fixes.length > 0: Text {
+            text: T.get("apt_lock.fixes");
+            font-weight: 700;
+            color: Theme.ink;
+        }
+        if AptLockState.fixes.length > 0: ScrollView {
+            min-height: min(360px, cards.preferred-height);
+            preferred-height: min(360px, cards.preferred-height);
+            content-width: self.visible-width;
+            cards := VerticalLayout {
+                width: parent.visible-width - 14px;
+                spacing: 8px;
+                for fix[index] in AptLockState.fixes: FixCard {
+                    fix: fix;
+                    index: index;
+                }
+            }
+        }
+        if AptLockState.fixes.length == 0 && AptLockState.findings != "": Body {
+            text: T.get("apt_lock.wait");
+        }
+    }
+    if AptLockState.step >= 0: VerticalLayout {
+        spacing: 8px;
+        Body {
+            text: AptLockState.confirm-question;
+        }
+        Mono {
+            text: AptLockState.fixes[AptLockState.step].command;
+            font-size: 11px;
+        }
+        Body {
+            text: AptLockState.fixes[AptLockState.step].effect;
+        }
+        Notice {
+            text: AptLockState.fixes[AptLockState.step].risk;
+        }
+        Body {
+            text: T.get("apt_lock.recheck");
+        }
+        CheckBox {
+            text: T.get("apt_lock.ack");
+            checked <=> AptLockState.acknowledged;
+        }
+    }
+    HorizontalLayout {
+        spacing: 10px;
+        alignment: start;
+        if AptLockState.step >= 0: ColorButton {
+            text: T.get("apt_lock.confirm");
+            fill: Theme.red;
+            enabled: !Shell.busy && AptLockState.acknowledged;
+            clicked => { AptLockState.confirm(); }
+        }
+        if AptLockState.step >= 0: Button {
+            text: T.get("reboot.back");
+            enabled: !Shell.busy;
+            clicked => { AptLockState.back(); }
+        }
+        if AptLockState.step < 0: Button {
+            text: T.get("apt_lock.refresh");
+            enabled: !Shell.busy;
+            clicked => { AptLockState.refresh(); }
+        }
+        Button {
+            text: T.get("common.close");
+            enabled: !Shell.busy;
+            clicked => { AptLockState.cancel(); }
+        }
+    }
+}

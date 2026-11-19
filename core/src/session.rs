@@ -104,6 +104,8 @@ impl Session {
                     | "batch"
                     | "reboot"
                     | "shell_open"
+                    | "apt_diagnose"
+                    | "apt_fix"
             );
             let blocked = (matches!(name.as_str(), "vault_add_passkey" | "vault_unlock_passkey")
                 && !self.allow_passkey)

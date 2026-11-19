@@ -101,6 +101,8 @@ impl App {
             "probe" => t.format("log.title_probe", &[("name", name)]),
             "trust" => t.format("log.title_trust", &[("name", name)]),
             "reboot" => t.format("log.title_reboot", &[("name", name)]),
+            "apt_diagnose" => t.format("log.title_apt_diagnose", &[("name", name)]),
+            "apt_fix" => t.format("log.title_apt_fix", &[("name", name)]),
             _ => return,
         };
         self.session_log.banner(&title);

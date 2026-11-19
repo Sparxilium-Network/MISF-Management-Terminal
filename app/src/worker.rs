@@ -29,6 +29,12 @@ pub enum Event {
         text: String,
         command: bool,
     },
+    /// A warning from MISF about a host's running command, e.g. that it has been quiet
+    /// for a long time; shown in that host's terminal tab and on the status line.
+    Notice {
+        host: String,
+        text: String,
+    },
     /// Raw output from an interactive shell, for its terminal emulator. Shares the
     /// terminal's wake-up.
     ShellOutput {
@@ -177,6 +183,13 @@ impl Console for Screen {
     }
     fn output(&self, host: &str, text: &str) {
         self.send(host, text, false);
+    }
+    fn notice(&self, host: &str, text: &str) {
+        let _ = self.events.send(Event::Notice {
+            host: host.into(),
+            text: text.into(),
+        });
+        (self.wake)();
     }
 }
 

@@ -14,7 +14,12 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
-use tokio::time::timeout;
+use tokio::time::{Instant, sleep_until, timeout};
+
+/// A command quiet this long gets a warning, again each time as long again.
+const QUIET: Duration = Duration::from_secs(10 * 60);
+/// How long the read-only look at a quiet APT command may take.
+const LOOK_SECONDS: u64 = 30;
 
 /// Output kept from one remote command; more aborts the command.
 const LIMIT: usize = 32 * 1024 * 1024;
@@ -218,7 +223,9 @@ pub(crate) async fn disconnect(session: &Session) {
 }
 
 /// Runs one command; answers a sudo prompt once with `secret`. Returns exit code and output.
-/// `echo` shows the command and its output as they arrive.
+/// `echo` shows the command and its output as they arrive. `seconds` limits the whole
+/// command; 0 sets no limit. Either way a command quiet for [`QUIET`] gets a warning
+/// through `echo`, and an APT one a read-only look at what holds it up.
 pub(crate) async fn execute(
     session: &Session,
     command: &str,
@@ -229,7 +236,7 @@ pub(crate) async fn execute(
 ) -> Result<(u32, String)> {
     echo.command(command);
     let mut lines = echo.lines();
-    timeout(Duration::from_secs(seconds), async {
+    let body = async {
         let mut channel = session.channel_open_session().await?;
         if pty {
             channel
@@ -255,9 +262,25 @@ pub(crate) async fn execute(
         // sudo prompts seen so far, counted over new output only.
         let mut prompts = 0;
         let mut searched = 0;
-        while let Some(msg) = channel.wait().await {
+        let mut heard = Instant::now();
+        let mut warnings: u32 = 0;
+        loop {
+            let msg = tokio::select! {
+                msg = channel.wait() => msg,
+                () = sleep_until(heard + QUIET * (warnings + 1)) => {
+                    warnings += 1;
+                    warn_quiet(session, command, &output, QUIET * warnings, warnings == 1, echo)
+                        .await;
+                    continue;
+                }
+            };
+            let Some(msg) = msg else {
+                break;
+            };
             match msg {
                 ChannelMsg::Data { data } | ChannelMsg::ExtendedData { data, .. } => {
+                    heard = Instant::now();
+                    warnings = 0;
                     ensure!(
                         output.len() + data.len() <= LIMIT,
                         "遠端輸出超過 32 MiB 限制"
@@ -291,9 +314,80 @@ pub(crate) async fn execute(
             &String::from_utf8_lossy(&output).replace(PROMPT, ""),
         );
         Ok((exit.context("SSH 連線結束但沒有命令退出碼")?, output))
+    };
+    if seconds == 0 {
+        return body.await;
+    }
+    timeout(Duration::from_secs(seconds), body)
+        .await
+        .context("遠端命令逾時；請確認目標主機上的套件管理器狀態")?
+}
+
+/// Warns that a command has been quiet for `quiet`, with its last line. The first time,
+/// an APT command also gets a read-only look at what holds it up, on another channel of
+/// the same connection; the command itself keeps running.
+async fn warn_quiet(
+    session: &Session,
+    command: &str,
+    output: &[u8],
+    quiet: Duration,
+    look: bool,
+    echo: &Echo,
+) {
+    let minutes = quiet.as_secs() / 60;
+    let tail = &output[output.len().saturating_sub(4096)..];
+    let text =
+        crate::transcript::readable_output(&String::from_utf8_lossy(tail).replace(PROMPT, ""));
+    let last = text
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("（沒有輸出）");
+    let mut lines = vec![format!(
+        "【MISF】已 {minutes} 分鐘沒有新輸出，命令仍在執行。最後一行：{last}"
+    )];
+    if look && command.contains("apt-get") {
+        match read_only(session, crate::apt_lock::SNAPSHOT, LOOK_SECONDS).await {
+            Ok(output) => match crate::apt_lock::diagnose(&output) {
+                Ok(diagnosis) => {
+                    let found = crate::apt_lock::summary(&diagnosis);
+                    if !found.is_empty() {
+                        lines.push("【MISF】主機目前的狀況：".into());
+                        lines.extend(found.into_iter().map(|line| format!("  {line}")));
+                    }
+                }
+                Err(error) => lines.push(format!("【MISF】無法判讀主機狀況：{error:#}")),
+            },
+            Err(error) => lines.push(format!("【MISF】無法讀取主機狀況：{error:#}")),
+        }
+    }
+    lines.push(
+        "【MISF】可以繼續等待；要中止請按「停止」，之後可在「進階操作 › 診斷套件鎖…」查看並處理遠端留下的程序。"
+            .into(),
+    );
+    echo.notice(&(lines.join("\n") + "\n"));
+}
+
+/// Runs a read-only command without echo or sudo and returns its output.
+async fn read_only(session: &Session, command: &str, seconds: u64) -> Result<String> {
+    timeout(Duration::from_secs(seconds), async {
+        let mut channel = session.channel_open_session().await?;
+        channel.exec(true, command).await?;
+        let mut output = Vec::new();
+        while let Some(msg) = channel.wait().await {
+            if let ChannelMsg::Data { data } | ChannelMsg::ExtendedData { data, .. } = msg {
+                ensure!(
+                    output.len() + data.len() <= LIMIT,
+                    "遠端輸出超過 32 MiB 限制"
+                );
+                output.extend_from_slice(&data);
+            }
+        }
+        Ok(String::from_utf8_lossy(&output).into_owned())
     })
     .await
-    .context("遠端命令逾時；請確認目標主機上的套件管理器狀態")?
+    .context("讀取主機狀況逾時")?
 }
 
 /// Counts sudo prompts that end in `output[before..]`, the bytes just added, so long

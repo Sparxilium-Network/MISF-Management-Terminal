@@ -86,6 +86,10 @@ pub enum Action {
     VaultDeletePlaintext,
     FormEdit,
     ValidationRejected,
+    /// The host's APT state was read for the lock diagnosis.
+    AptDiagnose,
+    /// A fix from the lock diagnosis, confirmed by the user.
+    AptFix,
     /// An interactive shell was opened on a host; what is typed in it is never logged.
     ShellOpen,
     /// An interactive shell ended, closed by the user or not.
@@ -107,6 +111,8 @@ impl Action {
             "dist_upgrade" => Self::DistUpgrade,
             "reboot" => Self::Reboot,
             "shell_open" => Self::ShellOpen,
+            "apt_diagnose" => Self::AptDiagnose,
+            "apt_fix" => Self::AptFix,
             "batch" => match operation {
                 Some("check") => Self::BatchCheck,
                 Some("upgrade") => Self::BatchUpgrade,

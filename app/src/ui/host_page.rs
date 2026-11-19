@@ -23,6 +23,8 @@ pub enum Advanced {
     Upgrade,
     DistUpgrade,
     Reboot,
+    /// What holds APT on the host, and fixes to confirm.
+    Diagnose,
 }
 
 impl App {
@@ -89,7 +91,9 @@ impl App {
             // APT only: may install new packages and remove installed ones.
             Advanced::DistUpgrade => host.manager() == "apt",
             // Only APT hosts with a confirmed key; the command is fixed per account type.
-            Advanced::Reboot => host.manager() == "apt" && !host.fingerprint.is_empty(),
+            Advanced::Reboot | Advanced::Diagnose => {
+                host.manager() == "apt" && !host.fingerprint.is_empty()
+            }
         }
     }
 
@@ -120,6 +124,7 @@ impl App {
                 });
                 self.log(Action::RebootPrompt, Outcome::Succeeded);
             }
+            Advanced::Diagnose => self.diagnose_apt(),
         }
     }
 
@@ -240,6 +245,13 @@ pub fn push(app: &mut App, w: &AppWindow) {
     state.set_upgrade_enabled(App::advanced_enabled(&host, Advanced::Upgrade));
     state.set_dist_enabled(App::advanced_enabled(&host, Advanced::DistUpgrade));
     state.set_reboot_enabled(App::advanced_enabled(&host, Advanced::Reboot));
+    state.set_diagnose_hint(hint(
+        t.get("hint.apt_diagnose_title"),
+        &[misf_core::apt_lock::SNAPSHOT],
+        t.get("hint.apt_diagnose_effect"),
+        t.get("hint.apt_diagnose_risk"),
+    ));
+    state.set_diagnose_enabled(App::advanced_enabled(&host, Advanced::Diagnose));
     state.set_fingerprint(
         if host.fingerprint.is_empty() {
             t.get("host.first_trust").into()
@@ -440,6 +452,7 @@ pub fn wire(ctx: &Ctx, w: &AppWindow) {
         let item = match item {
             0 => Advanced::Upgrade,
             1 => Advanced::DistUpgrade,
+            3 => Advanced::Diagnose,
             _ => Advanced::Reboot,
         };
         c.update(|app| app.choose_advanced(item))

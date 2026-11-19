@@ -12,7 +12,14 @@ use tokio::sync::Notify;
 
 /// The requests a [`Cancel`] can stop. Reboots are left out: the reboot is scheduled the
 /// moment its command runs, and stopping cannot take that back.
-pub const CANCELLABLE: [&str; 5] = ["check", "upgrade", "dist_upgrade", "batch", "test"];
+pub const CANCELLABLE: [&str; 6] = [
+    "check",
+    "upgrade",
+    "dist_upgrade",
+    "batch",
+    "test",
+    "apt_diagnose",
+];
 
 /// A stop request shared by the UI and the worker; reset before each request.
 #[derive(Clone, Default)]

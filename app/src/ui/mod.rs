@@ -2,6 +2,7 @@
 //! properties of that page's Slint global and handles that page's callbacks.
 
 mod app;
+mod apt_lock;
 mod batch;
 mod dialogs;
 mod editor;
@@ -116,6 +117,7 @@ pub fn refresh(app: &mut App, main: &AppWindow, settings: &SettingsWindow) {
     editor::push(app, main);
     vault::push(app, main);
     dialogs::push(app, main);
+    apt_lock::push(app, main);
     settings::push(app, settings);
     terminal::push(app, main);
 }
@@ -208,6 +210,7 @@ fn wire(ctx: &Ctx, main: &AppWindow, settings: &SettingsWindow) {
     editor::wire(ctx, main);
     vault::wire(ctx, main);
     dialogs::wire(ctx, main);
+    apt_lock::wire(ctx, main);
     terminal::wire(ctx, main);
     settings::wire(ctx, settings);
     watch_input(ctx, main, settings);
@@ -368,6 +371,21 @@ fn capture(ctx: &Ctx) {
                         Ok("1" | "details")
                     ) {
                         sample_kept_back(app);
+                    }
+                    // `=1` the findings, `=confirm` the first fix's confirmation.
+                    let apt_lock = std::env::var("MISF_OPEN_APT_LOCK");
+                    if matches!(apt_lock.as_deref(), Ok("1" | "confirm"))
+                        && let Some(host) = app.current().cloned()
+                        && let Ok(diagnosis) = misf_core::apt_lock::diagnose(SAMPLE_APT_LOCK)
+                    {
+                        app.apt_lock = Some(apt_lock::AptLock {
+                            id: host.id.clone(),
+                            name: host.name.clone(),
+                            address: host.address.clone(),
+                            diagnosis: misf_core::apt_lock::report(&host, &diagnosis),
+                            step: (apt_lock.as_deref() == Ok("confirm")).then_some(0),
+                            note: String::new(),
+                        });
                     }
                     let reboot = std::env::var("MISF_OPEN_REBOOT");
                     if matches!(reboot.as_deref(), Ok("1" | "final")) {
@@ -820,6 +838,23 @@ pub fn keep_inner<R, I>(
 }
 
 /// A hover hint: what a control runs, what it does and what could go wrong.
+/// A host stuck as one was in practice: a package script waits on a systemd job whose
+/// service hangs in the kernel.
+#[cfg(feature = "capture")]
+const SAMPLE_APT_LOCK: &str = "__MISF_PS__
+ 195355       1    7232 Ss   sudo -S -p __MISF_SUDO_PROMPT__ -- env LC_ALL=C DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l apt-get -y -q=1 -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade
+ 195358  195355    7232 Ss   sudo -S -p __MISF_SUDO_PROMPT__ -- env LC_ALL=C DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l apt-get -y -q=1 -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade
+ 195359  195358    7232 S+   apt-get -y -q=1 -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade
+ 195573  195359    7218 Ss+  /usr/bin/dpkg --force-confdef --force-confold --status-fd 53 --configure --pending
+ 195579  195573    7218 S+   /bin/sh /var/lib/dpkg/info/ubuntu-drivers-common.postinst configure 1:0.10.9
+ 195650  195579    7217 S+   /usr/bin/perl /usr/bin/deb-systemd-invoke restart gpu-manager.service
+ 195655  195650    7217 S+   systemctl --quiet --system restart gpu-manager.service
+ 195657       1    7217 Ds   /usr/bin/gpu-manager --log /var/log/gpu-manager.log
+__MISF_JOBS__
+181113 gpu-manager.service start running
+__MISF_AUDIT__
+";
+
 pub fn hint(title: &str, commands: &[&str], effect: &str, risk: &str) -> HintData {
     HintData {
         title: title.into(),

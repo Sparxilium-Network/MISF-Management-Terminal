@@ -203,7 +203,12 @@ impl Manager {
 /// or in a check's simulated upgrade), and the restart status last.
 pub fn manager_commands(manager: Manager, root: bool, mode: Mode) -> Vec<&'static str> {
     let commands = manager.commands(root);
-    let mut list = vec![DETECT, commands.update, commands.list];
+    let mut list = vec![DETECT];
+    // APT runs refuse to start while apt or dpkg is busy; see `apt_lock`.
+    if manager == Manager::Apt {
+        list.push(crate::apt_lock::SNAPSHOT);
+    }
+    list.extend([commands.update, commands.list]);
     let install = match mode {
         Mode::Check => None,
         Mode::Upgrade => Some(commands.upgrade),

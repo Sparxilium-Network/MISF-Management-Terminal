@@ -482,11 +482,13 @@ impl Terminal {
 /// The hosts whose remote work a request shows in the terminal, if any.
 pub fn hosts(request: &serde_json::Value) -> Vec<String> {
     match request["action"].as_str().unwrap_or_default() {
-        "check" | "upgrade" | "dist_upgrade" | "reboot" => request["id"]
-            .as_str()
-            .map(str::to_owned)
-            .into_iter()
-            .collect(),
+        "check" | "upgrade" | "dist_upgrade" | "reboot" | "apt_diagnose" | "apt_fix" => {
+            request["id"]
+                .as_str()
+                .map(str::to_owned)
+                .into_iter()
+                .collect()
+        }
         "batch" => {
             let mut ids: Vec<String> = Vec::new();
             for id in (request["ids"].as_array().into_iter().flatten()).filter_map(|v| v.as_str()) {

@@ -12,6 +12,9 @@ pub trait Console: Send + Sync {
     fn command(&self, host: &str, command: &str);
     /// Complete lines of its output, each ending with a newline.
     fn output(&self, host: &str, text: &str);
+    /// A warning about the running command from MISF itself, e.g. that it has been quiet
+    /// for a long time; one or more lines, already redacted.
+    fn notice(&self, _host: &str, _text: &str) {}
 }
 
 /// Shows nothing: the CLI and tests.
@@ -91,6 +94,13 @@ impl Echo {
     pub(crate) fn command(&self, command: &str) {
         if self.active {
             self.console.command(&self.host, &self.redact(command));
+        }
+    }
+
+    /// Passes on a warning from MISF itself, with secrets hidden.
+    pub(crate) fn notice(&self, text: &str) {
+        if self.active {
+            self.console.notice(&self.host, &self.redact(text));
         }
     }
 

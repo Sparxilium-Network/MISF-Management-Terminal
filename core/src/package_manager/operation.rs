@@ -12,7 +12,6 @@ use chrono::Utc;
 const DETECT_SECONDS: u64 = 20;
 const UPDATE_SECONDS: u64 = 5 * 60;
 const LIST_SECONDS: u64 = 2 * 60;
-const UPGRADE_SECONDS: u64 = 30 * 60;
 const STATUS_SECONDS: u64 = 2 * 60;
 
 pub async fn check(host: &Host, progress: &dyn Fn(&str)) -> CheckResult {
@@ -79,6 +78,10 @@ pub(crate) async fn run<P: Fn(&str) + ?Sized>(
 impl Run<'_> {
     async fn operate<P: Fn(&str) + ?Sized>(&mut self, mode: Mode, progress: &P) -> Result<Outcome> {
         let manager = self.detect().await?;
+        if manager == Manager::Apt {
+            progress("正在確認 APT 沒有被其他程序佔用…");
+            self.check_lock().await?;
+        }
         let commands = manager.commands(self.host.username == "root");
         let install = match mode {
             Mode::Check => None,
@@ -251,6 +254,28 @@ impl Run<'_> {
         }
     }
 
+    /// Refuses to start while apt or dpkg runs, or packages are half-configured: apt would
+    /// wait on the lock, or fail, with nothing telling the user why.
+    async fn check_lock(&mut self) -> Result<()> {
+        let (code, output) = ssh::execute(
+            self.session,
+            crate::apt_lock::SNAPSHOT,
+            false,
+            "",
+            STATUS_SECONDS,
+            &self.echo,
+        )
+        .await?;
+        self.transcript.push_str(&heading("APT 使用狀態"));
+        self.transcript.push_str(&output);
+        ensure!(code == 0, "無法讀取主機的程序清單（退出碼 {code}）");
+        let diagnosis = crate::apt_lock::diagnose(&output)?;
+        if let Some(message) = crate::apt_lock::busy_message(&diagnosis) {
+            anyhow::bail!(message);
+        }
+        Ok(())
+    }
+
     /// Runs DETECT and settles which manager may run; never a different one than confirmed.
     async fn detect(&mut self) -> Result<Manager> {
         let (code, output) =
@@ -293,7 +318,9 @@ impl Run<'_> {
 
     /// Upgrades and returns the manager's output for what it held or kept back.
     async fn install(&mut self, manager: Manager, mode: Mode, command: &str) -> Result<String> {
-        let (code, output) = self.privileged(command, UPGRADE_SECONDS).await?;
+        // No time limit: cutting the connection would leave apt running with nobody reading
+        // its output. A quiet upgrade gets warnings instead, and the user may stop it.
+        let (code, output) = self.privileged(command, 0).await?;
         self.transcript.push_str(&heading(&format!(
             "{} {}",
             manager.label(),

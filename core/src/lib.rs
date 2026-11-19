@@ -1,6 +1,7 @@
 //! `unsafe` is denied everywhere except the Windows WebAuthn FFI adapter.
 #![deny(unsafe_code)]
 
+pub mod apt_lock;
 pub mod audit;
 pub mod batch;
 pub mod cancel;
@@ -329,6 +330,16 @@ pub async fn dispatch_with(
             Ok(json!(result))
         }
         "batch" => batch::run(&request, store, progress, observer, console, cancel).await,
+        "apt_diagnose" => {
+            let host = store.host(id)?;
+            let echo = console::Echo::new(console.clone(), &host);
+            apt_lock::diagnose_host(&host, progress, &echo).await
+        }
+        "apt_fix" => {
+            let host = store.host(id)?;
+            let echo = console::Echo::new(console.clone(), &host);
+            apt_lock::fix_host(&host, &request, progress, &echo).await
+        }
         "reboot" => {
             let host = store.host(id)?;
             let echo = console::Echo::new(console.clone(), &host);

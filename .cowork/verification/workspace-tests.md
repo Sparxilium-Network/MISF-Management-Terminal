@@ -1,5 +1,13 @@
 # 全工作區檢查結果
 
+## 2026-11-20（APT 鎖檢查、沒輸出提醒與套件鎖診斷，於 `main`）
+
+- 來源：argus-game／argus-data 實際案例。`ubuntu-drivers-common` 的 postinst 等 `gpu-manager.service` 重啟，gpu-manager 卡在 D 狀態（`drm_modeset_lock`）；MISF 30 分鐘逾時切斷連線後，遠端外層 sudo 父程序變成 1，apt-get 與 needrestart 卡在寫入沒人讀的 PTY（`n_tty_write`），APT 鎖一直不放；最後靠 `systemctl cancel` 與 `pkill -x apt-get` 解除。
+- `cargo fmt --all -- --check`、`cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`：通過。
+- `cargo test --locked --workspace`：全部通過（22、37、72、33 項）。`core/tests/workflow.rs` 的模擬伺服器新增對 `apt_lock::SNAPSHOT` 的閒置回應，dist-upgrade 測試的預期命令序列加入 `SNAPSHOT`；i18n 測試的來源清單加入新檔案。新邏輯本身沒有新增單元測試（測試由他人撰寫）。
+- 擷取版 `MISF_OPEN_APT_LOCK=1`／`confirm` 以實際案例的程序樹截圖：診斷列出取消工作 181113 與重新開機，dpkg 仍在執行時不提供結束程序；確認步驟顯示完整命令與勾選。
+- 尚未對真實主機執行；Docker 測試（`misf-sshtest`，需 Docker）未執行。
+
 ## 2026-11-19（rand 0.10.4，Dependabot PR #8，於 `main`）
 
 - 在 `main` 手動套用 PR #8 的變更：只有 `Cargo.lock` 的 rand 0.10.3 → 0.10.4（russh 與其 num-bigint、pageant 在執行時使用，`core` 測試也直接使用；`core` 的版本需求 `0.10.3` 已涵蓋）；`cargo metadata --locked` 通過；重跑 `./licenses.ps1`。

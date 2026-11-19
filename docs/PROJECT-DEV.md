@@ -1,6 +1,6 @@
 # MISF Management Terminal 開發說明
 
-> 最後修改：2026-11-18 ｜ 基於 commit：`8df0b59`
+> 最後修改：2026-11-20 ｜ 基於 commit：`454b72b`
 
 一般使用方式見 [README](../README.md) 與 [使用指南](user-guide.md)。本文件是開發文件的入口，給開發者與維護者，記錄建置、儲存格式、安全設計細節與測試方式。
 
@@ -95,7 +95,8 @@ Linux／macOS 可使用 `cargo run --locked -p misf`，須在對應平台建置�
 - 使用 russh 自帶 SSH，不呼叫系統 ssh，也不讀取電腦的 SSH config、known_hosts、SSH agent 或系統私鑰。不支援 RSA 私鑰與 RSA 主機金鑰（russh 未啟用 `rsa` 功能）。首次連線先核對並保存 SHA-256 主機指紋，確認前不提交帳密；指紋變更立即阻擋認證。
 - 系統偵測讀取 `uname` 與 `/etc/os-release`。偵測結果只來自主機本身，編輯主機不能改寫；位址或埠變更時清除。手動指定的套件管理器必須確實存在於主機上，否則在執行任何套件指令前停止。
 - 檢查先更新索引（`apt-get update`／`dnf makecache --refresh`／pacman 的 `checkupdates`／`apk update`），停用動態下載進度。
-- 升級：APT 執行 `apt-get -y upgrade`（`DEBIAN_FRONTEND=noninteractive`、`--force-confold`、`NEEDRESTART_MODE=l`），只升級既有套件；DNF 執行 `-y upgrade`（可能依相依關係安裝或移除套件，新設定檔另存為 `.rpmnew`）；pacman 執行 `pacman -Syu --noconfirm`（新設定檔另存為 `.pacnew`）；apk 執行 `apk upgrade`（新設定檔另存為 `.apk-new`）。索引更新上限 5 分鐘、升級上限 30 分鐘。
+- 升級：APT 執行 `apt-get -y upgrade`（`DEBIAN_FRONTEND=noninteractive`、`--force-confold`、`NEEDRESTART_MODE=l`），只升級既有套件；DNF 執行 `-y upgrade`（可能依相依關係安裝或移除套件，新設定檔另存為 `.rpmnew`）；pacman 執行 `pacman -Syu --noconfirm`（新設定檔另存為 `.pacnew`）；apk 執行 `apk upgrade`（新設定檔另存為 `.apk-new`）。索引更新上限 5 分鐘；升級沒有時間上限（逾時切斷連線會讓遠端 sudo／apt 沒人讀輸出而卡住）。任何遠端命令 10 分鐘沒有新輸出會在終端機與狀態列提醒（每再過 10 分鐘再提醒），APT 命令第一次提醒時另以同一條連線的另一個 channel 唯讀讀取程序樹、systemd 工作與 `dpkg --audit` 並列出狀況。
+- APT 檢查與升級在偵測後先執行唯讀的 `apt_lock::SNAPSHOT`：有 apt／dpkg 程序在執行或 `dpkg --audit` 有回報時不執行任何套件命令，錯誤中說明是誰（MISF 先前留下且連線已斷、另一個 MISF 作業、系統自動更新或其他程序）與執行時間。主機頁「進階操作 › 診斷套件鎖…」（`apt_diagnose`）開啟診斷視窗；可處理的方式只有四種：取消套件腳本在等的 systemd 工作、結束 MISF 留下且 dpkg 已結束的程序（SIGTERM 指定 PID）、`dpkg --configure -a`（沒有程序在執行時），以及有 D 狀態程序時帶到既有的重新開機確認。每一項顯示原因、作用、風險與完整命令，需勾選了解後確認；`apt_fix` 執行前重新讀取主機狀態，只有同一個處理方式（相同工作編號或完全相同的 PID 集合）仍然存在才執行。
 - 重啟提示只限 APT：檢查或升級後另外執行固定、唯讀的狀態命令（`/var/run/reboot-required` 與 `needrestart -r l -b`），一般帳號整段 `sh -c` 放在 sudo 裡執行，與 update／upgrade 相同；不解析升級輸出，讀取失敗不影響主結果。
 - APT 升級若有 kept back 套件，記入 `kept_back` 並以唯讀的 `apt-get -s dist-upgrade` 模擬變動；操作結束時 UI 彈出報告。`dist-upgrade` 是另一個需確認的操作，只限 APT，可能安裝或移除套件。MISF 從不重啟服務。重新開機以固定命令 `shutdown -r +1` 執行，只限 APT 主機，UI 需兩次確認。
 - APT 輸出中「Not upgrading yet due to phasing:」或舊版「The following upgrades have been deferred due to phasing:」之下縮排列出的套件，記為該次結果的 `phased`。升級時讀升級輸出；檢查時若有待更新套件，另外執行唯讀的 `apt-get -s -q=1 upgrade`（`apt::PREVIEW`，不取鎖、不需 sudo、不變更系統；失敗只讓 `phased` 為空）。它不另存欄位，載入時從保存的輸出重新解析，因此資料庫結構不變。檢查的模擬輸出中也有 kept back 與 `Inst` 行，但只有升級類結果才會解析成 kept back 與 dist-upgrade 計畫。
@@ -228,7 +229,7 @@ LUKSbox 測試使用暫存資料，涵蓋未建立容器時拒絕主機操作且
 
 ## 畫面擷取
 
-開發用畫面擷取可使用 `cargo build -p misf --features capture`，以 `MISF_SCREENSHOT_TO` 指定 PNG 路徑，並以 `--debug.dir` 指定測試資料。`MISF_OPEN_EDITOR=1`／`MISF_OPEN_SETTINGS=1`／`MISF_OPEN_PASSKEY=1`／`MISF_OPEN_BATCH=1`／`MISF_OPEN_KEYS=1` 可預先開啟對應畫面，`MISF_OPEN_MENU=1`（需同時 `MISF_FIXTURE=1`）開啟進階選單與其上的右鍵複製選單，`=more` 開啟「其他操作」選單，`=keys`（搭配 `MISF_OPEN_TERMINAL=shell`）開啟終端機扳手的傳送按鍵選單；`=add` 開啟側欄 + 的新增主機／分類選單；`MISF_OPEN_SEARCH=1` 展開套件表格的篩選框；`MISF_OPEN_REBOOT=1`／`final`（需同時 `MISF_FIXTURE=1`）開啟重新開機確認的第一步或最後確認；`MISF_OPEN_PACKAGES=1`（需同時 `MISF_FIXTURE=1`）開啟「套件明細」工具視窗；`MISF_OPEN_KEPT_BACK=1`（需同時 `MISF_FIXTURE=1`）以三台範例主機開啟 dist-upgrade 報告，`=details` 另開「詳細情況」視窗並截取該視窗；`MISF_OPEN_HISTORY=1`（需同時 `MISF_FIXTURE=1`）加入幾筆範例結果並開啟過往操作工具視窗；`MISF_OPEN_TERMINAL=1`（需同時 `MISF_FIXTURE=1`）在終端機面板放入一輪批次升級的範例輸出，`MISF_OPEN_TERMINAL=shell` 則放入一個顯示類似 nano 畫面的互動 shell 分頁，再加 `MISF_OPEN_SELECTION=1` 會在其中選取一段跨兩行的文字；旗標只有明確設為 `1` 才啟用；`MISF_OPEN_SETTINGS=about`／`preferences`／`security`／`batch` 直接開啟「關於」或「偏好設定」下的「外觀與主機清單」／「安全性」／「批次作業」頁（設定是獨立視窗，此時截取設定視窗）。`MISF_FIXTURE=1` 以幾台假主機取代主機庫內容，方便截取主機頁與批次頁。debug 模式的 Passkey 按鈕停用，擷取不操作硬體。正式 release 預設不啟用擷取功能。
+開發用畫面擷取可使用 `cargo build -p misf --features capture`，以 `MISF_SCREENSHOT_TO` 指定 PNG 路徑，並以 `--debug.dir` 指定測試資料。`MISF_OPEN_EDITOR=1`／`MISF_OPEN_SETTINGS=1`／`MISF_OPEN_PASSKEY=1`／`MISF_OPEN_BATCH=1`／`MISF_OPEN_KEYS=1` 可預先開啟對應畫面，`MISF_OPEN_MENU=1`（需同時 `MISF_FIXTURE=1`）開啟進階選單與其上的右鍵複製選單，`=more` 開啟「其他操作」選單，`=keys`（搭配 `MISF_OPEN_TERMINAL=shell`）開啟終端機扳手的傳送按鍵選單；`MISF_OPEN_APT_LOCK=1`／`confirm`（需同時 `MISF_FIXTURE=1`）以一次實際卡在 systemd 工作的程序樹開啟套件鎖診斷，或其第一個處理方式的確認步驟；`=add` 開啟側欄 + 的新增主機／分類選單；`MISF_OPEN_SEARCH=1` 展開套件表格的篩選框；`MISF_OPEN_REBOOT=1`／`final`（需同時 `MISF_FIXTURE=1`）開啟重新開機確認的第一步或最後確認；`MISF_OPEN_PACKAGES=1`（需同時 `MISF_FIXTURE=1`）開啟「套件明細」工具視窗；`MISF_OPEN_KEPT_BACK=1`（需同時 `MISF_FIXTURE=1`）以三台範例主機開啟 dist-upgrade 報告，`=details` 另開「詳細情況」視窗並截取該視窗；`MISF_OPEN_HISTORY=1`（需同時 `MISF_FIXTURE=1`）加入幾筆範例結果並開啟過往操作工具視窗；`MISF_OPEN_TERMINAL=1`（需同時 `MISF_FIXTURE=1`）在終端機面板放入一輪批次升級的範例輸出，`MISF_OPEN_TERMINAL=shell` 則放入一個顯示類似 nano 畫面的互動 shell 分頁，再加 `MISF_OPEN_SELECTION=1` 會在其中選取一段跨兩行的文字；旗標只有明確設為 `1` 才啟用；`MISF_OPEN_SETTINGS=about`／`preferences`／`security`／`batch` 直接開啟「關於」或「偏好設定」下的「外觀與主機清單」／「安全性」／「批次作業」頁（設定是獨立視窗，此時截取設定視窗）。`MISF_FIXTURE=1` 以幾台假主機取代主機庫內容，方便截取主機頁與批次頁。debug 模式的 Passkey 按鈕停用，擷取不操作硬體。正式 release 預設不啟用擷取功能。
 
 畫面以 Slint 的 Skia 繪圖引擎繪製（文字比 femtovg 清楚）。建置時 `skia-bindings` 會從 rust-skia 的 GitHub 發行頁下載預先編譯的 Skia，第一次建置需要網路；Skia 授權全文在 `licenses/Skia/LICENSE`。
 

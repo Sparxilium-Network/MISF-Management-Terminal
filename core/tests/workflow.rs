@@ -77,6 +77,16 @@ impl State {
         let upgraded = self.upgraded.load(Ordering::SeqCst);
         if command == package_manager::DETECT {
             (self.detect.clone(), 0)
+        } else if command == misf_core::apt_lock::SNAPSHOT {
+            // An idle host: no apt or dpkg running, nothing half-configured.
+            (
+                "__MISF_PS__
+__MISF_JOBS__
+__MISF_AUDIT__
+"
+                .into(),
+                0,
+            )
         } else if command == apt::LIST {
             let held = "libc6/stable 2.36-9 amd64 [upgradable from: 2.36-8]\n";
             let listing = if self.dist_upgraded.load(Ordering::SeqCst) {
@@ -622,6 +632,7 @@ async fn dist_upgrade_runs_only_its_own_command_and_clears_kept_back_packages() 
         *fixture.state.commands.lock().unwrap(),
         [
             package_manager::DETECT,
+            misf_core::apt_lock::SNAPSHOT,
             apt::SUDO_UPDATE,
             apt::LIST,
             apt::SUDO_DIST_UPGRADE,
