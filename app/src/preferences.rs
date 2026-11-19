@@ -209,6 +209,8 @@ pub enum BatchColumn {
     Operation,
     Status,
     Pending,
+    /// Pending updates an upgrade installs now: the pending ones less the phased ones.
+    Available,
     /// Updates apt held back for a phased rollout.
     Phased,
     Upgraded,
@@ -218,7 +220,7 @@ pub enum BatchColumn {
 }
 
 impl BatchColumn {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::Host,
         Self::User,
         Self::Address,
@@ -226,6 +228,7 @@ impl BatchColumn {
         Self::Operation,
         Self::Status,
         Self::Pending,
+        Self::Available,
         Self::Phased,
         Self::Upgraded,
         Self::Checked,
@@ -241,6 +244,7 @@ impl BatchColumn {
             Self::Operation => "operation",
             Self::Status => "status",
             Self::Pending => "pending",
+            Self::Available => "available",
             Self::Phased => "phased",
             Self::Upgraded => "upgraded",
             Self::Checked => "checked",
@@ -257,6 +261,7 @@ impl BatchColumn {
             Self::Operation => t.get("batch.last_operation"),
             Self::Status => t.get("apt.status"),
             Self::Pending => t.get("apt.pending"),
+            Self::Available => t.get("batch.available"),
             Self::Phased => t.get("batch.phased"),
             Self::Upgraded => t.get("batch.upgraded_count"),
             Self::Checked => t.get("apt.last_check"),
@@ -272,7 +277,7 @@ impl BatchColumn {
             Self::System => 1.4,
             Self::Checked => 1.1,
             Self::Status | Self::User | Self::Restart => 1.0,
-            Self::Pending | Self::Phased => 0.9,
+            Self::Pending | Self::Available | Self::Phased => 0.9,
             Self::Operation | Self::Upgraded => 0.8,
         }
     }
@@ -282,8 +287,8 @@ impl BatchColumn {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BatchColumns {
     /// Indexed like [`BatchColumn::ALL`]; the host column is always shown.
-    pub shown: [bool; 11],
-    pub weights: [f32; 11],
+    pub shown: [bool; 12],
+    pub weights: [f32; 12],
 }
 
 impl BatchColumns {
@@ -306,12 +311,14 @@ impl BatchColumns {
         let mut columns = Self::default();
         if let Some(shown) = value["shown"].as_array() {
             for (i, column) in BatchColumn::ALL.into_iter().enumerate() {
-                // Files saved before the restart column existed list every older
-                // column's weight but not its own; it keeps its default visibility there.
+                // Files saved before the restart or available column existed list every
+                // older column's weight but not its own; it keeps its default visibility
+                // there.
                 let weights = &value["weights"];
                 let older_file =
-                    weights.get("checked").is_some() && weights.get("restart").is_none();
-                if !(column == BatchColumn::Restart && older_file) {
+                    weights.get("checked").is_some() && weights.get(column.code()).is_none();
+                let added = matches!(column, BatchColumn::Restart | BatchColumn::Available);
+                if !(added && older_file) {
                     columns.shown[i] = shown.iter().any(|code| code == column.code());
                 }
             }
@@ -837,7 +844,8 @@ mod tests {
         assert_eq!(columns.visible(), [(0, BatchColumn::Host)]);
         assert_eq!(columns.weights[0], 10.0);
         assert_eq!(columns.weights[1], BatchColumn::User.weight());
-        // A file saved before the restart column existed still shows it by default.
+        // A file saved before the restart and available columns existed still shows
+        // them by default.
         std::fs::write(
             &path,
             json!({"version": 1, "batch_columns": {"shown": ["status"], "weights": {"host": 1.0, "checked": 1.0}}})
@@ -850,7 +858,8 @@ mod tests {
             [
                 (0, BatchColumn::Host),
                 (5, BatchColumn::Status),
-                (10, BatchColumn::Restart)
+                (7, BatchColumn::Available),
+                (11, BatchColumn::Restart)
             ]
         );
     }

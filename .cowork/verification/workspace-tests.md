@@ -1,5 +1,13 @@
 # 全工作區檢查結果
 
+## 2026-11-20（批次作業「目前可升級」欄，於 `main`）
+
+- 新增批次表欄位 `available`：檢查成功的主機顯示待更新套件扣掉分階段延後套件的數量，預設顯示；舊設定檔（有 `checked` 寬度但沒有 `available`）也照預設顯示。表格欄數上限 11 → 12。
+- 偏好設定測試中舊檔案的預期欄位改為含 `(7, Available)`，Restart 索引 10 → 11。
+- `cargo fmt --all -- --check`、`cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`：通過。
+- `cargo test --locked --workspace`：全部通過（22、37、72、33 項）。
+- 擷取版（`MISF_FIXTURE=1`、`MISF_OPEN_BATCH=1`）：web-01 待更新 2、目前可升級 1、分階段延後 1；`MISF_OPEN_SETTINGS=batch` 的欄位勾選中出現「目前可升級」。
+
 ## 2026-11-20（APT 快照標記只認整行，於 `main`）
 
 - 問題：快照命令自己的 `sh -c` 命令列（含三個標記）出現在 `ps` 清單裡，`split_once` 誤把它當成區段分隔，`dpkg --audit` 區段變成非空，所有 APT 主機都被判為「有套件只設定到一半」而拒絕檢查／升級。

@@ -254,6 +254,12 @@ fn rows(app: &App, t: Translator, order: &[usize], headings: &[Heading]) -> Vec<
         let phased = success
             .map(|r| r.phased.join(", "))
             .filter(|names| !names.is_empty());
+        // What an upgrade installs now: the pending packages less the phased ones.
+        let available = success.map(|r| {
+            (r.packages.iter())
+                .filter(|p| !r.phased.contains(&p.name))
+                .count()
+        });
         let cells: Vec<BatchCell> = columns
             .iter()
             .map(|(_, column)| {
@@ -270,6 +276,7 @@ fn rows(app: &App, t: Translator, order: &[usize], headings: &[Heading]) -> Vec<
                     BatchColumn::Pending => {
                         success.map_or_else(dash, |r| r.packages.len().to_string())
                     }
+                    BatchColumn::Available => available.map_or_else(dash, |n| n.to_string()),
                     BatchColumn::Phased => {
                         success.map_or_else(dash, |r| r.phased.len().to_string())
                     }
@@ -288,6 +295,9 @@ fn rows(app: &App, t: Translator, order: &[usize], headings: &[Heading]) -> Vec<
                 let (kind, hint) = match column {
                     BatchColumn::Host => (1, String::new()),
                     BatchColumn::Status => (2, String::new()),
+                    BatchColumn::Available if available.is_some() => {
+                        (0, t.get("batch.available_hint").to_owned())
+                    }
                     BatchColumn::Phased => (
                         3,
                         phased

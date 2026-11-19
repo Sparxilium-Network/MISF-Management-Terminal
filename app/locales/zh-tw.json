@@ -500,6 +500,8 @@
   "batch.last_operation": "上次操作",
   "batch.user": "使用者",
   "batch.address": "IP／連接埠",
+  "batch.available": "目前可升級",
+  "batch.available_hint": "待更新套件扣掉分階段延後的套件，也就是現在升級會安裝的數量（被保留、需要 dist-upgrade 的套件要升級後才知道）",
   "batch.phased": "分階段延後",
   "batch.phased_hint": "APT 的分階段推送（phasing）暫時沒有安裝這些更新，之後會自動輪到這台主機：{packages}",
   "batch_columns.title": "批次作業欄位",
