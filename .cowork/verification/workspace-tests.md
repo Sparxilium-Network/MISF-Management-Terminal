@@ -1,5 +1,13 @@
 # 全工作區檢查結果
 
+## 2026-11-21（uuid 1.29.3、zeroize 1.9.2，Dependabot PR #10，於 `main`）
+
+- 在 `main` 套用 PR #10 的變更：只有 `Cargo.lock` 的 uuid 1.29.2 → 1.29.3、zeroize 1.9.1 → 1.9.2；`cargo metadata --locked` 通過；重跑 `./licenses.ps1`。
+- PR 上的 Action 失敗原因：兩個平台測試都通過，打包時授權清單與 `Cargo.lock` 不符（Dependabot 不會重產授權清單）。
+- `cargo fmt --all -- --check`、`cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`：通過。
+- `cargo deny --locked check`：`advisories ok, bans ok, licenses ok, sources ok`。
+- `cargo test --locked --workspace`：全部通過（22、37、72、33 項）。
+
 ## 2026-11-20（批次作業「目前可升級」欄，於 `main`）
 
 - 新增批次表欄位 `available`：檢查成功的主機顯示待更新套件扣掉分階段延後套件的數量，預設顯示；舊設定檔（有 `checked` 寬度但沒有 `available`）也照預設顯示。表格欄數上限 11 → 12。
