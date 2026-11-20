@@ -1,6 +1,6 @@
 # 更新依賴的步驟
 
-> 最後修改：2026-11-12 ｜ 基於 commit：`b64f596`
+> 最後修改：2026-11-21 ｜ 基於 commit：`816c71c`
 
 本文件是實際操作清單：收到 Dependabot PR、想手動升級某個套件，或 CI 因安全公告失敗時，照這裡的步驟做。各依賴的背景、上游限制與已知例外見 [依賴更新與安全公告](dependency-updates.md)。
 
@@ -17,11 +17,12 @@ cargo install --locked cargo-about --features cli
 
 - `.github/dependabot.yml` 每天檢查 Cargo 與 GitHub Actions。相容的 Cargo 更新合併成一個 `rust-compatible` 群組 PR；超出目前版本需求、必須修改 `Cargo.toml` 的升級會單獨開 PR（例如 rfd 0.17 → 0.18）。
 - 沒有設定 `target-branch`，所以 PR 只會以預設分支 `main` 為目標，`legacy-egui` 不會收到 PR。
-- Dependabot **不會**執行 `./licenses.ps1`。只要 `Cargo.lock` 有改動，PR 的 CI 一定會在授權清單檢查失敗（`licenses/THIRD_PARTY_LICENSES.html is out of date with Cargo.lock`）。這不代表更新有問題，但也表示 PR 不能直接合併。
+- Dependabot **不會**執行 `./licenses.ps1`。只要 `Cargo.lock` 有改動，PR 的 CI 一定會在授權清單檢查失敗（`licenses/THIRD_PARTY_LICENSES.html is out of date with Cargo.lock`），所以 PR 不能直接合併。
+- 因此 Cargo 的 Dependabot PR（分支 `dependabot/cargo/*`）**不跑 CI**：`build-prerelease.yml` 的建置工作以 `github.head_ref` 跳過，PR 上只會看到被略過的檢查。測試與授權檢查改在本機套用時執行（見下方步驟），推送 `main` 後再跑完整 CI。GitHub Actions 版本更新的 PR（`dependabot/github_actions/*`）照常跑 CI，用來確認新版 Action 可用。
 
 ## 套用 Dependabot PR
 
-1. **看失敗原因**：`gh pr checks <編號>`，再用 `gh run view --job <job-id> --log-failed` 看實際錯誤。若只有授權清單過期，繼續下一步；若是編譯或測試失敗，先處理那個問題。
+1. **看 CI**：Cargo 的 Dependabot PR 不跑 CI，直接進下一步，相容性改由本機檢查判斷。其他 PR 用 `gh pr checks <編號>`，再用 `gh run view --job <job-id> --log-failed` 看實際錯誤；若是編譯或測試失敗，先處理那個問題。
 2. **看改了什麼**：`gh pr diff <編號>`。記下 `Cargo.toml` 與 `Cargo.lock` 的每一處改動，作為之後比對的標準。
 3. **看上游變更**：0.x 次版號或大版號升級要讀發行說明（例如 `gh api repos/<owner>/<repo>/releases`），確認：
    - 本專案用到的 API 是否有破壞性變更（用 `grep -rn "<crate>::" app/src core/src` 找使用處）。

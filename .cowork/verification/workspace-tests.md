@@ -1,5 +1,12 @@
 # 全工作區檢查結果
 
+## 2026-11-21（Dependabot Cargo PR 不跑 CI，於 `main`）
+
+- 使用者選擇「完全不跑 CI」：`build-prerelease.yml` 的 `build` 工作加上 `if: ${{ !startsWith(github.head_ref, 'dependabot/cargo/') }}`；`publish` 依賴 `build`，本來就不在 PR 執行。`github.head_ref` 只在 PR 事件有值，推送 `main`、標籤與手動執行不受影響；GitHub Actions 版本更新的 PR 照常執行。
+- 已確認 PR #10 的分支為 `dependabot/cargo/rust-compatible-e2aecdcc6c`，符合條件。
+- 文件 `docs/update-dependency.md`、`docs/PROJECT-DEV.md` 已同步說明。
+- 尚未在 GitHub 上實際驗證（需推送後，下一個 Dependabot Cargo PR 才會看到工作被略過）。
+
 ## 2026-11-21（uuid 1.29.3、zeroize 1.9.2，Dependabot PR #10，於 `main`）
 
 - 在 `main` 套用 PR #10 的變更：只有 `Cargo.lock` 的 uuid 1.29.2 → 1.29.3、zeroize 1.9.1 → 1.9.2；`cargo metadata --locked` 通過；重跑 `./licenses.ps1`。

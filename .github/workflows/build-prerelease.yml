@@ -21,6 +21,9 @@ env:
 jobs:
   build:
     name: Test and package (${{ matrix.os }})
+    # Dependabot's Cargo PRs change only Cargo.lock and never the license list, so packaging
+    # always fails; they are applied and checked on main instead.
+    if: ${{ !startsWith(github.head_ref, 'dependabot/cargo/') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
