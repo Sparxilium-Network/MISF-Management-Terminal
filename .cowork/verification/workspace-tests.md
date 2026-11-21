@@ -1,5 +1,15 @@
 # 全工作區檢查結果
 
+## 2026-11-21（APT 鎖：MISF 遺留程序判斷與 dpkg --audit 錯誤，於 `main`）
+
+- 問題（使用者紀錄 `misf-log-20261121-191601.txt`，muti-misc）：批次升級在 ubuntu-drivers-common 的 postinst 等 `systemctl restart gpu-manager.service`（gpu-manager 為 D 狀態）時卡住，使用者按停止。之後的外層 sudo 父程序已是 1，卻被判為「另一個 MISF 作業正在執行」，取消工作、dpkg 結束後 apt-get 仍掛在 needrestart，但沒有提供「結束遺留程序」。
+- 原因：`ssh::execute` 會把整段輸出中的 sudo 提示標記拿掉，`ps` 清單也不例外，所以依標記往上找外層 sudo 永遠找不到，遺留判斷從未成立。改為依程式名稱（sudo、sudo-rs、env）往上找，標記仍保留為額外條件。
+- 另外 `SNAPSHOT` 中的 `dpkg --audit` 以一般使用者執行、且 dpkg 正被佔用時會輸出「Permission denied」錯誤，被當成稽核結果；改為 `2>/dev/null`，只讀取正常輸出。
+- 以紀錄中 4 次卡住的快照重跑 `diagnose`：皆為 `MisfOrphan`（dpkg 執行中），提供取消工作 36638 與重新開機；把 dpkg 子樹與工作移除、加入 needrestart 模擬取消後的狀態，提供 `end_leftover`（PID 16630、17124、17141）（暫時範例程式，跑完已刪除）。
+- `cargo fmt --all -- --check`、`cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`：通過。
+- `cargo test --locked --workspace`：全部通過（22、37、72、33 項）。
+- 尚未在真實主機上再次執行處理流程。
+
 ## 2026-11-21（Dependabot Cargo PR 不跑 CI，於 `main`）
 
 - 使用者選擇「完全不跑 CI」：`build-prerelease.yml` 的 `build` 工作加上 `if: ${{ !startsWith(github.head_ref, 'dependabot/cargo/') }}`；`publish` 依賴 `build`，本來就不在 PR 執行。`github.head_ref` 只在 PR 事件有值，推送 `main`、標籤與手動執行不受影響；GitHub Actions 版本更新的 PR 照常執行。

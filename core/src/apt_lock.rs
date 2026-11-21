@@ -16,7 +16,7 @@ use std::collections::{BTreeSet, HashMap};
 
 /// Lists processes, systemd jobs and half-configured packages; changes nothing and needs
 /// no root. `ps -w -w` keeps whole command lines.
-pub const SNAPSHOT: &str = "sh -c 'echo __MISF_PS__; LC_ALL=C ps -e -w -w -o pid=,ppid=,etimes=,stat=,args=; echo __MISF_JOBS__; systemctl list-jobs --no-legend --no-pager 2>/dev/null; echo __MISF_AUDIT__; LC_ALL=C dpkg --audit 2>&1; true'";
+pub const SNAPSHOT: &str = "sh -c 'echo __MISF_PS__; LC_ALL=C ps -e -w -w -o pid=,ppid=,etimes=,stat=,args=; echo __MISF_JOBS__; systemctl list-jobs --no-legend --no-pager 2>/dev/null; echo __MISF_AUDIT__; LC_ALL=C dpkg --audit 2>/dev/null; true'";
 
 const PS: &str = "__MISF_PS__";
 const JOBS: &str = "__MISF_JOBS__";
@@ -239,10 +239,13 @@ pub fn diagnose(output: &str) -> Result<Diagnosis> {
         {
             continue;
         }
-        // The sudo and env wrappers MISF ran it through, up to the SSH session.
+        // The sudo and env wrappers MISF ran it through, up to the SSH session. Found by
+        // program, not by the sudo prompt marker: `ssh::execute` takes the marker out of
+        // everything it reads, the `ps` list included.
         let mut top = root;
         while let Some(parent) = by_pid.get(&top.ppid)
-            && parent.args.contains(SUDO_PROMPT)
+            && (matches!(parent.program(), "sudo" | "sudo-rs" | "env")
+                || parent.args.contains(SUDO_PROMPT))
         {
             top = parent;
         }
