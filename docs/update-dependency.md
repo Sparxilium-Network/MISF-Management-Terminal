@@ -1,6 +1,6 @@
 # 更新依賴的步驟
 
-> 最後修改：2026-11-21 ｜ 基於 commit：`816c71c`
+> 最後修改：2026-11-24 ｜ 基於 commit：`5755f29`
 
 本文件是實際操作清單：收到 Dependabot PR、想手動升級某個套件，或 CI 因安全公告失敗時，照這裡的步驟做。各依賴的背景、上游限制與已知例外見 [依賴更新與安全公告](dependency-updates.md)。
 
@@ -11,13 +11,13 @@ cargo install --locked cargo-deny
 cargo install --locked cargo-about --features cli
 ```
 
-`licenses.ps1` 會用到這兩個工具。
+`scripts/licenses.ps1` 會用到這兩個工具。
 
 ## Dependabot 會做什麼、不會做什麼
 
 - `.github/dependabot.yml` 每天檢查 Cargo 與 GitHub Actions。相容的 Cargo 更新合併成一個 `rust-compatible` 群組 PR；超出目前版本需求、必須修改 `Cargo.toml` 的升級會單獨開 PR（例如 rfd 0.17 → 0.18）。
 - 沒有設定 `target-branch`，所以 PR 只會以預設分支 `main` 為目標，`legacy-egui` 不會收到 PR。
-- Dependabot **不會**執行 `./licenses.ps1`。只要 `Cargo.lock` 有改動，PR 的 CI 一定會在授權清單檢查失敗（`licenses/THIRD_PARTY_LICENSES.html is out of date with Cargo.lock`），所以 PR 不能直接合併。
+- Dependabot **不會**執行 `./scripts/licenses.ps1`。只要 `Cargo.lock` 有改動，PR 的 CI 一定會在授權清單檢查失敗（`licenses/THIRD_PARTY_LICENSES.html is out of date with Cargo.lock`），所以 PR 不能直接合併。
 - 因此 Cargo 的 Dependabot PR（分支 `dependabot/cargo/*`）**不跑 CI**：`build-prerelease.yml` 的建置工作以 `github.head_ref` 跳過，PR 上只會看到被略過的檢查。測試與授權檢查改在本機套用時執行（見下方步驟），推送 `main` 後再跑完整 CI。GitHub Actions 版本更新的 PR（`dependabot/github_actions/*`）照常跑 CI，用來確認新版 Action 可用。
 
 ## 套用 Dependabot PR
@@ -36,7 +36,7 @@ cargo install --locked cargo-about --features cli
    - bindgen 的 `syn 3` 被換成 `syn 2`，導致 bindgen 編譯失敗。
    
    差異必須與步驟 2 記下的完全相同；多出來的改動要手動改回，或在 `Cargo.lock` 中直接照 PR 修改。改完執行 `cargo metadata --locked --format-version 1 > $null`，確認鎖檔與 `Cargo.toml` 一致。
-6. **重新產生授權清單**：`./licenses.ps1`。它會先跑 `cargo deny check licenses`，再用 cargo-about 產生 `licenses/THIRD_PARTY_LICENSES.html`，並把 `Cargo.lock` 的雜湊寫進 `licenses/THIRD_PARTY_LICENSES.lock-sha256`。之後若又改了 `Cargo.lock`（例如步驟 5 的修正），要再執行一次。
+6. **重新產生授權清單**：`./scripts/licenses.ps1`。它會先跑 `cargo deny check licenses`，再用 cargo-about 產生 `licenses/THIRD_PARTY_LICENSES.html`，並把 `Cargo.lock` 的雜湊寫進 `licenses/THIRD_PARTY_LICENSES.lock-sha256`。之後若又改了 `Cargo.lock`（例如步驟 5 的修正），要再執行一次。
 7. **完整檢查**：
    ```powershell
    cargo deny --locked check
@@ -49,7 +49,7 @@ cargo install --locked cargo-about --features cli
    - 在 `.cowork/verification/workspace-tests.md` 最上方加一筆：套用了哪些 PR、鎖檔差異、手動改回了什麼、檢查結果與未驗證項目。
    - 只用明確路徑 `git add`，通常是 `Cargo.lock`、有改到的 `Cargo.toml`、`licenses/THIRD_PARTY_LICENSES.html`、`licenses/THIRD_PARTY_LICENSES.lock-sha256` 與驗證紀錄。
    - commit 訊息依專案慣例：英文標題、繁體中文說明。
-9. **打包並實際試用**：`.\package.ps1`，比對 `dist\MISF\misf.exe` 與 `target\release\misf.exe` 的雜湊與修改時間。測試只涵蓋邏輯；跟介面或系統互動有關的依賴要在 app 裡實際操作，例如：
+9. **打包並實際試用**：`.\scripts\package.ps1`，比對 `dist\MISF\misf.exe` 與 `target\release\misf.exe` 的雜湊與修改時間。測試只涵蓋邏輯；跟介面或系統互動有關的依賴要在 app 裡實際操作，例如：
    - rfd：匯入／匯出與 LOG 匯出的檔案對話框。
    - russh：連線真實主機。
    - Slint／winit：視窗、字型與輸入。

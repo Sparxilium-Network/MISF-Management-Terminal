@@ -90,7 +90,7 @@ jobs:
         run: cargo build --locked --release --workspace
 
       - name: Package application and checksums
-        run: ./package.ps1 -SkipBuild -Archive
+        run: ./scripts/package.ps1 -SkipBuild -Archive
 
       - name: Upload distribution
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

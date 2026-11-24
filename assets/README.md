@@ -14,7 +14,7 @@
 
 Windows 使用 `app/build.rs` 與 `winresource` 將 ICO 編入 `misf.exe`，視窗圖示則由 `app/src/main.rs` 直接內嵌 PNG。執行時不需要另外讀取圖示檔。
 
-`package.ps1` 在兩個平台的套件附上本資料夾。Linux 套件另附 `share/applications/org.sparxilium.misf.desktop` 與 `share/icons/hicolor/`，供使用者安裝選單圖示；單純執行 `./misf` 不會修改桌面設定。
+`scripts/package.ps1` 在兩個平台的套件附上本資料夾。Linux 套件另附 `share/applications/org.sparxilium.misf.desktop` 與 `share/icons/hicolor/`，供使用者安裝選單圖示；單純執行 `./misf` 不會修改桌面設定。
 
 Linux 使用者可在解壓後的套件目錄執行以下指令，安裝到自己的帳號。`Exec=misf` 需要 `~/.local/bin` 已在 `PATH` 中；系統的圖示或選單快取可能需要重新登入才更新。
 

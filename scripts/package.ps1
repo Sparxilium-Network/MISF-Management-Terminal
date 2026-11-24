@@ -1,6 +1,8 @@
 param([switch]$SkipBuild, [switch]$Archive)
 $ErrorActionPreference = 'Stop'
-Push-Location -LiteralPath $PSScriptRoot
+# This script lives in scripts/; paths below are relative to the repository root.
+$root = Split-Path -Parent $PSScriptRoot
+Push-Location -LiteralPath $root
 try {
     # Fail before building if the dependency license list does not match Cargo.lock.
     & "$PSScriptRoot/licenses.ps1" -Check
@@ -11,8 +13,8 @@ try {
     $platformName = if ($onWindows) { 'windows-x86_64' } else { 'linux-x86_64' }
     # Archive staging must not overwrite a locally running portable app.
     $outputPath = if ($Archive) {
-        Join-Path $PSScriptRoot "dist/package-$platformName"
-    } else { Join-Path $PSScriptRoot 'dist/MISF' }
+        Join-Path $root "dist/package-$platformName"
+    } else { Join-Path $root 'dist/MISF' }
     New-Item -ItemType Directory -Path $outputPath -Force | Out-Null
     Copy-Item -LiteralPath "target/release/$binaryName" -Destination "$outputPath/$binaryName"
     Copy-Item -LiteralPath 'README.md' -Destination $outputPath
@@ -48,7 +50,7 @@ try {
     }
     Write-Output "Portable app: $outputPath/$binaryName"
     if ($Archive) {
-        $archiveBase = Join-Path $PSScriptRoot "dist/MISF-Management-Terminal-$platformName"
+        $archiveBase = Join-Path $root "dist/MISF-Management-Terminal-$platformName"
         # Only package the explicit application files, never other contents of dist/MISF.
         $packageFiles = @($binaryName, 'LICENSE', 'README.md', 'THIRD_PARTY_NOTICES.md', 'docs', 'licenses', 'assets')
         if (-not $onWindows) { $packageFiles += 'share' }

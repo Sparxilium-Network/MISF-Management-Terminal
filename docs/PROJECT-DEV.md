@@ -1,6 +1,6 @@
 # MISF Management Terminal 開發說明
 
-> 最後修改：2026-11-21 ｜ 基於 commit：`816c71c`
+> 最後修改：2026-11-24 ｜ 基於 commit：`5755f29`
 
 一般使用方式見 [README](../README.md) 與 [使用指南](user-guide.md)。本文件是開發文件的入口，給開發者與維護者，記錄建置、儲存格式、安全設計細節與測試方式。
 
@@ -29,7 +29,7 @@
 - 只以明確路徑 `git add` 相關檔案，不使用 `git add -A`／`git add .`；保留與任務無關的既有變更。建置產物依 `.gitignore` 排除。
 - commit message 標題行寫英文，空一行後寫繁體中文說明。
 - 禁止 `git push`（含 force push、推送 tag）或以其他工具、API 把本機變更送到遠端，也不發布套件、建立 release 或觸發部署用的 workflow；除非使用者明確要求，且該要求只對該次操作有效。
-- 修改並提交後執行 `.\package.ps1`，確認 `dist\MISF\misf.exe` 為最新建置再交付。`package.ps1` 不會先清空 `dist\MISF\docs`，文件改名或刪除後需手動移除舊檔。
+- 修改並提交後執行 `.\scripts\package.ps1`，確認 `dist\MISF\misf.exe` 為最新建置再交付。`scripts/package.ps1` 不會先清空 `dist\MISF\docs`，文件改名或刪除後需手動移除舊檔。
 - AI Agent 的工作紀錄（已確認的決策、測試與檢查結果、推論過程）放在 [`.cowork/`](../.cowork/INDEX.md)，不寫進 `docs/`。
 
 ## 結構
@@ -44,14 +44,14 @@
 開發需要 Rust 1.95 以上、Git 與該作業系統的原生建置工具（Windows 使用 MSVC）。
 
 ```powershell
-.\run.ps1
+.\scripts\run.ps1
 ```
 
 建置與產生可攜式 Windows 執行檔：
 
 ```powershell
-.\build.ps1
-.\package.ps1
+.\scripts\build.ps1
+.\scripts\package.ps1
 ```
 
 打包後直接執行 `dist/MISF/misf.exe`。
@@ -67,13 +67,13 @@ Linux／macOS 可使用 `cargo run --locked -p misf`，須在對應平台建置�
 - Windows：`MISF-Management-Terminal-windows-x86_64.zip`。
 - Linux：`MISF-Management-Terminal-linux-x86_64.tar.gz`。這是原生動態連結套件，需要圖形桌面及相容的 glibc、OpenGL、X11／Wayland、xkbcommon、fontconfig／FreeType 等系統函式庫，檔案對話框經由 XDG Desktop Portal；不是 AppImage，也不保證支援較舊發行版。
 - 每個套件內附 README、`docs/`、本專案 AGPL-3.0 授權全文 `LICENSE`，以及第三方授權（`THIRD_PARTY_NOTICES.md`、`licenses/`：所有編入執行檔的 Rust 相依套件授權全文、LUKSbox 授權、Skia 授權與內嵌字型 Noto Sans TC 的 OFL 授權；Slint 依 GPL-3.0-only 使用）；另附 SHA-256 校驗檔。
-- 相依套件授權清單 `licenses/THIRD_PARTY_LICENSES.html` 由 `./licenses.ps1` 以 cargo-about 依 `Cargo.lock` 產生，並先以 `cargo deny check licenses` 依 `deny.toml` 確認沒有與 AGPL 不相容的授權；更新相依後須重新執行並提交。清單與 `Cargo.lock` 不一致時，`package.ps1` 會拒絕打包。
+- 相依套件授權清單 `licenses/THIRD_PARTY_LICENSES.html` 由 `./scripts/licenses.ps1` 以 cargo-about 依 `Cargo.lock` 產生，並先以 `cargo deny check licenses` 依 `deny.toml` 確認沒有與 AGPL 不相容的授權；更新相依後須重新執行並提交。清單與 `Cargo.lock` 不一致時，`scripts/package.ps1` 會拒絕打包。
 
 `main`／手動執行（選 `main`）使用 `dev-<run_number>.<run_attempt>-<短 commit>` 作為版本標籤；推送 `v*` 標籤時沿用該標籤。`app/build.rs` 在 GitHub Actions 中以同一規則產生名稱並編進執行檔，所以設定頁「關於」與 LOG 匯出顯示的版本與 Release 名稱相同（例如 `dev-27.1-825ec3b`）；本機建置顯示 `v<Cargo 版本>`。只重跑失敗的發布工作時，`run_attempt` 會加一而沿用舊的執行檔，兩者會差一個重跑次數；本專案不採用這種重跑方式。即使標籤為 `v1.0.0`，本流程仍只發布 Pre-release。已公開的同名版本不會被重跑覆寫；上傳未完成的草稿可重跑補齊。
 
 建置環境使用 GitHub 的 `ubuntu-latest`／`windows-latest` 和每次安裝的最新 **Rust stable**（不是 nightly）。Actions 使用目前最新穩定版的固定 commit；Dependabot 每日檢查 Actions 與 Cargo 依賴並提出更新 PR，通過驗證及合併後才進入發布。套件使用已提交的 `Cargo.lock` 與 `--locked`，不在發布時偷偷改變依賴；LUKSbox 仍固定在已驗證的版本。Linux 的 glibc 相容性下限會隨 `ubuntu-latest` 映像更新。
 
-本機也可用 PowerShell 7 在對應平台執行 `./package.ps1 -Archive`，產生相同壓縮檔及校驗檔。GitHub Actions 僅發布套件，不會提交原始碼；本機操作仍遵循上方[專案慣例](#專案慣例)的禁止 push 規則。
+本機也可用 PowerShell 7 在對應平台執行 `./scripts/package.ps1 -Archive`，產生相同壓縮檔及校驗檔。GitHub Actions 僅發布套件，不會提交原始碼；本機操作仍遵循上方[專案慣例](#專案慣例)的禁止 push 規則。
 
 ## 資料儲存
 
@@ -143,7 +143,7 @@ GUI 與 JSON CLI 都支援 `--debug.dir`（也支援 `--debug.dir <目錄>` 或 
 ```powershell
 .\misf.exe --debug.dir="C:\temp\misf-test"
 cargo run --locked -p misf -- --debug.dir="C:\temp\misf-test"
-.\run.ps1 --debug.dir="C:\temp\misf-test"
+.\scripts\run.ps1 --debug.dir="C:\temp\misf-test"
 ```
 
 ```sh

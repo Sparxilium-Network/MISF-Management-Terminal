@@ -29,7 +29,7 @@ trademark ownership.
 Every other crate compiled into `misf` for x86_64 Windows and Linux is listed,
 with its version, repository, and full license text, in
 `licenses/THIRD_PARTY_LICENSES.html`. That file is generated from `Cargo.lock`
-by cargo-about (`./licenses.ps1`); packaging refuses to run when it is out of
+by cargo-about (`./scripts/licenses.ps1`); packaging refuses to run when it is out of
 date. Where a crate offers a choice of licenses (for example `MIT OR Apache-2.0`),
 MISF uses it under a license compatible with the GNU AGPL v3, checked by
 `cargo deny check licenses` against `deny.toml`.

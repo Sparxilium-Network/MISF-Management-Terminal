@@ -1,5 +1,5 @@
 # cargo-about configuration for licenses/THIRD_PARTY_LICENSES.html.
-# Regenerate with ./licenses.ps1 after any Cargo.lock change.
+# Regenerate with ./scripts/licenses.ps1 after any Cargo.lock change.
 # Order is preference: for "A OR B" crates the first listed license is used.
 # MIT carries each crate's own copyright line and has no NOTICE requirement.
 accepted = [

@@ -1,5 +1,16 @@
 # 全工作區檢查結果
 
+## 2026-11-24（四個 PowerShell 腳本搬到 `scripts/`，於 `main`）
+
+- 以 `git mv` 把 `build.ps1`、`run.ps1`、`package.ps1`、`licenses.ps1` 搬到 `scripts/`；腳本改以 `Split-Path -Parent $PSScriptRoot` 為專案根目錄，`package.ps1` 呼叫同資料夾的另外兩個腳本。
+- 同步更新 CI（`./scripts/package.ps1 -SkipBuild -Archive`）、`docs/PROJECT-DEV.md`、`docs/update-dependency.md`、`docs/dependency-updates.md`、`THIRD_PARTY_NOTICES.md`、`about.toml`、`assets/README.md` 的路徑與 `licenses.ps1` 的錯誤訊息。
+- 全部從 scratchpad 目錄（不是專案根目錄）執行，確認根目錄判斷正確：
+  - `scripts\licenses.ps1 -Check`：通過；`scripts\licenses.ps1`：cargo deny licenses 通過，重新產生的 HTML 與戳記和已提交的相同。
+  - `scripts\build.ps1`：debug 建置成功。
+  - `scripts\run.ps1 --help`：參數有傳到 `misf.exe`，印出說明後正常結束。
+  - `scripts\package.ps1`：授權檢查、release 建置、複製成功；`dist\MISF\misf.exe` 與 `target\release\misf.exe` 時間 2026-11-21 19:24:59、雜湊相同（D858F5A8…BABBE，程式未變）。
+- 未驗證：`-Archive` 會覆寫 `dist` 中 11/6 的舊壓縮檔，沒有執行；CI 的 `-SkipBuild -Archive` 要推送後才會實際跑到新路徑。
+
 ## 2026-11-21（APT 鎖：MISF 遺留程序判斷與 dpkg --audit 錯誤，於 `main`）
 
 - 問題（使用者紀錄 `misf-log-20261121-191601.txt`，muti-misc）：批次升級在 ubuntu-drivers-common 的 postinst 等 `systemctl restart gpu-manager.service`（gpu-manager 為 D 狀態）時卡住，使用者按停止。之後的外層 sudo 父程序已是 1，卻被判為「另一個 MISF 作業正在執行」，取消工作、dpkg 結束後 apt-get 仍掛在 needrestart，但沒有提供「結束遺留程序」。
