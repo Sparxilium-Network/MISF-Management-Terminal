@@ -9,7 +9,7 @@
   - `scripts\build.ps1`：debug 建置成功。
   - `scripts\run.ps1 --help`：參數有傳到 `misf.exe`，印出說明後正常結束。
   - `scripts\package.ps1`：授權檢查、release 建置、複製成功；`dist\MISF\misf.exe` 與 `target\release\misf.exe` 時間 2026-11-21 19:24:59、雜湊相同（D858F5A8…BABBE，程式未變）。
-- 未驗證：`-Archive` 會覆寫 `dist` 中 11/6 的舊壓縮檔，沒有執行；CI 的 `-SkipBuild -Archive` 要推送後才會實際跑到新路徑。
+- `scripts\package.ps1 -SkipBuild -Archive`（使用者同意覆寫舊壓縮檔）：成功；`.sha256` 與壓縮檔雜湊相符（608541B7…9920），壓縮檔內 `misf.exe` 雜湊與 release 相同。但本機暫存資料夾 `dist\package-windows-x86_64` 自 10/31 沿用，`docs` 不會先清空，壓縮檔帶進 4 份已不存在的舊文件（`daybrake-poc-brief.md`、`DEV.md`、`luksbox-evaluation.md`、`sqlite-security.md`）；CI 每次從乾淨環境開始，不受影響。CI 的新路徑要推送後才會實際執行。
 
 ## 2026-11-21（APT 鎖：MISF 遺留程序判斷與 dpkg --audit 錯誤，於 `main`）
 
