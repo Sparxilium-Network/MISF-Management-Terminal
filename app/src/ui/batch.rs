@@ -1,7 +1,8 @@
-//! The batch view: one package manager's ready hosts, their table, and batch requests.
+//! The batch tabs: one per package manager, each with that manager's hosts, their table
+//! and batch requests.
 
 use super::{
-    App, AppWindow, BatchCell, BatchColumnView, BatchRowView, BatchState, Ctx, ManagerChoice,
+    App, AppWindow, BatchCell, BatchColumnView, BatchRowView, BatchState, Ctx,
     app::{Tool, View},
     format::{
         batch_managers, batch_ready, format_time, manager_label, operation_label, pending_count,
@@ -16,6 +17,7 @@ use crate::{
 use chrono::DateTime;
 use misf_core::{
     audit::{Action, Outcome},
+    model::Host,
     package_manager,
 };
 use serde_json::json;
@@ -86,6 +88,31 @@ impl App {
         (order, headings)
     }
 
+    /// The open tab's table: hosts of its package manager in table order, and the headings
+    /// of the groups that have any.
+    pub fn batch_table(&self, t: Translator) -> (Vec<usize>, Vec<Heading>) {
+        let (order, headings) = self.batch_order(t);
+        let ours = |h: &Host| h.manager() == self.batch_manager;
+        let mut table = Vec::new();
+        let mut kept = Vec::new();
+        let mut next = headings.into_iter().peekable();
+        for (row, &index) in order.iter().enumerate() {
+            if let Some((_, name, ids)) = next.next_if(|(at, ..)| *at == row) {
+                let ids: Vec<String> = ids
+                    .into_iter()
+                    .filter(|id| self.hosts.iter().any(|h| h.id == *id && ours(h)))
+                    .collect();
+                if !ids.is_empty() {
+                    kept.push((table.len(), name, ids));
+                }
+            }
+            if ours(&self.hosts[index]) {
+                table.push(index);
+            }
+        }
+        (table, kept)
+    }
+
     /// Ready hosts of the chosen package manager.
     pub fn batch_ready_ids(&self) -> BTreeSet<String> {
         self.hosts
@@ -98,7 +125,7 @@ impl App {
     /// The selection in display order, never the set's order, so a request matches what
     /// the user sees.
     pub fn batch_targets(&self) -> Vec<String> {
-        let (order, _) = self.batch_order(self.t());
+        let (order, _) = self.batch_table(self.t());
         order
             .iter()
             .map(|&i| &self.hosts[i])
@@ -152,7 +179,7 @@ impl App {
 
     /// Picks the previous (-1) or next (+1) host in the table's order.
     pub fn step_batch_host(&mut self, step: isize) {
-        let (order, _) = self.batch_order(self.t());
+        let (order, _) = self.batch_table(self.t());
         let Some(index) = order
             .iter()
             .position(|&i| self.hosts[i].id == self.selected)
@@ -235,16 +262,11 @@ fn rows(app: &App, t: Translator, order: &[usize], headings: &[Heading]) -> Vec<
         let h = &app.hosts[index];
         // Only display fields are copied out of the host list; credentials stay in place.
         let reason = if h.fingerprint.is_empty() {
-            t.get("batch.untrusted").to_owned()
+            t.get("batch.untrusted")
         } else if !batch_ready(h) {
-            t.get("batch.undetected").to_owned()
-        } else if h.manager() != app.batch_manager {
-            t.format(
-                "batch.other_manager",
-                &[("manager", manager_label(t, h.manager()).into())],
-            )
+            t.get("batch.undetected")
         } else {
-            String::new()
+            ""
         };
         let result = h.last_check.as_ref();
         let success = result.filter(|r| r.status == "success");
@@ -341,24 +363,20 @@ pub fn push(app: &mut App, w: &AppWindow) {
     let t = app.t();
     let state = w.global::<BatchState>();
     app.prune_batch();
-    let managers = batch_managers(&app.hosts);
-    state.set_managers(ModelRc::new(VecModel::from(
-        managers
-            .iter()
-            .map(|(id, count)| ManagerChoice {
-                id: id.clone().into(),
-                label: format!("{} ({count})", manager_label(t, id)).into(),
-                selected: app.batch_manager == *id,
-            })
-            .collect::<Vec<_>>(),
-    )));
     let manager = [("manager", manager_label(t, &app.batch_manager).to_owned())];
+    let none = app.batch_manager.is_empty();
+    state.set_no_manager(none);
+    state.set_title(if none {
+        t.get("batch.title").into()
+    } else {
+        t.format("batch.title_manager", &manager).into()
+    });
     let commands = |mode| {
         package_manager::Manager::from_id(&app.batch_manager)
             .map(|m| package_manager::manager_commands(m, false, mode))
             .unwrap_or_default()
     };
-    let (order, headings) = app.batch_order(t);
+    let (order, headings) = app.batch_table(t);
     let selected = app.batch_targets();
     let count = [("count", selected.len().to_string()), manager[0].clone()];
     state.set_selected_text(t.format("batch.selected", &count).into());
@@ -425,8 +443,6 @@ pub fn push(app: &mut App, w: &AppWindow) {
 pub fn wire(ctx: &Ctx, w: &AppWindow) {
     let state = w.global::<BatchState>();
     let c = ctx.clone();
-    state.on_choose_manager(move |id| c.update(|app| app.choose_batch_manager(&id)));
-    let c = ctx.clone();
     state.on_select_all(move || {
         c.update(|app| {
             app.batch_selected = app.batch_ready_ids();
@@ -453,7 +469,7 @@ pub fn wire(ctx: &Ctx, w: &AppWindow) {
     let c = ctx.clone();
     state.on_toggle_group(move |heading| {
         c.update(|app| {
-            let (_, headings) = app.batch_order(app.t());
+            let (_, headings) = app.batch_table(app.t());
             if let Some((_, _, ids)) = heading.parse::<usize>().ok().and_then(|i| headings.get(i)) {
                 let ids = ids.clone();
                 app.toggle_batch_group(&ids);

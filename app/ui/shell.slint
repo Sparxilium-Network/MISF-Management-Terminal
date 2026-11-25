@@ -21,13 +21,17 @@ export global Shell {
     in property <string> debug-notice;
     // 0 the host page, 1 the batch view.
     in property <int> view;
-    in property <string> batch-tab;
+    // The host page's tab, then one batch tab per package manager.
+    in property <[string]> tabs;
+    in property <[int]> tab-ids;
+    in property <int> current-tab;
     callback settings();
     callback lock();
     callback unlock();
     callback enable-vault();
     callback manage-keys();
     callback review-plaintext();
-    callback view-chosen(view: int);
+    // 0 the host page; from 1 up, that batch tab.
+    callback view-chosen(tab: int);
     callback stop();
 }

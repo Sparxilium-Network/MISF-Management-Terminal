@@ -3,8 +3,9 @@
 use super::{
     App, AppWindow, CloseState, Ctx, HistoryLine, Shell, StopState, WindowChrome,
     app::{StopPrompt, VaultMode, View},
+    format::{batch_managers, manager_label},
 };
-use slint::{ComponentHandle, Model, ModelRc, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 pub fn push(app: &mut App, w: &AppWindow) {
     let t = app.t();
@@ -59,13 +60,42 @@ pub fn push(app: &mut App, w: &AppWindow) {
         View::Host => 0,
         View::Batch => 1,
     });
-    shell.set_batch_tab(
-        t.format(
+    // One batch tab per package manager; with none yet, one tab explains why.
+    app.prune_batch();
+    let managers = batch_managers(&app.hosts);
+    let mut tabs = vec![t.get("view.host").to_owned()];
+    if managers.is_empty() {
+        tabs.push(t.get("view.batch_none").to_owned());
+    }
+    for (id, _) in &managers {
+        // Switching tabs clears the selection, so only the open tab has one.
+        let count = if *id == app.batch_manager {
+            app.batch_selected.len()
+        } else {
+            0
+        };
+        tabs.push(t.format(
             "view.batch",
-            &[("count", app.batch_selected.len().to_string())],
-        )
-        .into(),
-    );
+            &[
+                ("manager", manager_label(t, id).to_owned()),
+                ("count", count.to_string()),
+            ],
+        ));
+    }
+    let current = match app.view {
+        View::Host => 0,
+        View::Batch => managers
+            .iter()
+            .position(|(id, _)| *id == app.batch_manager)
+            .map_or(1, |i| i + 1),
+    };
+    let ids: Vec<i32> = (0..tabs.len() as i32).collect();
+    let labels: Vec<SharedString> = tabs.into_iter().map(Into::into).collect();
+    if shell.get_tabs().iter().ne(labels.iter().cloned()) {
+        shell.set_tabs(ModelRc::new(VecModel::from(labels)));
+        shell.set_tab_ids(ModelRc::new(VecModel::from(ids)));
+    }
+    shell.set_current_tab(current as i32);
 }
 
 pub fn wire(ctx: &Ctx, w: &AppWindow) {
@@ -100,9 +130,17 @@ pub fn wire(ctx: &Ctx, w: &AppWindow) {
     let c = ctx.clone();
     shell.on_review_plaintext(move || c.update(App::check_plaintext_copy));
     let c = ctx.clone();
-    shell.on_view_chosen(move |view| {
+    shell.on_view_chosen(move |tab| {
         c.update(|app| {
-            app.set_view(if view == 1 { View::Batch } else { View::Host });
+            let Some(index) = usize::try_from(tab).ok().and_then(|t| t.checked_sub(1)) else {
+                app.set_view(View::Host);
+                return;
+            };
+            if let Some((id, _)) = batch_managers(&app.hosts).get(index) {
+                let id = id.clone();
+                app.choose_batch_manager(&id);
+            }
+            app.set_view(View::Batch);
         })
     });
     // Closing the main window ends the app, even with the settings window open. While

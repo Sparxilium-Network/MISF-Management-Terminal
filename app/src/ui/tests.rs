@@ -992,12 +992,23 @@ fn pages_respond_to_clicks() {
     main.window()
         .set_size(slint::LogicalSize::new(1280.0, 820.0));
 
-    // A double-click on a host in the batch table opens its page.
-    ctx.update(|app| {
-        app.set_view(View::Batch);
-    });
+    // Each package manager has its own batch tab, holding only its hosts.
+    let tab = |manager: &str| {
+        t.format(
+            "view.batch",
+            &[("manager", manager.into()), ("count", "0".into())],
+        )
+    };
+    first(&main, &tab("APT")).invoke_accessible_default_action();
     let rows = main.global::<BatchState>().get_rows();
-    assert!(rows.iter().any(|r| r.id == "lab"));
+    assert_eq!(ctx.app.borrow().view, View::Batch);
+    assert!(rows.iter().any(|r| r.id == "web") && !rows.iter().any(|r| r.id == "lab"));
+    first(&main, &tab("DNF")).invoke_accessible_default_action();
+    assert_eq!(ctx.app.borrow().batch_manager, "dnf");
+
+    // A double-click on a host in the batch table opens its page.
+    let rows = main.global::<BatchState>().get_rows();
+    assert!(rows.iter().any(|r| r.id == "lab") && !rows.iter().any(|r| r.id == "web"));
     let lab = ElementHandle::find_by_accessible_label(&main, "lab-01")
         // The sidebar shows the name too; the table is right of it.
         .find(|e| e.size().width > 0.0 && e.absolute_position().x > 300.0)

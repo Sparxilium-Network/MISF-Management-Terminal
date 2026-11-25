@@ -1,14 +1,8 @@
 // The batch view: choose hosts of one package manager and run checks or upgrades on them.
 import { Button, ScrollView } from "std-widgets.slint";
 import { Theme, T } from "theme.slint";
-import { HintData, HintArea, ColorButton, TextButton, CheckMark, Card } from "widgets.slint";
+import { HintData, HintArea, ColorButton, CheckMark, Card } from "widgets.slint";
 import { ResultPanel } from "result_panel.slint";
-
-export struct ManagerChoice {
-    id: string,
-    label: string,
-    selected: bool,
-}
 
 export struct BatchColumnView {
     label: string,
@@ -39,7 +33,10 @@ export struct BatchRowView {
 }
 
 export global BatchState {
-    in property <[ManagerChoice]> managers;
+    // "APT batch package operations": the package manager this tab holds.
+    in property <string> title;
+    // No host can join a batch yet.
+    in property <bool> no-manager;
     in property <string> selected-text;
     in property <string> check-label;
     in property <string> upgrade-label;
@@ -59,7 +56,6 @@ export global BatchState {
     in property <string> detail-title;
     in property <bool> previous-enabled;
     in property <bool> next-enabled;
-    callback choose-manager(id: string);
     callback select-all();
     callback clear();
     callback check();
@@ -279,7 +275,7 @@ export component BatchTable {
 export component BatchPage inherits VerticalLayout {
     spacing: 8px;
     Text {
-        text: T.get("batch.title");
+        text: BatchState.title;
         font-size: 29px;
         font-weight: 700;
         color: Theme.ink;
@@ -289,25 +285,10 @@ export component BatchPage inherits VerticalLayout {
         color: Theme.muted;
         wrap: word-wrap;
     }
-    HorizontalLayout {
-        spacing: 8px;
-        alignment: start;
-        padding-top: 4px;
-        Text {
-            text: T.get("batch.manager");
-            color: Theme.ink;
-            vertical-alignment: center;
-        }
-        if BatchState.managers.length == 0: Text {
-            text: T.get("batch.no_manager");
-            color: Theme.muted;
-            vertical-alignment: center;
-        }
-        for manager in BatchState.managers: TextButton {
-            text: manager.label;
-            selected: manager.selected;
-            clicked => { BatchState.choose-manager(manager.id); }
-        }
+    if BatchState.no-manager: Text {
+        text: T.get("batch.no_manager");
+        color: Theme.muted;
+        wrap: word-wrap;
     }
     HorizontalLayout {
         spacing: 10px;

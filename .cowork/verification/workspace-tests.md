@@ -1,5 +1,15 @@
 # 全工作區檢查結果
 
+## 2026-11-25（批次作業依套件管理器分頁，分支 `feat/package-separation`，基於 `12ec9d2`）
+
+- 使用者要求批次作業依套件管理器分成「APT 批次作業」「DNF 批次作業」等分頁。上方分頁改由程式依可批次操作的套件管理器產生（主機詳情、各管理器的批次分頁，依主機數多到少）；沒有任何可批次的主機時只有一個「批次作業」分頁。
+- 批次頁移除「套件管理器：」切換按鈕，標題改為「APT 批次套件作業」等；表格、全選、上一台／下一台與分類標題只含該分頁的主機（`App::batch_table`）。切換分頁沿用原本行為，會清除勾選。移除不再用到的 `batch.manager`、`batch.other_manager` 字串。
+- 支援的套件管理器只有 APT、DNF、pacman、apk；FreeBSD pkg 目前不支援，不會有 pkg 分頁。尚未偵測套件管理器的主機只在沒有任何可批次主機時出現在「批次作業」分頁。
+- `app/src/ui/tests.rs` 的 `pages_respond_to_clicks` 原本在 APT 批次表中找 DNF 主機 lab-01；改為點「APT 批次作業」分頁確認只有 web、再點「DNF 批次作業」分頁後找 lab-01。
+- `cargo fmt --all`、`cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`：通過。
+- `cargo test --locked --workspace`：全部通過（22、37、72、33 項）。
+- 以 `MISF_FIXTURE=1 MISF_OPEN_BATCH=1` 擷取：分頁顯示「主機詳情｜APT 批次作業（已選 1）｜DNF 批次作業（已選 0）」，APT 表格只有 web-01、db-01、lab。
+
 ## 2026-11-24（四個 PowerShell 腳本搬到 `scripts/`，於 `main`）
 
 - 以 `git mv` 把 `build.ps1`、`run.ps1`、`package.ps1`、`licenses.ps1` 搬到 `scripts/`；腳本改以 `Split-Path -Parent $PSScriptRoot` 為專案根目錄，`package.ps1` 呼叫同資料夾的另外兩個腳本。

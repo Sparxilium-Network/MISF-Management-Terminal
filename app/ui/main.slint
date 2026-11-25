@@ -9,7 +9,7 @@ import { Shell, HistoryLine } from "shell.slint";
 import { Sidebar, SidebarState, SidebarRow } from "sidebar.slint";
 import { HostPage, HostState, AdvancedMenu, MoreMenu } from "host_page.slint";
 import { ResultPanel, ResultState, InfoLine } from "result_panel.slint";
-import { BatchPage, BatchState, DetailHeading, ManagerChoice, BatchColumnView, BatchCell, BatchRowView } from "batch_page.slint";
+import { BatchPage, BatchState, DetailHeading, BatchColumnView, BatchCell, BatchRowView } from "batch_page.slint";
 import { EditorDialog, EditorState } from "dialogs/editor.slint";
 import { KeysDialog, KeysState, KeyView } from "dialogs/keys.slint";
 import { VaultDialog, VaultState, SlotView } from "dialogs/vault.slint";
@@ -22,7 +22,7 @@ import { TerminalPanel, TerminalState, TerminalTab, TerminalLine, ShellRow, Shel
 import { ToolWindow, ToolStripe, DockHandle, DockTitle } from "tool_window.slint";
 import { WindowChrome, DragArea, MenuItem, CaptionButtons, WindowEdges } from "title_bar.slint";
 
-export { HintData, Theme, T, Tip, Clip, MenuLine, PopMenu, Shell, HistoryLine, SidebarState, SidebarRow, HostState, ResultState, InfoLine, BatchState, ManagerChoice, BatchColumnView, BatchCell, BatchRowView, EditorState, KeysState, KeyView, VaultState, SlotView, UpgradeState, KeptBackState, KeptBackHost, KeptBackWindow, KeptBackDetails, RebootState, AptLockState, AptFixView, BatchFailureState, TrustState, DeleteState, GroupState, PlaintextState, SchemaState, CloseState, StopState, ErrorState, SettingsWindow, SettingsState, TreeRow, ColumnToggle, TerminalState, TerminalTab, TerminalLine, ShellRow, ShellRun, ToolWindow, WindowChrome }
+export { HintData, Theme, T, Tip, Clip, MenuLine, PopMenu, Shell, HistoryLine, SidebarState, SidebarRow, HostState, ResultState, InfoLine, BatchState, BatchColumnView, BatchCell, BatchRowView, EditorState, KeysState, KeyView, VaultState, SlotView, UpgradeState, KeptBackState, KeptBackHost, KeptBackWindow, KeptBackDetails, RebootState, AptLockState, AptFixView, BatchFailureState, TrustState, DeleteState, GroupState, PlaintextState, SchemaState, CloseState, StopState, ErrorState, SettingsWindow, SettingsState, TreeRow, ColumnToggle, TerminalState, TerminalTab, TerminalLine, ShellRow, ShellRun, ToolWindow, WindowChrome }
 
 // This run's past results and errors, newest first: the history tool window.
 component HistoryPanel inherits Rectangle {
@@ -287,9 +287,9 @@ component Workspace inherits Rectangle {
         spacing: 8px;
         if Shell.locked: LockedPage { }
         if !Shell.locked: Tabs {
-            labels: [T.get("view.host"), Shell.batch-tab];
-            ids: [0, 1];
-            current: Shell.view;
+            labels: Shell.tabs;
+            ids: Shell.tab-ids;
+            current: Shell.current-tab;
             chosen(id) => { Shell.view-chosen(id); }
         }
         // A page fills the room it gets; when a tool window leaves it less than the page
