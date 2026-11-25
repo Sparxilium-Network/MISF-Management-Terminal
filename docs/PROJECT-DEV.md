@@ -1,6 +1,6 @@
 # MISF Management Terminal 開發說明
 
-> 最後修改：2026-11-24 ｜ 基於 commit：`5755f29`
+> 最後修改：2026-11-25 ｜ 基於 commit：`11ac0fb`
 
 一般使用方式見 [README](../README.md) 與 [使用指南](user-guide.md)。本文件是開發文件的入口，給開發者與維護者，記錄建置、儲存格式、安全設計細節與測試方式。
 
@@ -144,7 +144,10 @@ GUI 與 JSON CLI 都支援 `--debug.dir`（也支援 `--debug.dir <目錄>` 或 
 .\misf.exe --debug.dir="C:\temp\misf-test"
 cargo run --locked -p misf -- --debug.dir="C:\temp\misf-test"
 .\scripts\run.ps1 --debug.dir="C:\temp\misf-test"
+.\scripts\run-debug.ps1
 ```
+
+`scripts/run-debug.ps1` 以 debug 模式從原始碼執行，預設使用專案內 git 忽略的 `.test-data/debug-profile`（不存在時自動建立）；`-Dir <目錄>` 改用其他目錄（相對路徑以專案根目錄為準），`-AllowPasskey` 加上 `--debug.allow-passkey`，其餘參數照樣傳給 MISF，例如 `.\scripts\run-debug.ps1 -Dir C:\temp\misf-test --help`。
 
 ```sh
 ./misf --debug.dir=/tmp/misf-test
