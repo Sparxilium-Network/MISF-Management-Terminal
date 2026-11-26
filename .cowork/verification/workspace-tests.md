@@ -1,5 +1,17 @@
 # 全工作區檢查結果
 
+## 2026-11-26（批次表欄位順序可自訂，分支 `feat/package-separation`，基於 `3275ecd`）
+
+- 使用者要求批次作業表頭的順序可以自訂，並選擇兩種方式都要、主機欄也可移動。
+- `BatchColumns` 新增 `order`（全部 12 欄的順序，含隱藏欄位），存在 `ui-settings.json` 的 `batch_columns.order`；`visible()` 依此順序。讀檔時忽略未知或重複的代碼，缺少的欄位放回預設順序中前一欄的後面。
+- 批次表：按住欄名拖曳超過 6 點才開始移動，藍線標出放開後的位置，放開時 `column-move` 呼叫 `move_visible` 並儲存；分隔線的欄寬拖曳不受影響。
+- 設定 › 偏好設定 › 批次作業：欄位改為依表格順序一列一個，每列有勾選與 ↑／↓（`shift`，與相鄰欄位交換，隱藏欄位也算），新增「重設欄位順序」。
+- 以臨時單元測試確認 `move_visible`（無效位置不動、移到中間、移到最後）、`shift` 的邊界、JSON 往返與缺漏欄位補回位置；測試未提交。
+- `cargo fmt --all`、`cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`：通過。
+- `cargo test --locked --workspace`：全部通過（22、37、72、33 項）。
+- 以 `MISF_FIXTURE=1` 擷取：自訂順序（檢查狀態、待更新套件、主機…）的 APT 批次表正確顯示；設定頁列出 12 欄，第一欄的 ↑ 與最後一欄的 ↓ 停用。
+- 未驗證：表頭拖曳只用程式邏輯確認，未以真實滑鼠操作，也沒有拖曳中的截圖。
+
 ## 2026-11-26（russh 0.65.4、url 2.5.9，分支 `feat/package-separation`，基於 `f345f21`）
 
 - 套用 Dependabot PR #11（rust-compatible 群組）：russh 0.65.2 → 0.65.4，含多項客戶端安全修正；不再依賴 generic-array 1.4.5。`cargo update -p russh --precise 0.65.4` 又把無關的 windows-sys（0.61.2 → 0.59.0／0.48.0）與 getrandom（0.4.3 → 0.3.4）換成舊版；本機鎖檔與 PR 的基底 `f89dc2a` 完全相同，所以改為直接取用 PR 的 `Cargo.lock`，差異與 PR 一致（23 行）。`cargo tree --locked -i rsa` 仍找不到 rsa。提交 `1dd9c7d`。

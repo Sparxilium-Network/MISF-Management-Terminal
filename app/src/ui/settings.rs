@@ -4,7 +4,7 @@ use super::{
     App, ColumnToggle, Ctx, SettingsState, SettingsWindow, TreeRow,
     app::{SettingsPage, VaultMode},
     logging::export_log,
-    texts,
+    sync_rows, texts,
     vault::choose_backup,
 };
 use crate::{
@@ -159,6 +159,19 @@ impl App {
         self.preferences_changed(before);
     }
 
+    /// Moves column `index` (into [`BatchColumn::ALL`]) one place left or right.
+    pub fn shift_batch_column(&mut self, index: usize, earlier: bool) {
+        let before = self.preferences;
+        self.preferences.batch_columns.shift(index, earlier);
+        self.preferences_changed(before);
+    }
+
+    pub fn reset_column_order(&mut self) {
+        let before = self.preferences;
+        self.preferences.batch_columns.reset_order();
+        self.preferences_changed(before);
+    }
+
     /// Saves changed preferences and records language and appearance changes.
     fn preferences_changed(&mut self, before: crate::preferences::Preferences) {
         if self.preferences == before {
@@ -272,21 +285,22 @@ pub fn push(app: &mut App, w: &SettingsWindow) {
     state.set_batch_order(position(
         BatchOrder::ALL.iter().position(|o| *o == prefs.batch_order),
     ));
-    let toggles: Vec<ColumnToggle> = BatchColumn::ALL
+    // In table order, hidden columns included, so they can be moved before being shown.
+    let order = prefs.batch_columns.order;
+    let toggles: Vec<ColumnToggle> = order
         .iter()
         .enumerate()
-        .map(|(i, column)| ColumnToggle {
+        .map(|(at, &i)| ColumnToggle {
             index: i as i32,
-            label: column.label(t).into(),
+            label: BatchColumn::ALL[i].label(t).into(),
             shown: i == 0 || prefs.batch_columns.shown[i],
+            first: at == 0,
+            last: at + 1 == order.len(),
         })
         .collect();
-    state.set_batch_columns(ModelRc::new(VecModel::from(
-        toggles
-            .chunks(3)
-            .map(|line| ModelRc::new(VecModel::from(line.to_vec())))
-            .collect::<Vec<_>>(),
-    )));
+    sync_rows(state.get_batch_columns(), toggles, |rows| {
+        state.set_batch_columns(rows)
+    });
     state.set_languages(texts(Language::ALL.map(Language::name)));
     state.set_language(prefs.language.index());
     let visible = w.window().is_visible();
@@ -339,6 +353,12 @@ pub fn wire(ctx: &Ctx, w: &SettingsWindow) {
     });
     let c = ctx.clone();
     state.on_reset_widths(move || c.update(App::reset_column_widths));
+    let c = ctx.clone();
+    state.on_batch_column_shift(move |index, earlier| {
+        c.update(|app| app.shift_batch_column(index.max(0) as usize, earlier))
+    });
+    let c = ctx.clone();
+    state.on_reset_order(move || c.update(App::reset_column_order));
     let c = ctx.clone();
     w.window().on_close_requested(move || {
         c.update(|app| {

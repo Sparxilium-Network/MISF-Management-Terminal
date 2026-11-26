@@ -283,12 +283,15 @@ impl BatchColumn {
     }
 }
 
-/// Which batch table columns are shown and how the width is shared between them.
+/// Which batch table columns are shown, in what order, and how the width is shared
+/// between them.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BatchColumns {
     /// Indexed like [`BatchColumn::ALL`]; the host column is always shown.
     pub shown: [bool; 12],
     pub weights: [f32; 12],
+    /// Every index into [`BatchColumn::ALL`] once, left to right, hidden ones included.
+    pub order: [usize; 12],
 }
 
 impl BatchColumns {
@@ -296,15 +299,74 @@ impl BatchColumns {
     pub const WEIGHT_RANGE: std::ops::RangeInclusive<f32> = 0.2..=10.0;
 
     pub fn visible(&self) -> Vec<(usize, BatchColumn)> {
-        BatchColumn::ALL
+        self.order
             .into_iter()
-            .enumerate()
+            .map(|i| (i, BatchColumn::ALL[i]))
             .filter(|(i, column)| *column == BatchColumn::Host || self.shown[*i])
             .collect()
     }
 
     pub fn reset_widths(&mut self) {
         self.weights = Self::default().weights;
+    }
+
+    pub fn reset_order(&mut self) {
+        self.order = Self::default().order;
+    }
+
+    /// Moves visible column `from` into gap `slot` between the visible columns
+    /// (0 before the first, `len` after the last). Returns whether anything moved.
+    pub fn move_visible(&mut self, from: usize, slot: usize) -> bool {
+        let visible = self.visible();
+        let len = visible.len();
+        if from >= len || slot > len || slot == from || slot == from + 1 {
+            return false;
+        }
+        let column = visible[from].0;
+        let mut order: Vec<usize> = self.order.into_iter().filter(|&i| i != column).collect();
+        let at = if slot == len {
+            // After the last visible column, ahead of any hidden ones behind it.
+            order
+                .iter()
+                .position(|&i| i == visible[len - 1].0)
+                .map_or(order.len(), |p| p + 1)
+        } else {
+            order
+                .iter()
+                .position(|&i| i == visible[slot].0)
+                .unwrap_or(0)
+        };
+        order.insert(at, column);
+        self.set_order(order)
+    }
+
+    /// Swaps column `index` with its neighbour in the full order, hidden ones included.
+    pub fn shift(&mut self, index: usize, earlier: bool) -> bool {
+        let Some(at) = self.order.iter().position(|&i| i == index) else {
+            return false;
+        };
+        let other = if earlier {
+            at.checked_sub(1)
+        } else {
+            Some(at + 1)
+        };
+        match other.filter(|&o| o < self.order.len()) {
+            Some(other) => {
+                self.order.swap(at, other);
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn set_order(&mut self, order: Vec<usize>) -> bool {
+        match order.try_into() {
+            Ok(order) if order != self.order => {
+                self.order = order;
+                true
+            }
+            _ => false,
+        }
     }
 
     fn from_json(value: &serde_json::Value) -> Self {
@@ -332,6 +394,28 @@ impl BatchColumns {
                 }
             }
         }
+        if let Some(saved) = value["order"].as_array() {
+            let mut order: Vec<usize> = Vec::new();
+            for code in saved.iter().filter_map(serde_json::Value::as_str) {
+                if let Some(i) = BatchColumn::ALL.iter().position(|c| c.code() == code)
+                    && !order.contains(&i)
+                {
+                    order.push(i);
+                }
+            }
+            // A column the file does not list (added later) goes back behind the column
+            // it follows by default.
+            for i in 0..BatchColumn::ALL.len() {
+                if !order.contains(&i) {
+                    let at = (0..i)
+                        .rev()
+                        .find_map(|before| order.iter().position(|&o| o == before))
+                        .map_or(0, |p| p + 1);
+                    order.insert(at, i);
+                }
+            }
+            columns.set_order(order);
+        }
         columns
     }
 
@@ -348,6 +432,7 @@ impl BatchColumns {
                 .zip(self.weights)
                 .map(|(code, weight)| (code.to_owned(), json!(weight)))
                 .collect::<serde_json::Map<_, _>>(),
+            "order": self.order.map(|i| codes[i]),
         })
     }
 }
@@ -358,6 +443,7 @@ impl Default for BatchColumns {
         Self {
             shown: BatchColumn::ALL.map(|c| !matches!(c, BatchColumn::User | BatchColumn::Address)),
             weights: BatchColumn::ALL.map(BatchColumn::weight),
+            order: std::array::from_fn(|i| i),
         }
     }
 }

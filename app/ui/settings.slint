@@ -17,6 +17,9 @@ export struct ColumnToggle {
     index: int,
     label: string,
     shown: bool,
+    // The first and last in table order cannot move further that way.
+    first: bool,
+    last: bool,
 }
 
 export global SettingsState {
@@ -61,8 +64,8 @@ export global SettingsState {
     in property <int> batch-order;
     in property <int> batch-parallel;
     in property <int> batch-parallel-max;
-    // The column switches, three to a line.
-    in property <[[ColumnToggle]]> batch-columns;
+    // The column switches in table order, hidden columns included.
+    in property <[ColumnToggle]> batch-columns;
     in property <int> language;
     in property <[string]> languages;
     callback page-chosen(page: int);
@@ -79,6 +82,9 @@ export global SettingsState {
     callback host-stat(index: int, shown: bool);
     callback batch-column(index: int, shown: bool);
     callback reset-widths();
+    // Moves a column one place left (earlier) or right in the table.
+    callback batch-column-shift(index: int, earlier: bool);
+    callback reset-order();
 }
 
 component TreeItem {
@@ -440,20 +446,41 @@ component PreferencesPage inherits VerticalLayout {
         VerticalLayout {
             padding-left: 16px;
             spacing: 8px;
-            for line in SettingsState.batch-columns: HorizontalLayout {
-                spacing: 16px;
+            Text {
+                text: T.get("batch_columns.order_hint");
+                color: Theme.muted;
+                wrap: word-wrap;
+                min-height: self.preferred-height;
+            }
+            for column in SettingsState.batch-columns: HorizontalLayout {
+                spacing: 8px;
                 alignment: start;
-                for column in line: CheckBox {
-                    width: 125px;
+                CheckBox {
+                    width: 160px;
                     text: column.label;
                     // The host column is always shown.
                     enabled: column.index != 0;
                     checked: column.shown;
                     toggled => { SettingsState.batch-column(column.index, self.checked); }
                 }
+                Button {
+                    text: "↑";
+                    width: 40px;
+                    accessible-label: T.get("batch_columns.move_up");
+                    enabled: !column.first;
+                    clicked => { SettingsState.batch-column-shift(column.index, true); }
+                }
+                Button {
+                    text: "↓";
+                    width: 40px;
+                    accessible-label: T.get("batch_columns.move_down");
+                    enabled: !column.last;
+                    clicked => { SettingsState.batch-column-shift(column.index, false); }
+                }
             }
             HorizontalLayout {
                 alignment: start;
+                spacing: 8px;
                 padding-top: 4px;
                 HintArea {
                     plain: T.get("batch_columns.drag_hint");
@@ -461,6 +488,10 @@ component PreferencesPage inherits VerticalLayout {
                         text: T.get("batch_columns.reset_widths");
                         clicked => { SettingsState.reset-widths(); }
                     }
+                }
+                Button {
+                    text: T.get("batch_columns.reset_order");
+                    clicked => { SettingsState.reset-order(); }
                 }
             }
         }

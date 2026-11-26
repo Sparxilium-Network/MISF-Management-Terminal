@@ -1,6 +1,6 @@
 # 原始碼檔案說明
 
-> 最後修改：2026-11-20 ｜ 基於 commit：`454b72b`
+> 最後修改：2026-11-26 ｜ 基於 commit：`3275ecd`
 
 每個 `.rs` 檔案負責什麼。整體設計與資料流見 [架構](architecture.md)，建置與慣例見 [開發說明](PROJECT-DEV.md)。新增、改名或刪除 `.rs` 檔案時，請一併更新本文件。
 
@@ -110,7 +110,7 @@ Workspace 有四個 crate：`core`（`misf-core`，核心函式庫與 JSON CLI�
 | `app/src/ui/shell.rs` | 自繪標題列（`WindowChrome`：拖曳移動與邊緣縮放交給 winit 的 `drag_window`／`drag_resize_window`，關閉按鈕送出與系統關閉相同的 `CloseRequested`）、狀態列與其「過往操作」清單（`App::history`，經 `set_status`／`set_host_status`／`note_error` 記錄，進度訊息不記），主機／批次分頁切換；關閉主視窗時一併結束程式，操作進行中先以 `CloseDialog` 詢問。 |
 | `app/src/ui/sidebar.rs` | 側欄主機清單：分類與收合、搜尋、卡片內容與高度、拖曳排序（`Layout` 計算放置位置，`arrange` 送出新順序）、分類名稱對話框。 |
 | `app/src/ui/host_page.rs` | 主機頁與結果分頁：測試連線、指紋、檢查、「進階操作」選單（升級、dist-upgrade、重新開機，依主機能力停用）、「其他操作」選單（主機指紋、重新載入、編輯、刪除）、升級提示、「需要 dist-upgrade」報告。 |
-| `app/src/ui/batch.rs` | 批次作業：套件管理器選擇、可選主機、表格排序與分組標題、欄寬拖曳、雙擊或右鍵開主機頁、右鍵在套件明細工具視窗（`Tool::Packages`）或視窗中顯示套件，視窗內有上一台／下一台。 |
+| `app/src/ui/batch.rs` | 批次作業：套件管理器選擇、可選主機、表格排序與分組標題、欄寬拖曳、拖曳欄名調整欄位順序、雙擊或右鍵開主機頁、右鍵在套件明細工具視窗（`Tool::Packages`）或視窗中顯示套件，視窗內有上一台／下一台。 |
 | `app/src/ui/editor.rs` | 主機編輯對話框與 SSH 金鑰管理對話框；從檔案匯入私鑰在借用狀態之外開啟原生檔案視窗。 |
 | `app/src/ui/vault.rs` | LUKSbox 狀態、解鎖／建立／金鑰槽管理對話框與密碼檢查、預設解鎖方式、明文副本與結構升級詢問、加密備份。 |
 | `app/src/ui/apt_lock.rs` | 套件鎖診斷視窗（`AptLockState`）：送出 `apt_diagnose`、顯示狀況與處理方式、確認步驟後送出 `apt_fix`，重新開機改開既有確認。 |

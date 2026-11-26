@@ -512,6 +512,15 @@ pub fn wire(ctx: &Ctx, w: &AppWindow) {
         })
     });
     let c = ctx.clone();
+    state.on_column_move(move |from, slot| {
+        c.update(|app| {
+            let (from, slot) = (from.max(0) as usize, slot.max(0) as usize);
+            if app.preferences.batch_columns.move_visible(from, slot) {
+                let _ = app.save_preferences();
+            }
+        })
+    });
+    let c = ctx.clone();
     state.on_previous(move || c.update(|app| app.step_batch_host(-1)));
     let c = ctx.clone();
     state.on_next(move || c.update(|app| app.step_batch_host(1)));

@@ -73,6 +73,9 @@ export global BatchState {
     callback column-drag(column: int, dx: length, spare: length);
     callback column-drag-end();
     callback column-reset();
+    // Moves visible column `column` into gap `slot` between the visible columns
+    // (0 before the first, the column count after the last).
+    callback column-move(column: int, slot: int);
     callback previous();
     callback next();
     callback close-popup();
@@ -167,19 +170,73 @@ export component BatchTable {
             + (k > 8 ? column-width(8) : 0) + (k > 9 ? column-width(9) : 0)
             + (k > 10 ? column-width(10) : 0);
     }
+    // The column whose name is being dragged, and the gap it would land in; -1 when none.
+    property <int> move-from: -1;
+    property <int> move-slot: -1;
+    pure function slot-at(x: length) -> int {
+        // The gap nearest to x: how many column centres lie left of it.
+        return
+            (BatchState.columns.length > 0 && x > root.edge(0) + root.column-width(0) / 2 ? 1 : 0)
+            + (BatchState.columns.length > 1 && x > root.edge(1) + root.column-width(1) / 2 ? 1 : 0)
+            + (BatchState.columns.length > 2 && x > root.edge(2) + root.column-width(2) / 2 ? 1 : 0)
+            + (BatchState.columns.length > 3 && x > root.edge(3) + root.column-width(3) / 2 ? 1 : 0)
+            + (BatchState.columns.length > 4 && x > root.edge(4) + root.column-width(4) / 2 ? 1 : 0)
+            + (BatchState.columns.length > 5 && x > root.edge(5) + root.column-width(5) / 2 ? 1 : 0)
+            + (BatchState.columns.length > 6 && x > root.edge(6) + root.column-width(6) / 2 ? 1 : 0)
+            + (BatchState.columns.length > 7 && x > root.edge(7) + root.column-width(7) / 2 ? 1 : 0)
+            + (BatchState.columns.length > 8 && x > root.edge(8) + root.column-width(8) / 2 ? 1 : 0)
+            + (BatchState.columns.length > 9 && x > root.edge(9) + root.column-width(9) / 2 ? 1 : 0)
+            + (BatchState.columns.length > 10 && x > root.edge(10) + root.column-width(10) / 2 ? 1 : 0)
+            + (BatchState.columns.length > 11 && x > root.edge(11) + root.column-width(11) / 2 ? 1 : 0);
+    }
+    pure function gap-x(slot: int) -> length {
+        return slot < BatchState.columns.length ? root.edge(slot)
+            : root.edge(BatchState.columns.length - 1) + root.column-width(BatchState.columns.length - 1);
+    }
     min-width: root.check-width + BatchState.columns.length * 52px;
     preferred-height: (BatchState.rows.length + 1) * root.row-height;
-    // The header with its captions and the draggable edges between them.
-    for column[k] in BatchState.columns: Text {
-        x: root.edge(k) + 6px;
+    // The header: captions that can be dragged to reorder, and the draggable edges between
+    // them.
+    for column[k] in BatchState.columns: HintArea {
+        x: root.edge(k);
         y: 0;
-        width: root.column-width(k) - 12px;
+        width: root.column-width(k);
         height: root.row-height;
-        text: column.label;
-        font-weight: 700;
-        color: Theme.muted;
-        vertical-alignment: center;
-        overflow: elide;
+        plain: T.get("batch_columns.move_hint");
+        delay: 0.6s;
+        Rectangle {
+            Text {
+                x: 6px;
+                width: parent.width - 12px;
+                height: parent.height;
+                text: column.label;
+                font-weight: 700;
+                color: root.move-from == k ? Theme.blue : Theme.muted;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            TouchArea {
+                width: parent.width;
+                height: parent.height;
+                mouse-cursor: root.move-from == k ? MouseCursor.grabbing : MouseCursor.grab;
+                moved => {
+                    // A few points of slack so a plain click never moves anything.
+                    if (root.move-from == k || abs(self.mouse-x - self.pressed-x) > 6px) {
+                        root.move-from = k;
+                        root.move-slot = root.slot-at(root.edge(k) + self.mouse-x);
+                    }
+                }
+                changed pressed => {
+                    if (!self.pressed) {
+                        if (root.move-from == k) {
+                            BatchState.column-move(k, root.move-slot);
+                        }
+                        root.move-from = -1;
+                        root.move-slot = -1;
+                    }
+                }
+            }
+        }
     }
     for row[r] in BatchState.rows: Rectangle {
         x: 0;
@@ -269,6 +326,14 @@ export component BatchTable {
                 double-clicked => { BatchState.column-reset(); }
             }
         }
+    }
+    // Where the dragged column would land.
+    if root.move-from >= 0 && root.move-slot >= 0: Rectangle {
+        x: root.gap-x(root.move-slot) - 1.5px;
+        y: 0;
+        width: 3px;
+        height: root.height;
+        background: Theme.blue;
     }
 }
 
