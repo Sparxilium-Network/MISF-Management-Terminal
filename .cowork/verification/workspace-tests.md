@@ -1,5 +1,15 @@
 # 全工作區檢查結果
 
+## 2026-11-26（russh 0.65.4、url 2.5.9，分支 `feat/package-separation`，基於 `f345f21`）
+
+- 套用 Dependabot PR #11（rust-compatible 群組）：russh 0.65.2 → 0.65.4，含多項客戶端安全修正；不再依賴 generic-array 1.4.5。`cargo update -p russh --precise 0.65.4` 又把無關的 windows-sys（0.61.2 → 0.59.0／0.48.0）與 getrandom（0.4.3 → 0.3.4）換成舊版；本機鎖檔與 PR 的基底 `f89dc2a` 完全相同，所以改為直接取用 PR 的 `Cargo.lock`，差異與 PR 一致（23 行）。`cargo tree --locked -i rsa` 仍找不到 rsa。提交 `1dd9c7d`。
+- 新公告 RUSTSEC-2026-0592：url 2.5.8 的 `Url::origin()` 遇到巢狀 `blob:` URL 會堆疊溢位，經由 Slint 的 i-slint-compiler 與 webbrowser 引入。已有修正版，依 `docs/update-dependency.md` 升級 url 2.5.9、form_urlencoded 1.2.3；`cargo update` 連帶把 bindgen 的 `syn 3.0.9` 改成 `syn 2.0.119`，已改回。提交 `788fea5`。
+- 兩次都重新執行 `./scripts/licenses.ps1`；`cargo metadata --locked` 通過。
+- `cargo fmt --all -- --check`、`cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`：通過。
+- `cargo test --locked --workspace`：全部通過（22、37、72、33 項）。
+- `cargo deny --locked check`：`advisories ok, bans ok, licenses ok, sources ok`。
+- 未驗證：russh 0.65.4 尚未連線真實主機。
+
 ## 2026-11-25（新增 `scripts/run-debug.ps1`，分支 `feat/package-separation`，基於 `11ac0fb`）
 
 - 使用者要求多一個以 debug 模式執行的腳本，並指定提交到目前的 feat 分支。`scripts/run-debug.ps1` 以 `cargo run` 加 `--debug.dir` 執行，預設目錄為 git 忽略的 `.test-data/debug-profile`（自動建立）；`-Dir` 換目錄、`-AllowPasskey` 加 `--debug.allow-passkey`，其餘參數照樣傳給 MISF。

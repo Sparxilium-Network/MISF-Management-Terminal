@@ -1,6 +1,6 @@
 # 更新依賴的步驟
 
-> 最後修改：2026-11-24 ｜ 基於 commit：`5755f29`
+> 最後修改：2026-11-26 ｜ 基於 commit：`788fea5`
 
 本文件是實際操作清單：收到 Dependabot PR、想手動升級某個套件，或 CI 因安全公告失敗時，照這裡的步驟做。各依賴的背景、上游限制與已知例外見 [依賴更新與安全公告](dependency-updates.md)。
 
@@ -35,7 +35,7 @@ cargo install --locked cargo-about --features cli
    - windows-sys／getrandom 被換成較舊版本。
    - bindgen 的 `syn 3` 被換成 `syn 2`，導致 bindgen 編譯失敗。
    
-   差異必須與步驟 2 記下的完全相同；多出來的改動要手動改回，或在 `Cargo.lock` 中直接照 PR 修改。改完執行 `cargo metadata --locked --format-version 1 > $null`，確認鎖檔與 `Cargo.toml` 一致。
+   差異必須與步驟 2 記下的完全相同；多出來的改動要手動改回，或在 `Cargo.lock` 中直接照 PR 修改。如果 `git diff HEAD $(git merge-base HEAD <PR 分支>) -- Cargo.lock` 沒有差異，表示本機鎖檔和 PR 的基底相同，可以直接取用 PR 的鎖檔：`git fetch origin pull/<編號>/head:refs/pr-tmp`、`git checkout refs/pr-tmp -- Cargo.lock`，最後用 `git update-ref -d refs/pr-tmp` 刪掉暫時參照。改完執行 `cargo metadata --locked --format-version 1 > $null`，確認鎖檔與 `Cargo.toml` 一致。
 6. **重新產生授權清單**：`./scripts/licenses.ps1`。它會先跑 `cargo deny check licenses`，再用 cargo-about 產生 `licenses/THIRD_PARTY_LICENSES.html`，並把 `Cargo.lock` 的雜湊寫進 `licenses/THIRD_PARTY_LICENSES.lock-sha256`。之後若又改了 `Cargo.lock`（例如步驟 5 的修正），要再執行一次。
 7. **完整檢查**：
    ```powershell
