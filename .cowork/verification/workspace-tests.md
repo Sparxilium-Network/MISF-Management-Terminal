@@ -1,5 +1,12 @@
 # 全工作區檢查結果
 
+## 2026-11-25（新增 `scripts/run-debug.ps1`，分支 `feat/package-separation`，基於 `11ac0fb`）
+
+- 使用者要求多一個以 debug 模式執行的腳本，並指定提交到目前的 feat 分支。`scripts/run-debug.ps1` 以 `cargo run` 加 `--debug.dir` 執行，預設目錄為 git 忽略的 `.test-data/debug-profile`（自動建立）；`-Dir` 換目錄、`-AllowPasskey` 加 `--debug.allow-passkey`，其餘參數照樣傳給 MISF。
+- 第一版沒有關閉位置參數，`--help` 被當成 `-Dir`，在專案根目錄建了 `--help` 資料夾並開啟 GUI；已刪除該資料夾，改用 `[CmdletBinding(PositionalBinding = $false)]`。
+- 從 scratchpad 目錄執行：預設目錄加 `--help`、自訂 `-Dir` 加 `-AllowPasskey --help` 都把參數正確傳給 `misf.exe` 並正常結束。
+- 實際啟動 GUI：命令列為 `--debug.dir=<專案>\.test-data\debug-profile`，稽核紀錄寫在該目錄的 `logs/`；確認後關閉該程序。
+
 ## 2026-11-25（批次作業依套件管理器分頁，分支 `feat/package-separation`，基於 `12ec9d2`）
 
 - 使用者要求批次作業依套件管理器分成「APT 批次作業」「DNF 批次作業」等分頁。上方分頁改由程式依可批次操作的套件管理器產生（主機詳情、各管理器的批次分頁，依主機數多到少）；沒有任何可批次的主機時只有一個「批次作業」分頁。
@@ -192,7 +199,7 @@
 
 ## 2026-11-18（以含分階段推送的模擬判斷連帶保留，分支 `feat/WYSIWYG-Terminal`，基於 `7678ab9`）
 
-- 使用者以 `temp/misf-log-20261118-004128.txt` 回報數字仍不一致（agent-claude-vm 69／53）。log 顯示 `apt-get -s dist-upgrade` 仍把 16 個 Plasma 套件列為 kept back，沒有列為延後，所以 `3f6ce34`、`7678ab9` 的判斷從未成立。
+- 使用者以 `../../reference-only-no-leak` 回報數字仍不一致（agent-claude-vm 69／53）。log 顯示 `apt-get -s dist-upgrade` 仍把 16 個 Plasma 套件列為 kept back，沒有列為延後，所以 `3f6ce34`、`7678ab9` 的判斷從未成立。
 - 使用者在該主機另外執行 `apt-get -s -o APT::Get::Always-Include-Phased-Updates=true upgrade`：16 個中有 14 個變成會升級，剩 `plasma-session-wayland`、`plasma-workspace` 仍保留。
 - 改為：`SIMULATE` 仍不會升級某些被保留的套件時，再跑唯讀的 `apt::SIMULATE_PHASED`；它會升級而 `SIMULATE` 不會的，算成分階段延後。檢查與升級共用 `settle_kept`。讀回時以 `transcript::section` 分開兩段模擬（`apt::phased_in_transcript`），`plan` 只取 `SIMULATE` 那段。
 - 用 log 裡的真實檢查輸出加上使用者貼的模擬輸出驗證解析：分階段延後 53 → 67，仍被保留的只剩上述 2 個。

@@ -4,5 +4,7 @@
 /dist/
 /.test-data/
 /.m2/
+/reference-only-no-leak/
 *.log
 .daybrake/dangerzone/
+.mcp.json
