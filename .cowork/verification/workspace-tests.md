@@ -1,5 +1,15 @@
 # 全工作區檢查結果
 
+## 2026-11-27（anyhow 1.0.105，分支 `main`，基於 `9947cb9`）
+
+- 在本機套用 Dependabot PR #13（`rust-compatible` 群組，只有 anyhow 1.0.104 → 1.0.105 的修補版升級，只改 `Cargo.lock`、沒有改 `Cargo.toml`）。
+- 本機鎖檔與 PR 基底沒有差異，直接取用 PR 的 `Cargo.lock`（`git checkout refs/pr-tmp -- Cargo.lock`），沒有跑 `cargo update`，因此沒有需要手動改回的無關改動。鎖檔差異只有 anyhow 的 version 與 checksum 兩行（2 行新增、2 行刪除），與 PR 完全一致；`cargo metadata --locked` 通過。
+- 已用 `scripts/licenses.ps1` 重新產生 `licenses/THIRD_PARTY_LICENSES.html` 與 `THIRD_PARTY_LICENSES.lock-sha256`。
+- `cargo deny --locked check`：`advisories ok, bans ok, licenses ok, sources ok`。
+- `cargo fmt --all -- --check`、`cargo clippy --locked --workspace --all-targets --all-features -- -D warnings` 通過。
+- `cargo test --locked --workspace` 全部通過（22、37、72、33 項；sshtest 的 Docker 測試維持忽略）。
+- 未驗證：anyhow 只是修補版升級，沒有另外在 app 內實際操作。
+
 ## 2026-11-26（批次表欄位順序可自訂，分支 `feat/package-separation`，基於 `3275ecd`）
 
 - 使用者要求批次作業表頭的順序可以自訂，並選擇兩種方式都要、主機欄也可移動。
